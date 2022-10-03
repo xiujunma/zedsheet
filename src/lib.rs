@@ -1,6 +1,10 @@
+mod core;
+
 use std::f64;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use crate::core::cell::Cell;
+use crate::core::evaluable::Evaluable;
 
 #[wasm_bindgen]
 pub struct Foo {
@@ -30,6 +34,13 @@ extern {
 
 #[wasm_bindgen(start)]
 pub fn start() {
+
+    let cell = Cell {
+        text: String::from("abc")
+    };
+
+    print!("cell text: {}", cell.evalute());
+
     let document = web_sys::window().unwrap().document().unwrap();
     let canvas = document.get_element_by_id("zedsheet").unwrap();
     let canvas: web_sys::HtmlCanvasElement = canvas

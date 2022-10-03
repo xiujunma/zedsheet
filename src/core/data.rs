@@ -1,5 +1,4 @@
 pub struct Rows {
-
 }
 
 pub struct Cols {
@@ -8,7 +7,7 @@ pub struct Cols {
 
 pub struct Data {
     name: String,
-    styles: Array,
+    styles: Vec<String>,
     rows: Rows,
     cols: Cols
 }
