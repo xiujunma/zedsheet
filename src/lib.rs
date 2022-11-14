@@ -1,10 +1,13 @@
 mod core;
+mod component;
 
 use std::f64;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use crate::core::cell::Cell;
 use crate::core::evaluable::Evaluable;
+
+use crate::component::element::ElementEx;
 
 #[wasm_bindgen]
 pub struct Foo {
@@ -79,4 +82,6 @@ pub fn start() {
         .unwrap();
 
     context.stroke();
+
+    ElementEx::new(&String::from("p"));
 }
