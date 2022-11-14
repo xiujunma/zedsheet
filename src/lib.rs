@@ -4,9 +4,12 @@ mod component;
 use std::f64;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use core::cell::Cell;
-use core::evaluable::Evaluable;
+use crate::core::cell::Cell;
+use crate::core::evaluable::Evaluable;
 use component::element::ElementEx;
+
+use web_sys::HtmlCanvasElement;
+use web_sys::CanvasRenderingContext2d;
 
 #[wasm_bindgen]
 pub struct Foo {
@@ -41,12 +44,12 @@ pub fn start() {
         text: String::from("abc")
     };
 
-    print!("cell text: {}", cell.evalute());
+    print!("cell text: {}", cell.evaluate());
 
     let document = web_sys::window().unwrap().document().unwrap();
     let canvas = document.get_element_by_id("zedsheet").unwrap();
-    let canvas: web_sys::HtmlCanvasElement = canvas
-        .dyn_into::<web_sys::HtmlCanvasElement>()
+    let canvas: HtmlCanvasElement = canvas
+        .dyn_into::<HtmlCanvasElement>()
         .map_err(|_| ())
         .unwrap();
 
@@ -54,7 +57,7 @@ pub fn start() {
         .get_context("2d")
         .unwrap()
         .unwrap()
-        .dyn_into::<web_sys::CanvasRenderingContext2d>()
+        .dyn_into::<CanvasRenderingContext2d>()
         .unwrap();
 
     context.begin_path();
