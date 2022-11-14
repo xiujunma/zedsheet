@@ -1,3 +1,3 @@
 pub trait Evaluable {
-    fn evalute(&self) -> String;
+    fn evaluate(&self) -> String;
 }

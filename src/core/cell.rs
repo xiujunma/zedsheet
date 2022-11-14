@@ -5,7 +5,7 @@ pub struct Cell {
 }
 
 impl Evaluable for Cell {
-    fn evalute(&self) -> String {
+    fn evaluate(&self) -> String {
         self.text.clone()
     }
 }
