@@ -1,5 +1,6 @@
 mod core;
 mod component;
+mod canvas;
 
 use std::f64;
 use wasm_bindgen::prelude::*;
@@ -10,6 +11,7 @@ use component::element::ElementEx;
 
 use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
+use canvas::draw::Draw;
 
 #[wasm_bindgen]
 pub struct Foo {
@@ -60,30 +62,34 @@ pub fn start() {
         .dyn_into::<CanvasRenderingContext2d>()
         .unwrap();
 
-    context.begin_path();
+    let draw = Draw {el: canvas, ctx: context};
 
-    // Draw the outer circle.
-    context
-        .arc(75.0, 75.0, 50.0, 0.0, f64::consts::PI * 2.0)
-        .unwrap();
+    draw.resize(500u32, 500u32);
 
-    // Draw the mouth.
-    context.move_to(110.0, 75.0);
-    context.arc(75.0, 75.0, 35.0, 0.0, f64::consts::PI).unwrap();
+    // context.begin_path();
 
-    // Draw the left eye.
-    context.move_to(65.0, 65.0);
-    context
-        .arc(60.0, 65.0, 5.0, 0.0, f64::consts::PI * 2.0)
-        .unwrap();
+    // // Draw the outer circle.
+    // context
+    //     .arc(75.0, 75.0, 50.0, 0.0, f64::consts::PI * 2.0)
+    //     .unwrap();
 
-    // Draw the right eye.
-    context.move_to(95.0, 65.0);
-    context
-        .arc(90.0, 65.0, 5.0, 0.0, f64::consts::PI * 2.0)
-        .unwrap();
+    // // Draw the mouth.
+    // context.move_to(110.0, 75.0);
+    // context.arc(75.0, 75.0, 35.0, 0.0, f64::consts::PI).unwrap();
 
-    context.stroke();
-    let tag_name = String::from("p");
-    ElementEx::new(tag_name);
+    // // Draw the left eye.
+    // context.move_to(65.0, 65.0);
+    // context
+    //     .arc(60.0, 65.0, 5.0, 0.0, f64::consts::PI * 2.0)
+    //     .unwrap();
+
+    // // Draw the right eye.
+    // context.move_to(95.0, 65.0);
+    // context
+    //     .arc(90.0, 65.0, 5.0, 0.0, f64::consts::PI * 2.0)
+    //     .unwrap();
+
+    // context.stroke();
+    // let tag_name = String::from("p");
+    // ElementEx::new(tag_name);
 }
