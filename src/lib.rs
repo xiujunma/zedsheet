@@ -66,6 +66,8 @@ pub fn start() {
 
     draw.resize(500u32, 500u32);
 
+    draw.fill_rect(100u32, 100u32, 100u32, 100u32);
+
     // context.begin_path();
 
     // // Draw the outer circle.
