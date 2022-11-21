@@ -1,10 +1,9 @@
-use web_sys::Element;
-pub struct ElementEx {
+pub struct Element {
     tag: String,
-    el: Element
+    el: web_sys::Element
 }
 
-impl ElementEx {
+impl Element {
     pub fn new(tag:String) -> Self {
         let window = web_sys::window().expect("global window does not exists");
 		let document = window.document().expect("expecting a document on window");
