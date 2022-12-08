@@ -18,4 +18,11 @@ impl Element {
             el
         }
     }
+
+    pub fn on(&self, eventNames: String, handler: fn(event: web_sys::Event)) -> &Self {
+        // TODO
+        self
+    }
+
+    
 }

@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use crate::core::cell::Cell;
 use crate::core::evaluable::Evaluable;
-use component::element::ElementEx;
+use component::element::Element;
 
 use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;

@@ -4,9 +4,19 @@ use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
 use web_sys::window;
 
+use super::draw_box::DrawBox;
+
 pub struct Draw {
     pub el: HtmlCanvasElement,
     pub ctx: CanvasRenderingContext2d
+}
+
+pub struct Attribute {
+    text_align: String,
+    text_baseline: String,
+    font: String,
+    fill_style: String,
+    stroke_style: String
 }
 
 fn dpr() -> f64 {
@@ -31,6 +41,11 @@ impl Draw {
     pub fn clear(&self) -> &Self {
         let (width, height) = (self.el.width(), self.el.height());
         self.ctx.clear_rect(0f64, 0f64, width as f64, height as f64);
+        self
+    }
+
+    pub fn attr(&self, attr: &Attribute) -> &Self {
+        self.ctx.set_text_align(attr.text_align.as_str());
         self
     }
 
@@ -73,12 +88,21 @@ impl Draw {
         self
     }
 
-    pub fn fill_text(&self, text: &String, x: u32, y: u32) -> &Self {
+    pub fn fill_text(&self, text: &str, x: u32, y: u32) -> &Self {
         let r = self.ctx.fill_text(text, npx(x), npx(y));
         match r {
             Ok(v) => println!("working with version: {v:?}"),
             Err(e) => println!("error parsing header: {e:?}"),
         }
+        self
+    }
+
+    pub fn text(&self, text: &str, draw_box: &DrawBox, attr: &Attribute, text_wrap: bool) -> &Self {
+        draw_box.textx(attr.text_align.as_str());
+        let ctx = &self.ctx;
+        ctx.save();
+        ctx.begin_path();
+        self.attr(attr);
         self
     }
 }
