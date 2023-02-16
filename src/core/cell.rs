@@ -9,3 +9,9 @@ impl Evaluable for Cell {
         self.text.clone()
     }
 }
+
+impl Cell {
+    fn render(&self) {
+        
+    }
+}

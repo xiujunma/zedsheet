@@ -1,3 +1,5 @@
+use component::Sheet;
+
 struct Spreadsheet {
     options: Options,
     index: u8,
