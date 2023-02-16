@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use wasm_bindgen::{prelude::Closure, JsCast};
+
 pub struct Element {
     tag: String,
     el: web_sys::Element,
@@ -34,10 +36,37 @@ impl Element {
         self.data.get(&key).cloned()
     }
 
-    pub fn on(&self, event_name: String, handler: fn(event: web_sys::Event)) -> &Self {
-        // self.el.add_event_listener_with_callback(type_, listener);
+    pub fn on(&self, event_names: String, handler: fn(event: web_sys::Event)) -> &Self {
+        let splits: Vec<String> = vec!(event_names.split(".").collect());
+        let event_name = &splits[0];
+
+
+        let closure = Closure::<dyn FnMut(_)>::new(move |evt: web_sys::Event| {
+            handler(evt);
+        });
+        self.el.add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref());
+        closure.forget();
         self
     }
 
+    pub fn offset(&self, value: String) -> &Self {
+        self
+    }
+
+    pub fn scroll(&self, value: String) -> &Self {
+        self
+    }
     
+    pub fn get_box(&self) -> &Self {
+        self
+    }
+
+    pub fn get_parent(&self) -> Element {
+        let parent = self.el.parent_element().unwrap();
+        Element {
+            tag: parent.tag_name().to_lowercase(),
+            el: parent,
+            data: HashMap::new()
+        }
+    }
 }
