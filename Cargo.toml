@@ -19,5 +19,8 @@ features = [
   'HtmlCanvasElement',
   'Window',
   'console',
-  'Event'
+  'Event',
+  'DomRect',
+  'NodeList',
+  'DomTokenList'
 ]

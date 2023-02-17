@@ -2,7 +2,6 @@ mod core;
 mod component;
 mod canvas;
 
-use std::f64;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use crate::core::cell::Cell;
