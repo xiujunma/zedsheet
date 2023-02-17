@@ -70,7 +70,7 @@ pub fn start() {
 
 
     let targetEl = document.query_selector("#zedsheet").unwrap().unwrap();
-    let div = Element::new("div".to_string(), "red".to_string());
+    let div = Element::new("div", "red");
     targetEl.append_child(&div.el);
     // context.begin_path();
 
