@@ -68,6 +68,11 @@ pub fn start() {
 
     draw.fill_rect(100u32, 100u32, 100u32, 100u32);
 
+
+
+    let targetEl = document.query_selector("#zedsheet").unwrap().unwrap();
+    let div = Element::new("div".to_string(), "red".to_string());
+    targetEl.append_child(&div.el);
     // context.begin_path();
 
     // // Draw the outer circle.

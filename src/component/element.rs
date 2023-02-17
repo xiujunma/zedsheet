@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use wasm_bindgen::{prelude::Closure, JsCast};
 
 pub struct Element {
-    tag: String,
-    el: web_sys::Element,
-    data: HashMap<String, String>
+    pub tag: String,
+    pub el: web_sys::Element,
+    pub data: HashMap<String, String>
 }
 
 impl Element {
