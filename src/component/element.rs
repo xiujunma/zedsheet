@@ -144,12 +144,12 @@ impl Element {
     }
 
     pub fn contains(&self, el: web_sys::Element) -> bool {
-        // TODO
-        false
+        let node = el.clone_node().unwrap();
+        self.el.contains(Some(&node))
     }
 
     pub fn get_class_name(&self) -> String {
-        self.get_class_name()
+        self.el.class_name()
     }
 
     pub fn set_class_name(&self, class_name: &str) -> &Self {
