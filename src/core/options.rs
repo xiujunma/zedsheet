@@ -1,3 +1,3 @@
-struct Options {
+pub struct Options {
     
 }

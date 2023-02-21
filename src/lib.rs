@@ -13,6 +13,10 @@ use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
 use canvas::draw::Draw;
 
+use crate::core::spreadsheet::Spreadsheet;
+
+use crate::core::options::Options;
+
 #[wasm_bindgen]
 pub struct Foo {
     internal: i32,
@@ -71,8 +75,9 @@ pub fn start() {
 
 
     let targetEl = document.query_selector("#zedsheet").unwrap().unwrap();
-    let div = Element::new("div", "red");
-    targetEl.append_child(&div.el);
+    Spreadsheet::new(targetEl, Options {});
+    // let div = Element::new("div", "red");
+    // targetEl.append_child(&div.el);
     // context.begin_path();
 
     // // Draw the outer circle.
