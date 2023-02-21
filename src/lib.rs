@@ -1,6 +1,7 @@
 mod core;
 mod component;
 mod canvas;
+mod common;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;

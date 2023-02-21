@@ -4,17 +4,12 @@ use std::collections::HashMap;
 
 use wasm_bindgen::{prelude::Closure, JsCast};
 
+use crate::common::structs::Box;
+
 pub struct Element {
     pub tag: String,
     pub el: web_sys::Element,
     pub data: HashMap<String, String>
-}
-
-pub struct Box {
-    pub top: i32,
-    pub left: i32,
-    pub width: i32,
-    pub height: i32
 }
 
 impl Element {

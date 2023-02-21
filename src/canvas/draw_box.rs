@@ -1,3 +1,4 @@
+use crate::common::structs::Box;
 pub struct DrawBox {
     pub x: u32,
     pub y: u32,
@@ -12,7 +13,7 @@ pub struct DrawBox {
 }
 
 impl DrawBox {
-    pub fn set_borders(&self) {
+    pub fn set_borders(&self, b: &Box) {
 
     }
     pub fn inner_width(&self) {
