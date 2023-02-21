@@ -1,9 +1,12 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use crate::component::sheet::Sheet;
 use crate::core::data::Data;
 use crate::core::options::Options;
 
 pub struct Spreadsheet {
-    targetEl: web_sys::Element,
+    target_el: web_sys::Element,
     options: Options,
     index: u8,
     datas: Vec<Data>,
@@ -12,9 +15,9 @@ pub struct Spreadsheet {
 }
 
 impl Spreadsheet {
-    pub fn new(targetEl: web_sys::Element, options: Options) -> Spreadsheet {
+    pub fn new(target_el: web_sys::Element, options: Options) -> Spreadsheet {
         Spreadsheet {
-            targetEl,
+            target_el,
             options,
             index: 0,
             datas: vec![],

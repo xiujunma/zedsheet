@@ -7,7 +7,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use crate::core::cell::Cell;
 use crate::core::evaluable::Evaluable;
-use component::element::Element;
 
 use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
@@ -74,8 +73,8 @@ pub fn start() {
 
 
 
-    let targetEl = document.query_selector("#zedsheet").unwrap().unwrap();
-    Spreadsheet::new(targetEl, Options {});
+    let target_el = document.query_selector("#zedsheet").unwrap().unwrap();
+    Spreadsheet::new(target_el, Options {});
     // let div = Element::new("div", "red");
     // targetEl.append_child(&div.el);
     // context.begin_path();

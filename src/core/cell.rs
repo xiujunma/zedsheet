@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use crate::core::evaluable::Evaluable;
 
 pub struct Cell {

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use crate::common::structs::Box;
 pub struct DrawBox {
     pub x: u32,
