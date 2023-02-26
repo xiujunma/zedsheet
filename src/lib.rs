@@ -1,16 +1,16 @@
-mod core;
-mod component;
 mod canvas;
 mod common;
+mod component;
+mod core;
 
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use crate::core::cell::Cell;
 use crate::core::evaluable::Evaluable;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
-use web_sys::HtmlCanvasElement;
-use web_sys::CanvasRenderingContext2d;
 use canvas::draw::Draw;
+use web_sys::CanvasRenderingContext2d;
+use web_sys::HtmlCanvasElement;
 
 use crate::core::spreadsheet::Spreadsheet;
 
@@ -38,15 +38,14 @@ impl Foo {
 }
 
 #[wasm_bindgen]
-extern {
+extern "C" {
     pub fn alert(s: String);
 }
 
 #[wasm_bindgen(start)]
 pub fn start() {
-
     let cell = Cell {
-        text: String::from("abc")
+        text: String::from("abc"),
     };
 
     print!("cell text: {}", cell.evaluate());
@@ -65,13 +64,14 @@ pub fn start() {
         .dyn_into::<CanvasRenderingContext2d>()
         .unwrap();
 
-    let draw = Draw {el: canvas, ctx: context};
+    let draw = Draw {
+        el: canvas,
+        ctx: context,
+    };
 
     draw.resize(500u32, 500u32);
 
     draw.fill_rect(100u32, 100u32, 100u32, 100u32);
-
-
 
     let target_el = document.query_selector("#zedsheet").unwrap().unwrap();
     Spreadsheet::new(target_el, Options {});

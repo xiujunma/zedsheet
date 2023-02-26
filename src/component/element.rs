@@ -3,19 +3,20 @@
 use std::collections::HashMap;
 
 use wasm_bindgen::{prelude::Closure, JsCast};
+use web_sys::CssStyleDeclaration;
 
 use crate::common::structs::Box;
 
 pub struct Element {
     pub tag: String,
     pub el: web_sys::Element,
-    pub data: HashMap<String, String>
+    pub data: HashMap<String, String>,
 }
 
 impl Element {
     pub fn new(tag: &str, class_name: &str) -> Self {
         let window = web_sys::window().expect("global window does not exists");
-		let document = window.document().expect("expecting a document on window");
+        let document = window.document().expect("expecting a document on window");
         let el = document.create_element(&tag).unwrap();
         let r = document.body().unwrap().append_child(&el);
         match r {
@@ -27,7 +28,7 @@ impl Element {
         Self {
             tag: tag.to_string(),
             el,
-            data: HashMap::new()
+            data: HashMap::new(),
         }
     }
 
@@ -41,14 +42,15 @@ impl Element {
     }
 
     pub fn on(&self, event_names: &str, handler: fn(event: web_sys::Event)) -> &Self {
-        let splits: Vec<String> = vec!(event_names.split(".").collect());
+        let splits: Vec<String> = vec![event_names.split(".").collect()];
         let event_name = &splits[0];
-
 
         let closure = Closure::<dyn FnMut(_)>::new(move |evt: web_sys::Event| {
             handler(evt);
         });
-        let r = self.el.add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref());
+        let r = self
+            .el
+            .add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref());
 
         match r {
             Ok(v) => println!("working with version: {v:?}"),
@@ -64,7 +66,7 @@ impl Element {
             top: self.el.client_top(),
             left: self.el.client_left(),
             width: self.el.client_width(),
-            height: self.el.client_height()
+            height: self.el.client_height(),
         }
     }
 
@@ -95,17 +97,17 @@ impl Element {
             top: self.el.scroll_top(),
             left: self.el.scroll_left(),
             width: 0,
-            height: 0
+            height: 0,
         }
     }
-    
+
     pub fn get_box(&self) -> Box {
         let rect = self.el.get_bounding_client_rect();
         Box {
             top: rect.top() as i32,
             left: rect.left() as i32,
             width: rect.width() as i32,
-            height: rect.height() as i32
+            height: rect.height() as i32,
         }
     }
 
@@ -114,7 +116,7 @@ impl Element {
         Element {
             tag: parent.tag_name().to_lowercase(),
             el: parent,
-            data: HashMap::new()
+            data: HashMap::new(),
         }
     }
 
@@ -193,12 +195,19 @@ impl Element {
     }
 
     pub fn set_css(&self, name: &str, value: &str) -> &Self {
-        let r = self.el.set_attribute("style", &format!("{}: {}", name, value));
-                match r {
+        let r = self
+            .el
+            .set_attribute("style", &format!("{}: {}", name, value));
+        match r {
             Ok(v) => println!("working with version: {v:?}"),
             Err(e) => println!("error parsing header: {e:?}"),
         }
         self
+    }
+
+    pub fn get_computed_style(&self) -> Option<CssStyleDeclaration> {
+        let window = web_sys::window().unwrap();
+        window.get_computed_style(&self.el).unwrap()
     }
 
     pub fn show(&self) -> &Self {
