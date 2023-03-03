@@ -74,7 +74,7 @@ pub fn start() {
     draw.fill_rect(100u32, 100u32, 100u32, 100u32);
 
     let target_el = document.query_selector("#zedsheet").unwrap().unwrap();
-    Spreadsheet::new(target_el, Options {});
+    let spreadsheet = Spreadsheet::new(target_el, Options {});
     // let div = Element::new("div", "red");
     // targetEl.append_child(&div.el);
     // context.begin_path();

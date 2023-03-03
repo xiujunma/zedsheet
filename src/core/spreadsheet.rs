@@ -8,7 +8,7 @@ use crate::core::options::Options;
 pub struct Spreadsheet {
     target_el: web_sys::Element,
     options: Options,
-    index: u8,
+    index: usize,
     datas: Vec<Data>,
     bottom_bar: String,
     sheet: Sheet
@@ -24,5 +24,13 @@ impl Spreadsheet {
             bottom_bar: String::from(""),
             sheet: Sheet::new()
         }
+    }
+
+    pub fn load_data(&self, data: Data) {
+
+    }
+
+    pub fn get_data(&self) -> Data {
+        self.datas[self.index].clone()
     }
 }
