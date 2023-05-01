@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-#[derive(Clone)]
-pub struct Rows {
-}
+use crate::core::rows::Rows;
 
 #[derive(Clone)]
 pub struct Cols {
