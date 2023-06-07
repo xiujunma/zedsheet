@@ -1,0 +1,3 @@
+struct TableRenderer {
+    target: HtmlCanvasElement,
+}
