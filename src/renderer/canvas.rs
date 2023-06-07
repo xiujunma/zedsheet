@@ -3,6 +3,9 @@
 use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
 use wasm_bindgen::JsCast;
+use web_sys::TextMetrics;
+use web_sys::ImageData;
+use web_sys::ImageBitmap;
 
 pub enum LineCap {
     Butt,
@@ -107,7 +110,47 @@ impl Canvas {
         // TODO
     }
 
+    pub fn measure_text_width(&self, text: &str) -> f64 {
+        self.measure_text(text).width()
+    }
+
+    pub fn measure_text(&self, text: &str) -> TextMetrics {
+        self.ctx.measure_text(text).unwrap()
+    }
+
+    pub fn line(&self, x1: f64, y1: f64, x2: f64, y2: f64) -> &Self {
+        return self
+    }
+
     pub fn draw(&self) {
         println!("draw");
+    }
+
+    pub fn draw_image(&self, image: ImageBitmap, dx: f64, dy: f64) -> &Self {
+        self.ctx.draw_image_with_image_bitmap(&image, dx, dy).unwrap();
+        return self
+    }
+
+    pub fn create_image_data(&self, width: f64, height: f64) -> ImageData {
+        return self.ctx.create_image_data_with_sw_and_sh(width, height).unwrap();
+    }
+
+    pub fn get_image_data(&self, sx: f64, sy: f64, sw: f64, sh: f64) -> ImageData {
+        return self.ctx.get_image_data(sx, sy, sw, sh).unwrap();
+    }
+
+    pub fn put_image_data(&self, image_data: ImageData, dx: f64, dy: f64) -> &Self {
+        self.ctx.put_image_data(&image_data, dx, dy).unwrap();
+        return self
+    }
+
+    pub fn save(&self) -> &Self {
+        self.ctx.save();
+        return self
+    }
+
+    pub fn restore(&self) -> &Self {
+        self.ctx.restore();
+        return self
     }
 }
