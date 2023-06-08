@@ -6,6 +6,8 @@ use wasm_bindgen::JsCast;
 use web_sys::TextMetrics;
 use web_sys::ImageData;
 use web_sys::ImageBitmap;
+use web_sys::DomMatrix;
+use web_sys::CanvasWindingRule;
 
 pub enum LineCap {
     Butt,
@@ -124,6 +126,69 @@ impl Canvas {
 
     pub fn draw(&self) {
         println!("draw");
+    }
+
+    pub fn round_rect(&self, x: f64, y: f64, width: f64, height: f64, radius: f64) {
+        //TODO
+    }
+
+    pub fn fill(&self, rule: Option<CanvasWindingRule>) -> &Self {
+        if rule.is_some() {
+            self.ctx.fill_with_canvas_winding_rule(rule.unwrap());
+        } else {
+            self.ctx.fill();
+        }
+        return self
+    }
+
+    pub fn stroke(&self) -> &Self {
+        self.ctx.stroke();
+        return self
+    }
+
+    pub fn clip(&self, rule: Option<CanvasWindingRule>) -> &Self {
+        if rule.is_some() {
+            self.ctx.clip_with_canvas_winding_rule(rule.unwrap());
+        } else {
+            self.ctx.clip();
+        }
+        return self
+    }
+
+    pub fn is_point_in_path(&self, x: f64, y: f64, winding_rule: Option<CanvasWindingRule>) -> bool {
+        if winding_rule.is_some() {
+            return self.ctx.is_point_in_path_with_f64_and_canvas_winding_rule(x, y, winding_rule.unwrap())
+        } else {
+            return self.ctx.is_point_in_path_with_f64(x, y)
+        }
+    }
+
+    pub fn is_point_in_stroke(&self, x: f64, y: f64) -> bool {
+        return self.ctx.is_point_in_stroke_with_x_and_y(x, y);
+    }
+
+    pub fn get_transform(&self) -> DomMatrix {
+        return self.ctx.get_transform().unwrap();
+    }
+
+    pub fn rotate(&self, angle: f64) -> &Self {
+        self.ctx.rotate(angle).unwrap();
+        return self
+    }
+
+    pub fn scale(&self, x: f64, y: f64) -> &Self {
+        self.ctx.scale(x, y).unwrap();
+        return self
+    }
+
+    pub fn translate(&self, x: f64, y: f64) -> &Self {
+        self.ctx.translate(x, y).unwrap();
+        return self
+    }
+
+    pub fn set_transform(&self, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> &Self {
+        self.ctx.set_transform(a, b, c, d, e, f).unwrap();
+        return self
     }
 
     pub fn draw_image(&self, image: ImageBitmap, dx: f64, dy: f64) -> &Self {
