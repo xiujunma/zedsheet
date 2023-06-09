@@ -16,5 +16,5 @@ pub fn start() {
         .unwrap();
     
     let canvas = Canvas::new(canvas, 1 as f64);
-    canvas.draw();
+    canvas.fill_rect(0_f64, 0_f64, 100_f64, 100_f64);
 }

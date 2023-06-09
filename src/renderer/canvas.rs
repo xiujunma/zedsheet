@@ -122,21 +122,51 @@ impl Canvas {
     }
 
     pub fn line(&self, x1: f64, y1: f64, x2: f64, y2: f64) -> &Self {
+        self.move_to(x1, y1)
+            .line_to(x2, y2)
+            .stroke();
         return self
     }
 
-    pub fn draw(&self) {
-        println!("draw");
+    pub fn clear_rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
+        self.ctx.clear_rect(x, y, width, height);
+        return self
     }
 
-    // pub fn get_line_dash(&self) -> Vec<f64> {
-    //     let segments = self.ctx.get_line_dash();
-    //     let mut result = Vec::new();
-    //     for i in 0..segments.length() {
-    //         result.push(segments.get_index(i));
-    //     }
-    //     return result
-    // }
+    pub fn fill_rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
+        self.ctx.fill_rect(x, y, width, height);
+        return self
+    }
+
+    pub fn stroke_rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
+        self.ctx.stroke_rect(x, y, width, height);
+        return self
+    }
+
+    pub fn fill_text(&self, text: &str, x: f64, y: f64, max_width: Option<f64>) -> &Self {
+        if max_width.is_some() {
+            self.ctx.fill_text_with_max_width(text, x, y, max_width.unwrap()).unwrap();
+        } else {
+            self.ctx.fill_text(text, x, y).unwrap();
+        }
+        return self
+    }
+
+    pub fn stroke_text(&self, text: &str, x: f64, y: f64, max_width: Option<f64>) -> &Self {
+        if max_width.is_some() {
+            self.ctx.stroke_text_with_max_width(text, x, y, max_width.unwrap()).unwrap();
+        } else {
+            self.ctx.stroke_text(text, x, y).unwrap();
+        }
+        return self
+    }
+
+    pub fn get_line_dash(&self) -> Vec<f64> {
+        let segments = self.ctx.get_line_dash();
+        return segments.to_vec().iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
+    }
 
     pub fn set_line_dash(&self, segments: &Vec<f64>) -> &Self {
         // FIXME

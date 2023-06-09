@@ -1,3 +1,8 @@
+#![allow(dead_code)]
+
+
+use web_sys::HtmlCanvasElement;
+
 pub enum Align {
     Left,
     Right,
@@ -37,6 +42,14 @@ pub enum BorderType {
     Top,
     Right,
     Bottom,
+}
+
+pub enum BorderLineStyle {
+    Thin,
+    Medium,
+    Thick,
+    Dashed,
+    Dotted,
 }
 
 pub struct BorderLine {
