@@ -17,6 +17,8 @@ features = [
   'TextMetrics',
   'ImageData',
   'ImageBitmap',
+  'CanvasPattern',
+  'CanvasGradient',
   'DomMatrix',
   'CanvasWindingRule',
   'Document',
