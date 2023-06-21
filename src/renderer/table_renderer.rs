@@ -151,5 +151,5 @@ pub struct TableRenderer {
     header_style: Style,
     freeze: (usize, usize),
     freeze_gridline: Gridline,
-    viewport: Viewport
+    // viewport: Viewport
 }

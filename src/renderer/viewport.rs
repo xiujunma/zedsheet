@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::renderer::table_renderer::TableRenderer;
 use crate::renderer::area::Area;
 
