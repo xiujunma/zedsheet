@@ -9,7 +9,7 @@ pub struct Viewport {
 }
 
 impl Viewport {
-    fn new(render: &TableRenderer) -> Self {
+    pub fn new(render: &TableRenderer) -> Viewport {
         let (tx, ty) = (render.row_header.height, render.col_header.width);
         let (frow, fcol) = render.freeze;
         let start_row = render.start_row;
@@ -18,7 +18,7 @@ impl Viewport {
         let cols = render.cols;
         let width = render.width;
         let height = render.height;
-        return Self {
+        return Viewport {
             areas: Vec::new(),
             header_areas: Vec::new(),
         };

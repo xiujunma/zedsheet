@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 use web_sys::HtmlCanvasElement;
+use crate::renderer::canvas::Canvas;
+use crate::renderer::render::render;
 
 use super::viewport::Viewport;
 
@@ -72,7 +74,7 @@ pub struct Style {
     color: String,
     align: Align,
     valign: VerticalAlign,
-    textwrap: bool,
+    text_wrap: bool,
     underline: bool,
     strike_through: bool,
     bold: bool,
@@ -128,6 +130,26 @@ pub trait GetRowHeightColWidth {
     fn get_col_width(&self, index: usize) -> f64;
 }
 
+pub trait RowGetter {
+    fn get_row(&self, index: usize) -> Row;
+}
+
+pub trait ColGetter {
+    fn get_col(&self, index: usize) -> Col;
+}
+
+pub trait CellGetter {
+    fn get_cell(&self, row: usize, col: usize) -> Cell;
+}
+
+pub trait CellRenderer {
+    fn render(&self, canvas: Canvas, rect: Rect, cell: Cell, text: String);
+}
+
+pub trait Formatter {
+    fn format(&self, cell: Cell) -> String;
+}
+
 pub struct TableRenderer {
     pub target: HtmlCanvasElement,
     pub bgcolor: String,
@@ -142,6 +164,11 @@ pub struct TableRenderer {
     pub start_col: f64,
     pub scroll_rows: f64,
     pub scroll_cols: f64,
+    pub row: dyn RowGetter,
+    pub col: dyn ColGetter,
+    pub cell: dyn CellGetter,
+    pub cell_renderer: dyn CellRenderer,
+    pub formatter: dyn Formatter,
     pub merges: Vec<String>,
     pub borders: Vec<Border>,
     pub styles: Vec<Style>,
@@ -169,6 +196,118 @@ impl GetRowHeightColWidth for TableRenderer {
 impl TableRenderer {
     pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer {
         TableRenderer { target: container, width, height, ..Default::default() }
+    }
+
+    fn render(&mut self) -> &self {
+        let viewport = Viewport::new(&self);
+        self.viewport = viewport;
+        render(self);
+        return self;
+    }
+
+    fn bgcolor(&mut self, color: String) -> &self {
+        self.bgcolor = color;
+        return self;
+    }
+
+    fn width(&mut self, width: f64) -> &self {
+        self.width = width;
+        return self;
+    }
+
+    fn height(&mut self, height: f64) -> &self {
+        self.height = height;
+        return self;
+    }
+
+    fn scale(&mut self, scale: f64) -> &self {
+        self.scale = scale;
+        return self;
+    }
+
+    fn rows(&mut self, rows: f64) -> &self {
+        self.rows = rows;
+        return self;
+    }
+
+    fn cols(&mut self, cols: f64) -> &self {
+        self.cols = cols;
+        return self;
+    }
+
+    fn row_height(&mut self, row_height: f64) -> &self {
+        self.row_height = row_height;
+        return self;
+    }
+
+    fn col_width(&mut self, col_width: f64) -> &self {
+        self.col_width = col_width;
+        return self;
+    }
+
+    fn start_row(&mut self, start_row: f64) -> &self {
+        self.start_row = start_row;
+        return self;
+    }
+
+    fn start_col(&mut self, start_col: f64) -> &self {
+        self.start_col = start_col;
+        return self;
+    }
+
+    fn scroll_rows(&mut self, scroll_rows: f64) -> &self {
+        self.scroll_rows = scroll_rows;
+        return self;
+    }
+
+    fn scroll_cols(&mut self, scroll_cols: f64) -> &self {
+        self.scroll_cols = scroll_cols;
+        return self;
+    }
+
+    fn row(&mut self, row: impl RowGetter) -> &self {
+        self.row = row;
+        return self;
+    }
+
+    fn col(&mut self, col: impl ColGetter) -> &self {
+        self.col = col;
+        return self;
+    }
+
+    fn cell(&mut self, cell: impl CellGetter) -> &self {
+        self.cell = cell;
+        return self;
+    }
+
+    fn cell_renderer(&mut self, cell_renderer: impl CellRenderer) -> &self {
+        self.cell_renderer = cell_renderer;
+        return self;
+    }
+
+    fn formatter(&mut self, formatter: impl Formatter) -> &self {
+        self.formatter = formatter;
+        return self;
+    }
+
+    fn merges(&mut self, merges: Vec<String>) -> &self {
+        self.merges = merges;
+        return self;
+    }
+
+    fn styles(&mut self, styles: Vec<Style>) -> &self {
+        self.styles = styles;
+        return self;
+    }
+
+    fn borders(&mut self, borders: Vec<Border>) -> &self {
+        self.borders = borders;
+        return self;
+    }
+
+    fn gridline(&mut self, gridline: Gridline) -> &self {
+        self.gridline = gridline;
+        return self;
     }
 }
 
