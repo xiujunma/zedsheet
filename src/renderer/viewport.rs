@@ -6,15 +6,21 @@ use crate::renderer::area::Area;
 pub struct Viewport {
     pub areas: Vec<Area>,
     pub header_areas: Vec<Area>,
-    render: TableRenderer
 }
 
 impl Viewport {
-    fn new(render: TableRenderer) -> Self {
+    fn new(render: &TableRenderer) -> Self {
+        let (tx, ty) = (render.row_header.height, render.col_header.width);
+        let (frow, fcol) = render.freeze;
+        let start_row = render.start_row;
+        let start_col = render.start_col;
+        let rows = render.rows;
+        let cols = render.cols;
+        let width = render.width;
+        let height = render.height;
         return Self {
             areas: Vec::new(),
             header_areas: Vec::new(),
-            render
         };
     }
 }

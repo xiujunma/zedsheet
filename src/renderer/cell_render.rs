@@ -3,15 +3,15 @@
 use crate::renderer::table_renderer::Align;
 
 pub fn textx(align: Align, width: f64, padding: f64) -> f64 {
-    match align {
+    return match align {
         Align::Left => {
-            return padding
+            padding
         },
         Align::Center => {
-            return width / 2_f64
+            width / 2_f64
         },
         Align::Right => {
-            return width - padding
+            width - padding
         }
     }
 }

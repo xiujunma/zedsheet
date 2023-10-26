@@ -6,6 +6,7 @@ use wasm_bindgen::JsCast;
 use renderer::canvas::Canvas;
 use web_sys::HtmlCanvasElement;
 mod utils;
+mod element;
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -16,7 +17,7 @@ pub fn start() {
         .map_err(|_| ())
         .unwrap();
     
-    let canvas = Canvas::new(canvas, 1 as f64);
+    let canvas = Canvas::new(canvas, 1_f64);
     canvas.fill_rect(0_f64, 0_f64, 100_f64, 100_f64);
     warn!("Hello, world!");
 }

@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-
 use web_sys::HtmlCanvasElement;
 
 use super::viewport::Viewport;
@@ -65,7 +64,7 @@ pub struct Border {
     reference: String,
     border_type: BorderType,
     border_line: BorderLineStyle,
-    color: String
+    color: String,
 }
 
 pub struct Style {
@@ -81,75 +80,95 @@ pub struct Style {
     font_size: usize,
     font_family: String,
     rotation: Option<usize>,
-    padding: Option<(usize, usize)>
+    padding: Option<(usize, usize)>,
 }
 
 pub struct Cell {
     value: String,
     cell_type: String,
     style: usize,
-    formula: String
+    formula: String,
 }
 
 pub struct Row {
     height: f64,
     hide: bool,
     auto_fit: bool,
-    style: usize
+    style: usize,
 }
 
 pub struct Col {
     width: f64,
     hide: bool,
     auto_fit: bool,
-    style: usize
+    style: usize,
 }
 
 pub struct RowHeader {
-    height: f64,
-    cols: usize
+    pub height: f64,
+    pub cols: usize,
 }
 
 pub struct ColHeader {
-    width: f64,
-    rows: usize
+    pub width: f64,
+    pub rows: usize,
 }
 
 pub struct Rect {
     x: f64,
     y: f64,
     width: f64,
-    height: f64
+    height: f64,
 }
 
-pub struct ViewportCell {
+pub struct ViewportCell {}
 
+pub trait GetRowHeightColWidth {
+    fn get_row_height(&self, index: usize) -> f64;
+    fn get_col_width(&self, index: usize) -> f64;
 }
 
 pub struct TableRenderer {
-    target: HtmlCanvasElement,
-    bgcolor: String,
-    width: f64,
-    height: f64,
-    scale: f64,
-    rows: f64,
-    cols: f64,
-    row_height: f64,
-    col_width: f64,
-    start_row: f64,
-    start_col: f64,
-    scroll_rows: f64,
-    scroll_cols: f64,
-    merges: Vec<String>,
-    borders: Vec<Border>,
-    styles: Vec<Style>,
-    gridline: Gridline,
-    style: Style, // default style
-    col_header: ColHeader,
-    row_header: RowHeader,
-    header_gridline: Gridline,
-    header_style: Style,
-    freeze: (usize, usize),
-    freeze_gridline: Gridline,
-    // viewport: Viewport
+    pub target: HtmlCanvasElement,
+    pub bgcolor: String,
+    pub width: f64,
+    pub height: f64,
+    pub scale: f64,
+    pub rows: f64,
+    pub cols: f64,
+    pub row_height: f64,
+    pub col_width: f64,
+    pub start_row: f64,
+    pub start_col: f64,
+    pub scroll_rows: f64,
+    pub scroll_cols: f64,
+    pub merges: Vec<String>,
+    pub borders: Vec<Border>,
+    pub styles: Vec<Style>,
+    pub gridline: Gridline,
+    pub style: Style, // default style
+    pub col_header: ColHeader,
+    pub row_header: RowHeader,
+    pub header_gridline: Gridline,
+    pub header_style: Style,
+    pub freeze: (usize, usize),
+    pub freeze_gridline: Gridline,
+    pub viewport: Viewport,
 }
+
+impl GetRowHeightColWidth for TableRenderer {
+    fn get_row_height(&self, index: usize) -> f64 {
+        return 0f64;
+    }
+
+    fn get_col_width(&self, index: usize) -> f64 {
+        return 0f64;
+    }
+}
+
+impl TableRenderer {
+    pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer {
+        TableRenderer { target: container, width, height, ..Default::default() }
+    }
+}
+

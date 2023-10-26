@@ -178,7 +178,7 @@ impl Canvas {
         return self
     }
 
-    pub fn craete_linear_gradient(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> &Self {
+    pub fn create_linear_gradient(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> &Self {
         self.ctx.create_linear_gradient(x0, y0, x1, y1);
         return self
     }

@@ -90,10 +90,10 @@ impl Range {
         let end_row = if self.end_row < other.end_row { self.end_row } else { other.end_row };
         let end_col = if self.end_col < other.end_col { self.end_col } else { other.end_col };
         return Range {
-            start_row: start_row,
-            start_col: start_col,
-            end_row: end_row,
-            end_col: end_col,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
         }
     }
 
@@ -103,10 +103,10 @@ impl Range {
         let end_row = if self.end_row > other.end_row { self.end_row } else { other.end_row };
         let end_col = if self.end_col > other.end_col { self.end_col } else { other.end_col };
         return Range {
-            start_row: start_row,
-            start_col: start_col,
-            end_row: end_row,
-            end_col: end_col,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
         }
     }
 
@@ -156,7 +156,7 @@ impl Range {
             )
     }
 
-    fn each_row(&self, cb: impl Fn(usize), max: Option<usize>) -> &Self {
+    pub fn each_row(&self, cb: impl Fn(usize), max: Option<usize>) -> &Self {
         let mut end_row = self.end_row;
         if max.is_some() && max.unwrap() < end_row {
             end_row = max.unwrap();
@@ -205,7 +205,7 @@ impl Range {
             && self.end_col == other.end_col
     }
 
-    fn create(row: usize, col: usize, row1: usize, col1: usize) -> Range {
+    pub fn new(row: usize, col: usize, row1: usize, col1: usize) -> Self {
         let mut start_row = row;
         let mut start_col = col;
         let mut end_row = row1;
@@ -221,10 +221,10 @@ impl Range {
             end_col = col;
         }
         return Range {
-            start_row: start_row,
-            start_col: start_col,
-            end_row: end_row,
-            end_col: end_col,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
         }
     }
 }
