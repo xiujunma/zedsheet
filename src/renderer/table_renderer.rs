@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use web_sys::HtmlCanvasElement;
+use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::render::render;
 
@@ -131,15 +132,15 @@ pub trait GetRowHeightColWidth {
 }
 
 pub trait RowGetter {
-    fn get_row(&self, index: usize) -> Row;
+    fn get_row(&self, index: usize) -> Option<Row>;
 }
 
 pub trait ColGetter {
-    fn get_col(&self, index: usize) -> Col;
+    fn get_col(&self, index: usize) -> Option<Col>;
 }
 
 pub trait CellGetter {
-    fn get_cell(&self, row: usize, col: usize) -> Cell;
+    fn get_cell(&self, row: usize, col: usize) -> Option<Cell>;
 }
 
 pub trait CellRenderer {
@@ -308,6 +309,70 @@ impl TableRenderer {
     fn gridline(&mut self, gridline: Gridline) -> &self {
         self.gridline = gridline;
         return self;
+    }
+
+    fn style(&mut self, style: Style) -> &self {
+        self.style = style;
+        return self;
+    }
+
+    fn row_header(&mut self, row_header: RowHeader) -> &self {
+        self.row_header = row_header;
+        return self;
+    }
+
+    fn col_header(&mut self, col_header: ColHeader) -> &self {
+        self.col_header = col_header;
+        return self;
+    }
+
+    fn header_gridline(&mut self, header_gridline: Gridline) -> &self {
+        self.header_gridline = header_gridline;
+        return self;
+    }
+
+    fn header_style(&mut self, header_style: Style) -> &self {
+        self.header_style = header_style;
+        return self;
+    }
+
+    fn freeze(&mut self, reference: &str) -> &self {
+        let (x, y) = exp2xy(reference);
+        self.freeze = (y, x);
+        return self;
+    }
+
+    fn freeze_gridline(&mut self, freeze_gridline: Gridline) -> &self {
+        self.freeze_gridline = freeze_gridline;
+        return self;
+    }
+
+    fn row_height_at(&self, index: usize) -> f64 {
+        let r = self.row.get_row(index);
+        return match r {
+            Some(row) => {
+                if row.hide { 0f64 } else { row.height }
+            }
+            None => {
+                self.row_height
+            }
+        }
+    }
+
+    fn col_width_at(&self, index: usize) -> f64 {
+        let c = self.col.get_col(index);
+        return match c {
+            Some(col) => {
+                if col.hide { 0f64 } else { col.width }
+            }
+            None => {
+                self.col_width
+            }
+        }
+    }
+
+    fn get_viewport(&self) -> &Viewport {
+        &self.viewport
     }
 }
 
