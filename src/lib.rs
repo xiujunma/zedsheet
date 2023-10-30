@@ -20,7 +20,7 @@ pub fn start() {
         .map_err(|_| ())
         .unwrap();
 
-    let table_renderer = TableRenderer::new(canvas, 200_f64, 200_f64);
+    let mut table_renderer = TableRenderer::new(canvas, 200_f64, 200_f64);
     table_renderer.scale(1_f64);
     
     // let canvas = Canvas::new(canvas, 1_f64);

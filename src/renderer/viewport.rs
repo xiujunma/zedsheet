@@ -18,6 +18,7 @@ impl Viewport {
         let cols = render.cols;
         let width = render.width;
         let height = render.height;
+
         return Viewport {
             areas: Vec::new(),
             header_areas: Vec::new(),

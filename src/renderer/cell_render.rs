@@ -74,8 +74,16 @@ pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: Ver
 }
 
 pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String {
-    // TODO
-    String::from("")
+    let mut font = "";
+    if italic {
+        font.push_str("italic ");
+    }
+
+    if bold {
+        font.push_str("bold ");
+    }
+
+    format!("{} {}px {}", font, size, family)
 }
 
 pub fn cell_border_render(canvas: Canvas, rect: Rect, border_line: BorderLine, auto_align: bool) {

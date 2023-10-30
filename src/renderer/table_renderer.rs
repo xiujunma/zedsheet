@@ -223,7 +223,7 @@ impl TableRenderer {
         return self;
     }
 
-    fn scale(&mut self, scale: f64) -> &self {
+    pub(crate) fn scale(&mut self, scale: f64) -> &self {
         self.scale = scale;
         return self;
     }
