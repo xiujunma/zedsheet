@@ -109,7 +109,7 @@ impl Canvas {
         return self
     }
 
-    pub fn prop() {
+    pub fn prop(key: String, value: String) {
         // TODO
     }
 

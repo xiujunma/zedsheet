@@ -7,12 +7,13 @@ use crate::renderer::render::render;
 
 use super::viewport::Viewport;
 
+#[derive(PartialEq)]
 pub enum Align {
     Left,
     Right,
     Center,
 }
-
+#[derive(PartialEq)]
 pub enum VerticalAlign {
     Top,
     Middle,
@@ -31,6 +32,7 @@ pub struct Gridline {
     style: Option<GridlineStyle>,
 }
 
+#[derive(PartialEq)]
 pub enum TextLineType {
     Underline,
     StrikeThrough,
@@ -71,19 +73,19 @@ pub struct Border {
 }
 
 pub struct Style {
-    bgcolor: Option<String>,
-    color: String,
-    align: Align,
-    valign: VerticalAlign,
-    text_wrap: bool,
-    underline: bool,
-    strike_through: bool,
-    bold: bool,
-    italic: bool,
-    font_size: usize,
-    font_family: String,
-    rotation: Option<usize>,
-    padding: Option<(usize, usize)>,
+    pub bgcolor: Option<String>,
+    pub color: String,
+    pub align: Align,
+    pub valign: VerticalAlign,
+    pub text_wrap: bool,
+    pub underline: bool,
+    pub strike_through: bool,
+    pub bold: bool,
+    pub italic: bool,
+    pub font_size: usize,
+    pub font_family: String,
+    pub rotation: Option<f64>,
+    pub padding: Option<(f64, f64)>,
 }
 
 pub struct Cell {
@@ -118,10 +120,10 @@ pub struct ColHeader {
 }
 
 pub struct Rect {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 pub struct ViewportCell {}
@@ -144,7 +146,7 @@ pub trait CellGetter {
 }
 
 pub trait CellRenderer {
-    fn render(&self, canvas: Canvas, rect: Rect, cell: Cell, text: String);
+    fn render(&self, canvas: Canvas, rect: Rect, cell: Cell, text: String) -> bool;
 }
 
 pub trait Formatter {
