@@ -5,6 +5,13 @@ use regex::Regex;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::table_renderer::{Align, BorderLine, Cell, CellRenderer, Formatter, Rect, Style, TextLineType, VerticalAlign};
 
+
+struct TextLine {
+    pub width: f64,
+    pub length: usize,
+    pub start: usize
+}
+
 pub fn text_x(align: &Align, width: f64, padding: f64) -> f64 {
     return match align {
         Align::Left => {
@@ -138,8 +145,57 @@ pub fn cell_render(canvas: Canvas, cell: Cell, rect: Rect, style: Style, cell_re
             let txt_width = canvas.measure_text_width(it);
 
             if style.text_wrap && txt_width > inner_width {
-                //
+                let mut text_line = TextLine {
+                    width: 0f64,
+                    length: 0,
+                    start: 0
+                };
+
+                for i in 0..it.len() {
+                    if text_line.width > inner_width {
+                        ntxts.push(it.substring(text_line.start, text_line.length));
+                        text_line = TextLine {
+                            width: 0f64,
+                            length: 0,
+                            start: i
+                        }
+                    }
+                    text_line.length += 1;
+                    text_line.width += canvas.measure_text_width(it.substring(i, i + 1)) + 1;
+                }
+
+                if text_line.length > 0 {
+                    ntxts.push(it.substring(text_line.start, text_line.length));
+                }
+            } else {
+                ntxts.push(it);
             }
         }
+
+        let font_height = style.font_size as f64 / 0.75;
+        let text_height = font_height * (ntxts.len() - 1f64);
+        let mut line_types = vec![];
+
+        if style.underline {
+            line_types.push(TextLineType::Underline);
+        }
+
+        if style.strike_through {
+            line_types.push(TextLineType::StrikeThrough);
+        }
+
+        let ty = text_y(style.valign.clone(), rect.height.clone(), text_height, font_height, yp);
+
+        for it in ntxts {
+            let text_width = canvas.measure_text_width(it);
+            canvas.fill_text(it, tx, ty, None);
+            for line_type in line_types.clone() {
+                let (x1, y1, x2, y2) = text_line(line_type, style.align.clone(), style.valign.clone(), tx, ty, text_width, font_height);
+                canvas.line(x1, y1, x2, y2);
+            }
+        }
+        canvas.restore();
     }
+
+    canvas.restore();
 }
