@@ -4,15 +4,15 @@ use super::range::Range;
 
 pub struct Area {
     pub range: Range,
-    pub x: usize,
-    pub y: usize,
-    pub width: usize,
-    pub height: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
     pub get_size: Box<dyn GetRowHeightColWidth>,
 }
 
 impl Area {
-    pub fn new(range: Range, x: usize, y: usize, width: usize, height: usize, get_size: Box<dyn GetRowHeightColWidth>) -> Self {
+    pub fn new(range: Range, x: f64, y: f64, width: f64, height: f64, get_size: Box<dyn GetRowHeightColWidth>) -> Self {
         return Area {
             range,
             x,

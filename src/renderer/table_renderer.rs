@@ -163,8 +163,8 @@ pub struct TableRenderer {
     pub cols: f64,
     pub row_height: f64,
     pub col_width: f64,
-    pub start_row: f64,
-    pub start_col: f64,
+    pub start_row: usize,
+    pub start_col: usize,
     pub scroll_rows: f64,
     pub scroll_cols: f64,
     pub row: dyn RowGetter,
@@ -223,7 +223,7 @@ impl TableRenderer {
         return self;
     }
 
-    pub(crate) fn scale(&mut self, scale: f64) -> &self {
+    pub fn scale(&mut self, scale: f64) -> &self {
         self.scale = scale;
         return self;
     }
