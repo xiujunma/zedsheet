@@ -68,6 +68,13 @@ pub enum BorderLineStyle {
     Dotted,
 }
 
+pub enum Placement {
+    All,
+    RowHeader,
+    ColHeader,
+    Body,
+}
+
 pub struct BorderLine {
     left: Option<(BorderLineStyle, String)>,
     top: Option<(BorderLineStyle, String)>,
@@ -151,7 +158,9 @@ pub struct  AreaCell {
     pub height: f64,
 }
 
-pub struct ViewportCell {}
+pub struct ViewportCell {
+    pub placement: Placement,
+}
 
 pub struct TableRenderer<'a> {
     pub target: HtmlCanvasElement,
