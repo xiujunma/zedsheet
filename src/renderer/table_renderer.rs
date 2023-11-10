@@ -7,6 +7,16 @@ use crate::renderer::render::render;
 
 use super::viewport::Viewport;
 
+type RowGetter = fn(usize) -> Option<Row>;
+
+type ColGetter = fn(usize) -> Option<Col>;
+
+type CellGetter = fn(usize, usize) -> Option<Cell>;
+
+type CellRenderer = fn(Canvas, Rect, Cell, String) -> bool;
+
+type Formatter = fn(Cell, String) -> String;
+
 #[derive(PartialEq)]
 pub enum Align {
     Left,
@@ -110,13 +120,19 @@ pub struct Col {
 }
 
 pub struct RowHeader {
-    pub height: f64,
+    pub width: f64,
     pub cols: usize,
+    pub cell: CellGetter,
+    pub cell_renderer: CellRenderer,
+    pub merges: Vec<String>,
 }
 
 pub struct ColHeader {
-    pub width: f64,
+    pub height: f64,
     pub rows: usize,
+    pub cell: CellGetter,
+    pub cell_renderer: CellRenderer,
+    pub merges: Vec<String>,
 }
 
 pub struct Rect {
@@ -126,34 +142,18 @@ pub struct Rect {
     pub height: f64,
 }
 
+pub struct  AreaCell {
+    row: usize,
+    col: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 pub struct ViewportCell {}
 
-pub trait GetRowHeightColWidth {
-    fn get_row_height(&self, index: usize) -> f64;
-    fn get_col_width(&self, index: usize) -> f64;
-}
-
-pub trait RowGetter {
-    fn get_row(&self, index: usize) -> Option<Row>;
-}
-
-pub trait ColGetter {
-    fn get_col(&self, index: usize) -> Option<Col>;
-}
-
-pub trait CellGetter {
-    fn get_cell(&self, row: usize, col: usize) -> Option<Cell>;
-}
-
-pub trait CellRenderer {
-    fn render(&self, canvas: Canvas, rect: Rect, cell: Cell, text: String) -> bool;
-}
-
-pub trait Formatter {
-    fn format(&self, cell: Cell) -> String;
-}
-
-pub struct TableRenderer {
+pub struct TableRenderer<'a> {
     pub target: HtmlCanvasElement,
     pub bgcolor: String,
     pub width: f64,
@@ -167,11 +167,11 @@ pub struct TableRenderer {
     pub start_col: usize,
     pub scroll_rows: f64,
     pub scroll_cols: f64,
-    pub row: dyn RowGetter,
-    pub col: dyn ColGetter,
-    pub cell: dyn CellGetter,
-    pub cell_renderer: dyn CellRenderer,
-    pub formatter: dyn Formatter,
+    pub row: RowGetter,
+    pub col: ColGetter,
+    pub cell: CellGetter,
+    pub cell_renderer: CellRenderer,
+    pub formatter: Formatter,
     pub merges: Vec<String>,
     pub borders: Vec<Border>,
     pub styles: Vec<Style>,
@@ -183,27 +183,17 @@ pub struct TableRenderer {
     pub header_style: Style,
     pub freeze: (usize, usize),
     pub freeze_gridline: Gridline,
-    pub viewport: Viewport,
+    pub viewport: &'a Viewport<'a>,
 }
 
-impl GetRowHeightColWidth for TableRenderer {
-    fn get_row_height(&self, index: usize) -> f64 {
-        return 0f64;
-    }
-
-    fn get_col_width(&self, index: usize) -> f64 {
-        return 0f64;
-    }
-}
-
-impl TableRenderer {
+impl<'a> TableRenderer<'a> {
     pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer {
         TableRenderer { target: container, width, height, ..Default::default() }
     }
 
     fn render(&mut self) -> &self {
         let viewport = Viewport::new(&self);
-        self.viewport = viewport;
+        self.viewport = &viewport;
         render(self);
         return self;
     }
@@ -248,12 +238,12 @@ impl TableRenderer {
         return self;
     }
 
-    fn start_row(&mut self, start_row: f64) -> &self {
+    fn start_row(&mut self, start_row: usize) -> &self {
         self.start_row = start_row;
         return self;
     }
 
-    fn start_col(&mut self, start_col: f64) -> &self {
+    fn start_col(&mut self, start_col: usize) -> &self {
         self.start_col = start_col;
         return self;
     }
@@ -268,27 +258,27 @@ impl TableRenderer {
         return self;
     }
 
-    fn row(&mut self, row: impl RowGetter) -> &self {
+    fn row(&mut self, row: RowGetter) -> &self {
         self.row = row;
         return self;
     }
 
-    fn col(&mut self, col: impl ColGetter) -> &self {
+    fn col(&mut self, col: ColGetter) -> &self {
         self.col = col;
         return self;
     }
 
-    fn cell(&mut self, cell: impl CellGetter) -> &self {
+    fn cell(&mut self, cell: CellGetter) -> &self {
         self.cell = cell;
         return self;
     }
 
-    fn cell_renderer(&mut self, cell_renderer: impl CellRenderer) -> &self {
+    fn cell_renderer(&mut self, cell_renderer: CellRenderer) -> &self {
         self.cell_renderer = cell_renderer;
         return self;
     }
 
-    fn formatter(&mut self, formatter: impl Formatter) -> &self {
+    fn formatter(&mut self, formatter: Formatter) -> &self {
         self.formatter = formatter;
         return self;
     }
@@ -349,7 +339,7 @@ impl TableRenderer {
         return self;
     }
 
-    fn row_height_at(&self, index: usize) -> f64 {
+    pub fn row_height_at(&self, index: usize) -> f64 {
         let r = self.row.get_row(index);
         return match r {
             Some(row) => {
@@ -361,7 +351,7 @@ impl TableRenderer {
         }
     }
 
-    fn col_width_at(&self, index: usize) -> f64 {
+    pub fn col_width_at(&self, index: usize) -> f64 {
         let c = self.col.get_col(index);
         return match c {
             Some(col) => {

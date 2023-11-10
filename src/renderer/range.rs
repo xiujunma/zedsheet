@@ -47,7 +47,7 @@ impl Range {
         return index >= self.start_col && index <= self.end_col
     }
 
-    fn contains(&self, row: usize, col: usize) -> bool {
+    pub fn contains(&self, row: usize, col: usize) -> bool {
         return self.contains_row(row) && self.contains_col(col)
     }
 
