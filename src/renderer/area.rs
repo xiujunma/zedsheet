@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::rc::Rc;
+use crate::renderer::table_renderer::AreaCell;
 use crate::renderer::viewport::{GetColWidth, GetRowHeight};
 use super::range::Range;
 
@@ -50,6 +51,10 @@ impl Area {
     where
         F: FnMut(usize, usize, f64),
     {
+
+    }
+
+    pub fn cell_at(x: usize, y: usize) -> AreaCell {
 
     }
 }

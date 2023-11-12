@@ -3,6 +3,7 @@
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
 use crate::renderer::table_renderer::{TableRenderer, ViewportCell};
+use crate::renderer::table_renderer::Placement::{All, RowHeader};
 
 pub type GetRowHeight = fn(usize) -> f64;
 pub type GetColWidth = fn(usize) -> f64;
@@ -154,10 +155,35 @@ impl Viewport {
         return false;
     }
 
-    fn cell_at(&self, x: f64, y: f64) -> Option<ViewportCell> {
+    fn cell_at(&self, x: usize, y: usize) -> Option<ViewportCell> {
         let a2 = self.areas.get(1).unwrap();
         let [ha1, ha21, ha23, ha3] = self.header_areas.as_slice();
 
+        if x < a2.x as usize && y < a2.y as usize {
+            return Option::from(ViewportCell {
+                placement: All,
+                row: 0,
+                col: 0,
+                x: 0f64,
+                y: 0f64,
+                width: a2.x,
+                height: a2.y
+            })
+        }
+
+        if x < a2.x as usize {
+            let header_area = if ha23.contains_y(y) {
+                ha23
+            } else {
+                ha3
+            };
+
+            header_area.
+            return ViewportCell {
+                placement: RowHeader,
+
+            }
+        }
 
 
 

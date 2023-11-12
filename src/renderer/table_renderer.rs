@@ -150,8 +150,8 @@ pub struct Rect {
 }
 
 pub struct  AreaCell {
-    row: usize,
-    col: usize,
+    pub row: usize,
+    pub col: usize,
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -160,6 +160,12 @@ pub struct  AreaCell {
 
 pub struct ViewportCell {
     pub placement: Placement,
+    pub row: usize,
+    pub col: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 pub struct TableRenderer<'a> {
