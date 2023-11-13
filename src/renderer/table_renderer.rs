@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use web_sys::HtmlCanvasElement;
 use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::render::render;
+use web_sys::HtmlCanvasElement;
 
 use super::viewport::Viewport;
 
@@ -13,9 +13,9 @@ type ColGetter = fn(usize) -> Option<Col>;
 
 type CellGetter = fn(usize, usize) -> Option<Cell>;
 
-type CellRenderer = fn(Canvas, Rect, Cell, String) -> bool;
+pub type CellRenderer = fn(Canvas, Rect, Cell, String) -> bool;
 
-type Formatter = fn(Cell, String) -> String;
+pub type Formatter = fn(Cell, String) -> String;
 
 #[derive(PartialEq)]
 pub enum Align {
@@ -149,7 +149,7 @@ pub struct Rect {
     pub height: f64,
 }
 
-pub struct  AreaCell {
+pub struct AreaCell {
     pub row: usize,
     pub col: usize,
     pub x: f64,
@@ -202,8 +202,13 @@ pub struct TableRenderer<'a> {
 }
 
 impl<'a> TableRenderer<'a> {
-    pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer {
-        TableRenderer { target: container, width, height, ..Default::default() }
+    pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer<'a> {
+        TableRenderer {
+            target: container,
+            width,
+            height,
+            ..Default::default()
+        }
     }
 
     fn render(&mut self) -> &self {
@@ -243,113 +248,113 @@ impl<'a> TableRenderer<'a> {
         return self;
     }
 
-    fn row_height(&mut self, row_height: f64) -> &self {
+    fn row_height(&mut self, row_height: f64) -> &Self {
         self.row_height = row_height;
         return self;
     }
 
-    fn col_width(&mut self, col_width: f64) -> &self {
+    fn col_width(&mut self, col_width: f64) -> &Self {
         self.col_width = col_width;
         return self;
     }
 
-    fn start_row(&mut self, start_row: usize) -> &self {
+    fn start_row(&mut self, start_row: usize) -> &Self {
         self.start_row = start_row;
         return self;
     }
 
-    fn start_col(&mut self, start_col: usize) -> &self {
+    fn start_col(&mut self, start_col: usize) -> &Self {
         self.start_col = start_col;
         return self;
     }
 
-    fn scroll_rows(&mut self, scroll_rows: f64) -> &self {
+    fn scroll_rows(&mut self, scroll_rows: f64) -> &Self {
         self.scroll_rows = scroll_rows;
         return self;
     }
 
-    fn scroll_cols(&mut self, scroll_cols: f64) -> &self {
+    fn scroll_cols(&mut self, scroll_cols: f64) -> &Self {
         self.scroll_cols = scroll_cols;
         return self;
     }
 
-    fn row(&mut self, row: RowGetter) -> &self {
+    fn row(&mut self, row: RowGetter) -> &Self {
         self.row = row;
         return self;
     }
 
-    fn col(&mut self, col: ColGetter) -> &self {
+    fn col(&mut self, col: ColGetter) -> &Self {
         self.col = col;
         return self;
     }
 
-    fn cell(&mut self, cell: CellGetter) -> &self {
+    fn cell(&mut self, cell: CellGetter) -> &Self {
         self.cell = cell;
         return self;
     }
 
-    fn cell_renderer(&mut self, cell_renderer: CellRenderer) -> &self {
+    fn cell_renderer(&mut self, cell_renderer: CellRenderer) -> &Self {
         self.cell_renderer = cell_renderer;
         return self;
     }
 
-    fn formatter(&mut self, formatter: Formatter) -> &self {
+    fn formatter(&mut self, formatter: Formatter) -> &Self {
         self.formatter = formatter;
         return self;
     }
 
-    fn merges(&mut self, merges: Vec<String>) -> &self {
+    fn merges(&mut self, merges: Vec<String>) -> &Self {
         self.merges = merges;
         return self;
     }
 
-    fn styles(&mut self, styles: Vec<Style>) -> &self {
+    fn styles(&mut self, styles: Vec<Style>) -> &Self {
         self.styles = styles;
         return self;
     }
 
-    fn borders(&mut self, borders: Vec<Border>) -> &self {
+    fn borders(&mut self, borders: Vec<Border>) -> &Self {
         self.borders = borders;
         return self;
     }
 
-    fn gridline(&mut self, gridline: Gridline) -> &self {
+    fn gridline(&mut self, gridline: Gridline) -> &Self {
         self.gridline = gridline;
         return self;
     }
 
-    fn style(&mut self, style: Style) -> &self {
+    fn style(&mut self, style: Style) -> &Self {
         self.style = style;
         return self;
     }
 
-    fn row_header(&mut self, row_header: RowHeader) -> &self {
+    fn row_header(&mut self, row_header: RowHeader) -> &Self {
         self.row_header = row_header;
         return self;
     }
 
-    fn col_header(&mut self, col_header: ColHeader) -> &self {
+    fn col_header(&mut self, col_header: ColHeader) -> &Self {
         self.col_header = col_header;
         return self;
     }
 
-    fn header_gridline(&mut self, header_gridline: Gridline) -> &self {
+    fn header_gridline(&mut self, header_gridline: Gridline) -> &Self {
         self.header_gridline = header_gridline;
         return self;
     }
 
-    fn header_style(&mut self, header_style: Style) -> &self {
+    fn header_style(&mut self, header_style: Style) -> &Self {
         self.header_style = header_style;
         return self;
     }
 
-    fn freeze(&mut self, reference: &str) -> &self {
+    fn freeze(&mut self, reference: &str) -> &Self {
         let (x, y) = exp2xy(reference);
         self.freeze = (y, x);
         return self;
     }
 
-    fn freeze_gridline(&mut self, freeze_gridline: Gridline) -> &self {
+    fn freeze_gridline(&mut self, freeze_gridline: Gridline) -> &Self {
         self.freeze_gridline = freeze_gridline;
         return self;
     }
@@ -358,28 +363,31 @@ impl<'a> TableRenderer<'a> {
         let r = self.row.get_row(index);
         return match r {
             Some(row) => {
-                if row.hide { 0f64 } else { row.height }
+                if row.hide {
+                    0f64
+                } else {
+                    row.height
+                }
             }
-            None => {
-                self.row_height
-            }
-        }
+            None => self.row_height,
+        };
     }
 
     pub fn col_width_at(&self, index: usize) -> f64 {
         let c = self.col.get_col(index);
         return match c {
             Some(col) => {
-                if col.hide { 0f64 } else { col.width }
+                if col.hide {
+                    0f64
+                } else {
+                    col.width
+                }
             }
-            None => {
-                self.col_width
-            }
-        }
+            None => self.col_width,
+        };
     }
 
     fn get_viewport(&self) -> &Viewport {
         &self.viewport
     }
 }
-

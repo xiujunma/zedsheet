@@ -14,8 +14,8 @@ pub struct Viewport<'a> {
     pub render: &'a TableRenderer<'a>,
 }
 
-impl Viewport {
-    pub fn new(render: &TableRenderer) -> Viewport {
+impl Viewport<'_> {
+    pub fn new<'a>(render: &'a TableRenderer<'a>) -> Viewport<'a> {
         let (tx, ty) = (render.row_header.width, render.col_header.height);
         let (frow, fcol) = render.freeze;
         let start_row = render.start_row;

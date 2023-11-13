@@ -90,7 +90,7 @@ pub fn cell_border_render(canvas: Canvas, rect: Rect, border_line: BorderLine, a
 
 }
 
-pub fn cell_render(canvas: Canvas, cell: Cell, rect: Rect, style: Style, cell_renderer: Option<&impl CellRenderer>, formatter: &impl Formatter) {
+pub fn cell_render(canvas: Canvas, cell: Cell, rect: Rect, style: Style, cell_renderer: Option<CellRenderer>, formatter: Formatter) {
     let text = formatter.format(cell.clone());
 
     canvas.save().begin_path().translate(rect.x, rect.y);
