@@ -36,14 +36,14 @@ impl Area {
         return self.get_col_width(index)
     }
 
-    pub fn contains_x(&self, x: usize) -> bool {
+    pub fn contains_x(&self, x: f64) -> bool {
         return x >= self.x && x <= self.x + self.width
     }
 
-    pub fn contains_y(&self, y: usize) -> bool {
+    pub fn contains_y(&self, y: f64) -> bool {
         return y >= self.y && y <= self.y + self.height
     }
-    pub fn contains(&self, x: usize, y: usize) -> bool {
+    pub fn contains(&self, x: f64, y: f64) -> bool {
         return self.contains_x(x) && self.contains_y(y)
     }
 
@@ -54,7 +54,41 @@ impl Area {
 
     }
 
-    pub fn cell_at(x: usize, y: usize) -> AreaCell {
+    pub fn cell_at(&self, x: f64, y: f64) -> AreaCell {
+        let start_row = self.range.start_row;
+        let start_col = self.range.start_col;
 
+        let mut cell = AreaCell {
+            row: start_row,
+            col: start_col,
+            x: self.x,
+            y: self.y,
+            width: 0f64,
+            height: 0f64,
+        };
+
+        // row
+        while cell.y < y as f64 {
+            let h = self.get_row_height(cell.row);
+            cell.row += 1;
+            cell.y += h;
+            cell.height = h;
+        }
+
+        cell.y -= cell.height;
+        cell.row -= 1;
+
+        // col
+        while cell.x < x as f64 {
+            let w = self.get_col_width(cell.col);
+            cell.col += 1;
+            cell.x += w;
+            cell.width = w;
+        }
+
+        cell.x -= cell.width;
+        cell.col -= 1;
+
+        cell
     }
 }

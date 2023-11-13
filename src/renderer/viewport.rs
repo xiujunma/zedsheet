@@ -3,7 +3,7 @@
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
 use crate::renderer::table_renderer::{TableRenderer, ViewportCell};
-use crate::renderer::table_renderer::Placement::{All, RowHeader};
+use crate::renderer::table_renderer::Placement::{All, Body, ColHeader, RowHeader};
 
 pub type GetRowHeight = fn(usize) -> f64;
 pub type GetColWidth = fn(usize) -> f64;
@@ -155,11 +155,11 @@ impl Viewport {
         return false;
     }
 
-    fn cell_at(&self, x: usize, y: usize) -> Option<ViewportCell> {
+    fn cell_at(&self, x: f64, y: f64) -> Option<ViewportCell> {
         let a2 = self.areas.get(1).unwrap();
         let [ha1, ha21, ha23, ha3] = self.header_areas.as_slice();
 
-        if x < a2.x as usize && y < a2.y as usize {
+        if x < a2.x && y < a2.y {
             return Option::from(ViewportCell {
                 placement: All,
                 row: 0,
@@ -171,21 +171,60 @@ impl Viewport {
             })
         }
 
-        if x < a2.x as usize {
+        if x < a2.x {
             let header_area = if ha23.contains_y(y) {
                 ha23
             } else {
                 ha3
             };
 
-            header_area.
-            return ViewportCell {
-                placement: RowHeader,
+            let area_cell = header_area.cell_at(x, y);
 
-            }
+            return Some(ViewportCell {
+                placement: RowHeader,
+                row: area_cell.row,
+                col: area_cell.col,
+                x: area_cell.x,
+                y: area_cell.y,
+                width: area_cell.width,
+                height: area_cell.height,
+            });
         }
 
+        if y < a2.y {
+            let header_area = if ha21.contains_x(x) {
+                ha21
+            } else {
+                ha1
+            };
 
+            let area_cell = header_area.cell_at(x, y);
+
+            return Some(ViewportCell {
+                placement: ColHeader,
+                row: area_cell.row,
+                col: area_cell.col,
+                x: area_cell.x,
+                y: area_cell.y,
+                width: area_cell.width,
+                height: area_cell.height,
+            });
+        }
+
+        for area in self.areas {
+            if area.contains(x, y) {
+                let area_cell = area.cell_at(x, y);
+                return Some(ViewportCell {
+                    placement: Body,
+                    row: area_cell.row,
+                    col: area_cell.col,
+                    x: area_cell.x,
+                    y: area_cell.y,
+                    width: area_cell.width,
+                    height: area_cell.height,
+                });
+            }
+        }
 
         None
     }
