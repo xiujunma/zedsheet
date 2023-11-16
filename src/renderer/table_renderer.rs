@@ -211,39 +211,39 @@ impl<'a> TableRenderer<'a> {
         }
     }
 
-    fn render(&mut self) -> &self {
+    fn render(&mut self) -> &Self {
         let viewport = Viewport::new(&self);
         self.viewport = &viewport;
         render(self);
         return self;
     }
 
-    fn bgcolor(&mut self, color: String) -> &self {
+    fn bgcolor(&mut self, color: String) -> &Self {
         self.bgcolor = color;
         return self;
     }
 
-    fn width(&mut self, width: f64) -> &self {
+    fn width(&mut self, width: f64) -> &Self {
         self.width = width;
         return self;
     }
 
-    fn height(&mut self, height: f64) -> &self {
+    fn height(&mut self, height: f64) -> &Self {
         self.height = height;
         return self;
     }
 
-    pub fn scale(&mut self, scale: f64) -> &self {
+    pub fn scale(&mut self, scale: f64) -> &Self {
         self.scale = scale;
         return self;
     }
 
-    fn rows(&mut self, rows: f64) -> &self {
+    fn rows(&mut self, rows: f64) -> &Self {
         self.rows = rows;
         return self;
     }
 
-    fn cols(&mut self, cols: f64) -> &self {
+    fn cols(&mut self, cols: f64) -> &Self {
         self.cols = cols;
         return self;
     }

@@ -142,7 +142,7 @@ impl Viewport<'_> {
         Viewport {
             areas: vec![area1, area2, area3, area4],
             header_areas: vec![header_area1, header_area2, header_area3, header_area4],
-            render,
+            render: &render
         }
     }
 

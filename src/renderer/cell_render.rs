@@ -33,7 +33,7 @@ pub fn text_y(align: VerticalAlign, height: f64, text_height: f64, font_height: 
         },
         VerticalAlign::Middle => {
             let y = height / 2_f64 - font_height / 2_f64;
-            let min_height = font_height / 2 + padding;
+            let min_height = font_height / 2_f64 + padding;
             if y < min_height {
                 min_height
             } else {
@@ -52,13 +52,13 @@ pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: Ver
         if vertical_align == VerticalAlign::Top {
             ty = -h
         } else if vertical_align == VerticalAlign::Middle {
-            ty = -h / 2
+            ty = -h / 2f64
         }
     } else if text_line_type == TextLineType::StrikeThrough {
         if vertical_align == VerticalAlign::Top {
-            ty = -h / 2
+            ty = -h / 2f64
         } else if vertical_align == VerticalAlign::Middle {
-            ty = h / 2
+            ty = h / 2f64
         }
     }
 
