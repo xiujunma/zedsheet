@@ -37,9 +37,9 @@ pub enum GridlineStyle {
 }
 
 pub struct Gridline {
-    width: usize,
-    color: String,
-    style: Option<GridlineStyle>,
+    pub width: usize,
+    pub color: String,
+    pub style: Option<GridlineStyle>,
 }
 
 #[derive(PartialEq)]
