@@ -5,8 +5,8 @@ use regex::Regex;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::table_renderer::{Align, BorderLine, Cell, CellRenderer, Formatter, Rect, Style, TextLineType, VerticalAlign};
 
-
-struct TextLine {
+#[derive(Debug, Clone)]
+pub struct TextLine {
     pub width: f64,
     pub length: usize,
     pub start: usize

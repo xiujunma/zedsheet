@@ -88,7 +88,7 @@ pub struct Border {
     border_line: BorderLineStyle,
     color: String,
 }
-
+#[derive(Debug, Clone)]
 pub struct Style {
     pub bgcolor: Option<String>,
     pub color: String,
@@ -104,28 +104,28 @@ pub struct Style {
     pub rotation: Option<f64>,
     pub padding: Option<(f64, f64)>,
 }
-
+#[derive(Debug, Clone)]
 pub struct Cell {
     value: String,
     cell_type: String,
     style: usize,
     formula: String,
 }
-
+#[derive(Debug, Clone)]
 pub struct Row {
     height: f64,
     hide: bool,
     auto_fit: bool,
     style: usize,
 }
-
+#[derive(Debug, Clone)]
 pub struct Col {
     width: f64,
     hide: bool,
     auto_fit: bool,
     style: usize,
 }
-
+#[derive(Debug, Clone)]
 pub struct RowHeader {
     pub width: f64,
     pub cols: usize,
@@ -133,7 +133,7 @@ pub struct RowHeader {
     pub cell_renderer: CellRenderer,
     pub merges: Vec<String>,
 }
-
+#[derive(Debug, Clone)]
 pub struct ColHeader {
     pub height: f64,
     pub rows: usize,
@@ -141,14 +141,14 @@ pub struct ColHeader {
     pub cell_renderer: CellRenderer,
     pub merges: Vec<String>,
 }
-
+#[derive(Debug, Clone)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
 }
-
+#[derive(Debug, Clone)]
 pub struct AreaCell {
     pub row: usize,
     pub col: usize,
@@ -157,7 +157,7 @@ pub struct AreaCell {
     pub width: f64,
     pub height: f64,
 }
-
+#[derive(Debug, Clone)]
 pub struct ViewportCell {
     pub placement: Placement,
     pub row: usize,
@@ -167,7 +167,7 @@ pub struct ViewportCell {
     pub width: f64,
     pub height: f64,
 }
-
+#[derive(Debug, Clone)]
 pub struct TableRenderer<'a> {
     pub target: HtmlCanvasElement,
     pub bgcolor: String,

@@ -44,37 +44,37 @@ pub enum Direction {
     Rtl,
     Inherit,
 }
-
+#[derive(Debug, Clone)]
 pub struct LineProperties {
     line_width: u8,
     line_cap: LineCap,
     line_join: LineJoin,
 }
-
+#[derive(Debug, Clone)]
 pub struct TextProperties {
     font: String,
     text_align: TextAlign,
     text_baseline: TextBaseline,
     direction: Direction,
 }
-
+#[derive(Debug, Clone)]
 pub struct FileStrokeProperties {
     fill_style: String,
     stroke_style: String,
 }
-
+#[derive(Debug, Clone)]
 pub struct ShadowProperties {
     shadow_blur: u8,
     shadow_color: String,
     shadow_offset_x: u8,
     shadow_offset_y: u8,
 }
-
+#[derive(Debug, Clone)]
 pub struct CompositingProperties {
     global_alpha: f32,
     global_composite_operation: String,
 }
-
+#[derive(Debug, Clone)]
 pub struct Canvas {
     target: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,

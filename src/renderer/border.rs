@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub struct Border {
     reference: String,
     border_type: BorderType,

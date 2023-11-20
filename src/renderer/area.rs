@@ -5,6 +5,7 @@ use crate::renderer::table_renderer::AreaCell;
 use crate::renderer::viewport::{GetColWidth, GetRowHeight};
 use super::range::Range;
 
+#[derive(Debug, Clone)]
 pub struct Area {
     pub range: Range,
     pub x: f64,

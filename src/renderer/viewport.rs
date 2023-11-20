@@ -8,14 +8,14 @@ use crate::renderer::table_renderer::Placement::{All, Body, ColHeader, RowHeader
 pub type GetRowHeight = fn(usize) -> f64;
 pub type GetColWidth = fn(usize) -> f64;
 
-pub struct Viewport<'a> {
+pub struct Viewport {
     pub areas: Vec<Area>,
     pub header_areas: Vec<Area>,
-    pub render: &'a TableRenderer<'a>,
+    pub render: &'static mut TableRenderer<'static>,
 }
 
-impl Viewport<'_> {
-    pub fn new<'a>(render: &'a TableRenderer<'a>) -> Viewport<'a> {
+impl Viewport {
+    pub fn new(render: &'static mut TableRenderer) -> Viewport {
         let (tx, ty) = (render.row_header.width, render.col_header.height);
         let (frow, fcol) = render.freeze;
         let start_row = render.start_row;
@@ -142,7 +142,7 @@ impl Viewport<'_> {
         Viewport {
             areas: vec![area1, area2, area3, area4],
             header_areas: vec![header_area1, header_area2, header_area3, header_area4],
-            render: &render
+            render
         }
     }
 

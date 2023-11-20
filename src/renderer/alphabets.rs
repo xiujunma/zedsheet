@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-static ALPHABETS: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const ALPHABETS: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 fn alphabet(index: usize) -> char {
     return ALPHABETS.chars().nth(index as usize).unwrap()
