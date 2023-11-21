@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::rc::Rc;
-use crate::renderer::table_renderer::AreaCell;
+use crate::renderer::table_renderer::{AreaCell, Rect};
 use crate::renderer::viewport::{GetColWidth, GetRowHeight};
 use super::range::Range;
 
@@ -53,6 +53,36 @@ impl Area {
         F: FnMut(usize, usize, f64),
     {
 
+    }
+
+    pub fn rect_row(&self, start_row: usize, end_row: usize) -> Rect {
+        // TODO
+        return Rect {
+            x: 0f64,
+            y: 0f64,
+            width: 0f64,
+            height: 0f64,
+        }
+    }
+
+    pub fn rect_col(&self, start_col: usize, end_col: usize) -> Rect {
+        // TODO
+        return Rect {
+            x: 0f64,
+            y: 0f64,
+            width: 0f64,
+            height: 0f64,
+        }
+    }
+
+    pub fn rect(&self, r: &Range) -> Rect {
+        // TODO
+        return Rect {
+            x: 0f64,
+            y: 0f64,
+            width: 0f64,
+            height: 0f64,
+        }
     }
 
     pub fn cell_at(&self, x: f64, y: f64) -> AreaCell {

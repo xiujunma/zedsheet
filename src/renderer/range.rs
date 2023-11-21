@@ -80,7 +80,7 @@ impl Range {
         return self.start_col <= end_col && self.end_col >= start_col
     }
 
-    fn intersects(&self, other: &Range) -> bool {
+    pub fn intersects(&self, other: &Range) -> bool {
         return self.intersects_row(other.start_row, other.end_row) && self.intersects_col(other.start_col, other.end_col)
     }
 
@@ -169,7 +169,7 @@ impl Range {
         return self
     }
 
-    fn each_col(&self, cb: impl Fn(usize), max: Option<usize>) -> &Self {
+    pub fn each_col(&self, cb: impl Fn(usize), max: Option<usize>) -> &Self {
         let mut end_col = self.end_col;
         if max.is_some() && max.unwrap() < end_col {
             end_col = max.unwrap();

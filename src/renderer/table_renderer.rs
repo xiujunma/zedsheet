@@ -48,6 +48,7 @@ pub enum TextLineType {
     StrikeThrough,
 }
 
+#[derive(PartialEq)]
 pub enum BorderType {
     All,
     Inside,
@@ -169,7 +170,7 @@ pub struct ViewportCell {
     pub height: f64,
 }
 #[derive(Debug, Clone)]
-pub struct TableRenderer<'a> {
+pub struct TableRenderer {
     pub target: HtmlCanvasElement,
     pub bgcolor: String,
     pub width: f64,
@@ -199,11 +200,11 @@ pub struct TableRenderer<'a> {
     pub header_style: Style,
     pub freeze: (usize, usize),
     pub freeze_gridline: Gridline,
-    pub viewport: &'a Viewport<'a>,
+    pub viewport: Viewport,
 }
 
-impl<'a> TableRenderer<'a> {
-    pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer<'a> {
+impl TableRenderer {
+    pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer {
         TableRenderer {
             target: container,
             width,
@@ -213,8 +214,8 @@ impl<'a> TableRenderer<'a> {
     }
 
     fn render(&mut self) -> &Self {
-        let viewport = Viewport::new(&self);
-        self.viewport = &viewport;
+        let viewport = Viewport::new(self);
+        self.viewport = viewport;
         render(self);
         return self;
     }

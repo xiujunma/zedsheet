@@ -6,6 +6,7 @@ pub struct Border {
     color: String
 }
 
-pub fn border_ranges(area: Area, border: Border, area_merges: vec<Area>) -> Vec<Border> {
+pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> Vec<(Range, Rect, BorderType)> {
+    // TODO
     []
 }

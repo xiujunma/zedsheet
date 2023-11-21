@@ -10,18 +10,21 @@ use web_sys::DomMatrix;
 use web_sys::CanvasWindingRule;
 use js_sys::Float64Array;
 
+#[derive(Debug, Clone, Copy)]
 pub enum LineCap {
     Butt,
     Round,
     Square,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum LineJoin {
     Miter,
     Round,
     Bevel,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum TextAlign {
     Start,
     End,
@@ -30,6 +33,7 @@ pub enum TextAlign {
     Center,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum TextBaseline {
     Top,
     Hanging,
@@ -39,6 +43,7 @@ pub enum TextBaseline {
     Bottom,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Direction {
     Ltr,
     Rtl,

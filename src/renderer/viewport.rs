@@ -8,10 +8,11 @@ use crate::renderer::table_renderer::Placement::{All, Body, ColHeader, RowHeader
 pub type GetRowHeight = fn(usize) -> f64;
 pub type GetColWidth = fn(usize) -> f64;
 
+#[derive(Debug, Clone)]
 pub struct Viewport {
     pub areas: Vec<Area>,
     pub header_areas: Vec<Area>,
-    pub render: &'static mut TableRenderer<'static>,
+    pub render: &'static mut TableRenderer,
 }
 
 impl Viewport {
