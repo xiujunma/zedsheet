@@ -77,7 +77,7 @@ pub struct CompositingProperties {
 #[derive(Debug, Clone)]
 pub struct Canvas {
     target: HtmlCanvasElement,
-    ctx: CanvasRenderingContext2d,
+    pub ctx: CanvasRenderingContext2d,
     scale: f64
 }
 

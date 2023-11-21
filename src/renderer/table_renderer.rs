@@ -37,7 +37,7 @@ pub enum GridlineStyle {
 }
 
 pub struct Gridline {
-    pub width: usize,
+    pub width: f64,
     pub color: String,
     pub style: Option<GridlineStyle>,
 }
@@ -60,6 +60,7 @@ pub enum BorderType {
     Bottom,
 }
 
+#[derive(PartialEq, Copy, Clone)]
 pub enum BorderLineStyle {
     Thin,
     Medium,
@@ -76,10 +77,10 @@ pub enum Placement {
 }
 
 pub struct BorderLine {
-    left: Option<(BorderLineStyle, String)>,
-    top: Option<(BorderLineStyle, String)>,
-    right: Option<(BorderLineStyle, String)>,
-    bottom: Option<(BorderLineStyle, String)>,
+    pub(crate) left: Option<(BorderLineStyle, String)>,
+    pub(crate) top: Option<(BorderLineStyle, String)>,
+    pub(crate) right: Option<(BorderLineStyle, String)>,
+    pub(crate) bottom: Option<(BorderLineStyle, String)>,
 }
 
 pub struct Border {

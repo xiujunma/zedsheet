@@ -86,7 +86,7 @@ pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String 
     format!("{} {}px {}", font, size, family)
 }
 
-pub fn cell_border_render(canvas: Canvas, rect: Rect, border_line: BorderLine, auto_align: bool) {
+pub fn cell_border_render(canvas: &Canvas, rect: &Rect, border_line: &BorderLine, auto_align: Option<bool>) {
 
 }
 
