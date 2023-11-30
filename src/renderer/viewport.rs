@@ -5,13 +5,13 @@ use crate::renderer::range::Range;
 use crate::renderer::table_renderer::{TableRenderer, ViewportCell};
 use crate::renderer::table_renderer::Placement::{All, Body, ColHeader, RowHeader};
 
-pub type GetRowHeight = fn(usize) -> f64;
-pub type GetColWidth = fn(usize) -> f64;
+pub type GetRowHeight = dyn FnOnce(usize) -> f64 + 'static;
+pub type GetColWidth = dyn FnOnce(usize) -> f64 + 'static;
 
 #[derive(Debug, Clone)]
 pub struct Viewport {
-    pub areas: Vec<Area>,
-    pub header_areas: Vec<Area>,
+    pub areas: Vec<Box<Area>>,
+    pub header_areas: Vec<Box<Area>>,
     pub render: &'static mut TableRenderer,
 }
 
@@ -39,7 +39,7 @@ impl Viewport {
             start_col,
             end_row: frow - 1,
             end_col: fcol - 1,
-        }, tx, ty, 0f64, 0f64, get_row_height, get_col_width);
+        }, tx, ty, 0f64, 0f64, &get_row_height, get_col_width);
 
         let (start_row_4, start_col_4) = (frow + render.scroll_rows, fcol + render.scroll_cols);
 
@@ -80,14 +80,14 @@ impl Viewport {
             start_col: start_col_4,
             end_row,
             end_col,
-        }, x4, y4, w4, h4, get_row_height, get_col_width);
+        }, x4, y4, w4, h4, &get_row_height, &get_col_width);
 
         let area1 = Area::new(Range {
             start_row,
             start_col: start_col_4,
             end_row: frow - 1,
             end_col,
-        }, x4, ty, w4, 0f64, get_row_height, get_col_width);
+        }, x4, ty, w4, 0f64, &get_row_height, &get_col_width);
 
 
         let area3 = Area::new(Range {
@@ -95,7 +95,7 @@ impl Viewport {
             start_col,
             end_row,
             end_col: fcol - 1,
-        }, tx, y4, 0f64, h4, get_row_height, get_col_width);
+        }, tx, y4, 0f64, h4, &get_row_height, &get_col_width);
 
 
         // header areas
@@ -116,28 +116,28 @@ impl Viewport {
             start_col: area1.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area1.range.end_col,
-        }, area4.x, 0f64, area4.width, 0f64, get_col_header_row, get_col_width);
+        }, area4.x, 0f64, area4.width, 0f64, &get_col_header_row, &get_col_width);
 
         let header_area2 = Area::new(Range {
             start_row: 0,
             start_col: area2.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area2.range.end_col,
-        }, area2.x, 0f64, area2.width, 0f64, get_col_header_row, get_col_width);
+        }, area2.x, 0f64, area2.width, 0f64, &get_col_header_row, &get_col_width);
 
         let header_area3 = Area::new(Range {
             start_row: 0,
             start_col: area3.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area3.range.end_col,
-        }, area3.x, 0f64, area3.width, 0f64, get_col_header_row, get_col_width);
+        }, area3.x, 0f64, area3.width, 0f64, &get_col_header_row, &get_col_width);
 
         let header_area4 = Area::new(Range {
             start_row: 0,
             start_col: area4.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area4.range.end_col,
-        }, area4.x, 0f64, area4.width, 0f64, get_col_header_row, get_col_width);
+        }, area4.x, 0f64, area4.width, 0f64, &get_col_header_row, &get_col_width);
 
 
         Viewport {

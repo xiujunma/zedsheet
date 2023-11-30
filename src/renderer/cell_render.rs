@@ -74,7 +74,7 @@ pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: Ver
 }
 
 pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String {
-    let mut font = "";
+    let mut font = String::from("");
     if italic {
         font.push_str("italic ");
     }
@@ -129,7 +129,7 @@ pub fn cell_render(canvas: Canvas, cell: Cell, rect: Rect, style: Style, cell_re
     if re.test(text.clone()) {
         canvas
             .save()
-            .beginPath()
+            .begin_path()
             .prop("textAlign", style.align)
             .prop("textBaseline", style.valign)
             .prop("font", font_string(&style.font_family, style.font_size as f64, style.italic, style.bold))

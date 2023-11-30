@@ -7,7 +7,7 @@ use crate::renderer::range::Range;
 use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Gridline, Rect, TableRenderer};
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
-pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: fn()) {
+pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
     if gridline.width > 0f64 {
         canvas
             .save()
@@ -27,22 +27,21 @@ pub fn render_cell_grid_line(canvas: &Canvas, gridline: &Gridline, rect: &Rect) 
             .translate(rect.x, rect.y)
             .line(rect.width, 0f64, rect.width, rect.height)
             .line(0f64, rect.height, rect.width, rect.height);
-
     });
 }
 
 pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &Rect, border_type: BorderType, line_style: BorderLineStyle, color: &str, auto_align: Option<bool>) {
     if border_type == Outside || border_type == All {
         let border_line = BorderLine {
-            left: Some((line_style, color.to_string())),
-            top: Some((line_style, color.to_string())),
-            right: Some((line_style, color.to_string())),
-            bottom: Some((line_style, color.to_string())),
+            left: Some((line_style.clone(), color.to_string())),
+            top: Some((line_style.clone(), color.to_string())),
+            right: Some((line_style.clone(), color.to_string())),
+            bottom: Some((line_style.clone(), color.to_string())),
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     } else if border_type == Left {
         let border_line = BorderLine {
-            left: Some((line_style, color.to_string())),
+            left: Some((line_style.clone(), color.to_string())),
             top: None,
             right: None,
             bottom: None,
@@ -51,7 +50,7 @@ pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &
     } else if border_type == Top {
         let border_line = BorderLine {
             left: None,
-            top: Some((line_style, color.to_string())),
+            top: Some((line_style.clone(), color.to_string())),
             right: None,
             bottom: None,
         };
@@ -60,7 +59,7 @@ pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &
         let border_line = BorderLine {
             left: None,
             top: None,
-            right: Some((line_style, color.to_string())),
+            right: Some((line_style.clone(), color.to_string())),
             bottom: None,
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
@@ -69,7 +68,7 @@ pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &
             left: None,
             top: None,
             right: None,
-            bottom: Some((line_style, color.to_string())),
+            bottom: Some((line_style.clone(), color.to_string())),
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     }
@@ -106,7 +105,7 @@ pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &
                             left: None,
                             top: None,
                             right: None,
-                            bottom: Some((line_style, color.to_string())),
+                            bottom: Some((line_style.clone(), color.to_string())),
                         }, auto_align)
                     }
                 }

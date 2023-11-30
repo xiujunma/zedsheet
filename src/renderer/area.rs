@@ -1,40 +1,39 @@
 #![allow(dead_code)]
 
-use std::rc::Rc;
 use crate::renderer::table_renderer::{AreaCell, Rect};
 use crate::renderer::viewport::{GetColWidth, GetRowHeight};
 use super::range::Range;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Area {
     pub range: Range,
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    pub row_height: GetRowHeight,
-    pub col_width: GetColWidth,
+    pub row_height: Box<GetRowHeight>,
+    pub col_width: Box<GetColWidth>,
 }
 
 impl Area {
-    pub fn new(range: Range, x: f64, y: f64, width: f64, height: f64, row_height: GetRowHeight, col_width: GetColWidth) -> Self {
-        return Area {
+    pub fn new(range: Range, x: f64, y: f64, width: f64, height: f64, row_height: &GetRowHeight, col_width: &GetColWidth) -> Box<Area> {
+        Box::new(Area {
             range,
             x,
             y,
             width,
             height,
-            row_height,
-            col_width,
-        }
+            row_height: Box::new(row_height),
+            col_width: Box::new(col_width),
+        })
     }
 
     pub fn get_row_height(&self, index: usize) -> f64 {
-        return self.get_row_height(index)
+        return self.row_height(index)
     }
 
     pub fn get_col_width(&self, index: usize) -> f64 {
-        return self.get_col_width(index)
+        return self.col_width(index)
     }
 
     pub fn contains_x(&self, x: f64) -> bool {

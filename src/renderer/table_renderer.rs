@@ -17,25 +17,27 @@ pub type CellRenderer = fn(Canvas, Rect, Cell, String) -> bool;
 
 pub type Formatter = fn(Cell, String) -> String;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Align {
     Left,
     Right,
     Center,
 }
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum VerticalAlign {
     Top,
     Middle,
     Bottom,
 }
 
+#[derive(PartialEq, Debug, Clone)]
 pub enum GridlineStyle {
     Solid,
     Dashed,
     Dotted,
 }
 
+#[derive(PartialEq, Debug, Clone)]
 pub struct Gridline {
     pub width: f64,
     pub color: String,
@@ -48,7 +50,7 @@ pub enum TextLineType {
     StrikeThrough,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum BorderType {
     All,
     Inside,
@@ -61,7 +63,7 @@ pub enum BorderType {
     Bottom,
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum BorderLineStyle {
     Thin,
     Medium,
@@ -70,6 +72,7 @@ pub enum BorderLineStyle {
     Dotted,
 }
 
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Placement {
     All,
     RowHeader,
@@ -84,6 +87,7 @@ pub struct BorderLine {
     pub(crate) bottom: Option<(BorderLineStyle, String)>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Border {
     reference: String,
     border_type: BorderType,
@@ -184,9 +188,9 @@ pub struct TableRenderer {
     pub start_col: usize,
     pub scroll_rows: f64,
     pub scroll_cols: f64,
-    pub row: RowGetter,
-    pub col: ColGetter,
-    pub cell: CellGetter,
+    pub get_row: RowGetter,
+    pub get_col: ColGetter,
+    pub get_cell: CellGetter,
     pub cell_renderer: CellRenderer,
     pub formatter: Formatter,
     pub merges: Vec<String>,
@@ -281,17 +285,17 @@ impl TableRenderer {
     }
 
     fn row(&mut self, row: RowGetter) -> &Self {
-        self.row = row;
+        self.get_row = row;
         return self;
     }
 
     fn col(&mut self, col: ColGetter) -> &Self {
-        self.col = col;
+        self.get_col = col;
         return self;
     }
 
     fn cell(&mut self, cell: CellGetter) -> &Self {
-        self.cell = cell;
+        self.get_cell = cell;
         return self;
     }
 
@@ -362,7 +366,7 @@ impl TableRenderer {
     }
 
     pub fn row_height_at(&self, index: usize) -> f64 {
-        let r = self.row.get_row(index);
+        let r = self.get_row(index);
         return match r {
             Some(row) => {
                 if row.hide {
@@ -376,7 +380,7 @@ impl TableRenderer {
     }
 
     pub fn col_width_at(&self, index: usize) -> f64 {
-        let c = self.col.get_col(index);
+        let c = self.get_col(index);
         return match c {
             Some(col) => {
                 if col.hide {
