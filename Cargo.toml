@@ -10,26 +10,29 @@ crate-type = ["cdylib"]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 regex = "1.10.2"
+gloo = "0.11.0"
 
 [dependencies.web-sys]
 version = "0.3"
 features = [
-  'CanvasRenderingContext2d',
-  'TextMetrics',
-  'ImageData',
-  'ImageBitmap',
-  'CanvasPattern',
-  'CanvasGradient',
-  'DomMatrix',
-  'CanvasWindingRule',
-  'Document',
-  'Element',
-  'HtmlCanvasElement',
-  'Window',
-  'console',
-  'Event',
-  'DomRect',
-  'NodeList',
-  'DomTokenList',
-  'CssStyleDeclaration'
+  "CanvasRenderingContext2d",
+  "TextMetrics",
+  "ImageData",
+  "ImageBitmap",
+  "CanvasPattern",
+  "CanvasGradient",
+  "DomMatrix",
+  "CanvasWindingRule",
+  "Document",
+  "Element",
+  "HtmlCanvasElement",
+  "Window",
+  "console",
+  "Event",
+  "DomRect",
+  "NodeList",
+  "DomTokenList",
+  "CssStyleDeclaration",
+  "DomStringMap",
+  "HtmlInputElement"
 ]

@@ -114,8 +114,9 @@ impl Canvas {
         return self
     }
 
-    pub fn prop(key: String, value: String) {
+    pub fn prop(&self, key: &str, value: &str) -> &Self {
         // TODO
+        self
     }
 
     pub fn measure_text_width(&self, text: &str) -> f64 {
