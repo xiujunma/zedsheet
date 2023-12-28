@@ -3,7 +3,7 @@ use web_sys::EventTarget;
 
 /// Wrapper for `web_sys::Element` to simplify calling different interfaces
 pub struct Element {
-    el: Option<web_sys::Element>,
+    pub el: Option<web_sys::Element>,
 }
 
 impl From<web_sys::Element> for Element {
