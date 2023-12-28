@@ -6,6 +6,7 @@ mod renderer;
 mod component;
 mod zedsheet;
 mod config;
+mod core;
 
 #[wasm_bindgen(start)]
 pub fn start() {
