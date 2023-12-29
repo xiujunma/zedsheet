@@ -1,3 +1,3 @@
 
 
-pub const css_prefix: &'static str = "zedsheet";
+pub const CSS_PREFIX: &'static str = "zedsheet";

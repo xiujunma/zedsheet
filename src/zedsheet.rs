@@ -4,7 +4,7 @@ use crate::component::sheet::Sheet;
 use gloo::utils::document;
 use web_sys::Event;
 
-use crate::config::css_prefix;
+use crate::config::CSS_PREFIX;
 use crate::component::element::h;
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ impl ZedSheet {
             None
         };
         
-        let mut root_el = h("div", Some(css_prefix));
+        let mut root_el = h("div", Some(CSS_PREFIX));
 
         root_el.add_event_listener("contextmenu", |event: Event| event.prevent_default());
 

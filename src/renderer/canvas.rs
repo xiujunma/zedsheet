@@ -88,7 +88,7 @@ pub struct Canvas {
 
 impl Canvas {
     pub fn new(target: HtmlCanvasElement, scale: f64) -> Self {
-        let ctx = target
+        let ctx: CanvasRenderingContext2d = target
             .get_context("2d")
             .unwrap()
             .unwrap()
@@ -112,11 +112,6 @@ impl Canvas {
         self.ctx.scale(dpr * self.scale, dpr * self.scale).unwrap();
         
         return self
-    }
-
-    pub fn prop(&self, key: &str, value: &str) -> &Self {
-        // TODO
-        self
     }
 
     pub fn measure_text_width(&self, text: &str) -> f64 {
