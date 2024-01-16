@@ -1,207 +1,207 @@
-// #![allow(dead_code)]
+#![allow(dead_code)]
 
-// use std::f64::consts::PI;
-// use regex::Regex;
-// use crate::renderer::canvas::Canvas;
-// use crate::renderer::table_renderer::{Align, BorderLine, Cell, Rect, Style, TextLineType, VerticalAlign};
+use std::f64::consts::PI;
+use regex::Regex;
+use crate::renderer::canvas::Canvas;
+use crate::renderer::table_renderer::{Align, BorderLine, Cell, Rect, Style, TextLineType, VerticalAlign};
 
-// #[derive(Debug, Clone)]
-// pub struct TextLine {
-//     pub width: f64,
-//     pub length: usize,
-//     pub start: usize
-// }
+#[derive(Debug, Clone)]
+pub struct TextLine {
+    pub width: f64,
+    pub length: usize,
+    pub start: usize
+}
 
-// pub fn text_x(align: &Align, width: f64, padding: f64) -> f64 {
-//     return match align {
-//         Align::Left => {
-//             padding
-//         },
-//         Align::Center => {
-//             width / 2_f64
-//         },
-//         Align::Right => {
-//             width - padding
-//         }
-//     }
-// }
+pub fn text_x(align: &Align, width: f64, padding: f64) -> f64 {
+    return match align {
+        Align::Left => {
+            padding
+        },
+        Align::Center => {
+            width / 2_f64
+        },
+        Align::Right => {
+            width - padding
+        }
+    }
+}
 
-// pub fn text_y(align: VerticalAlign, height: f64, text_height: f64, font_height: f64, padding: f64) -> f64 {
-//     return match align {
-//         VerticalAlign::Top => {
-//             padding
-//         },
-//         VerticalAlign::Middle => {
-//             let y = height / 2_f64 - font_height / 2_f64;
-//             let min_height = font_height / 2_f64 + padding;
-//             if y < min_height {
-//                 min_height
-//             } else {
-//                 y
-//             }
-//         },
-//         VerticalAlign::Bottom => {
-//             height - padding - text_height
-//         }
-//     }
-// }
+pub fn text_y(align: VerticalAlign, height: f64, text_height: f64, font_height: f64, padding: f64) -> f64 {
+    return match align {
+        VerticalAlign::Top => {
+            padding
+        },
+        VerticalAlign::Middle => {
+            let y = height / 2_f64 - font_height / 2_f64;
+            let min_height = font_height / 2_f64 + padding;
+            if y < min_height {
+                min_height
+            } else {
+                y
+            }
+        },
+        VerticalAlign::Bottom => {
+            height - padding - text_height
+        }
+    }
+}
 
-// pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: VerticalAlign, x: f64, y: f64, w: f64, h: f64) -> (f64, f64, f64, f64) {
-//     let mut ty = 0f64;
-//     if text_line_type == TextLineType::Underline {
-//         if vertical_align == VerticalAlign::Top {
-//             ty = -h
-//         } else if vertical_align == VerticalAlign::Middle {
-//             ty = -h / 2f64
-//         }
-//     } else if text_line_type == TextLineType::StrikeThrough {
-//         if vertical_align == VerticalAlign::Top {
-//             ty = -h / 2f64
-//         } else if vertical_align == VerticalAlign::Middle {
-//             ty = h / 2f64
-//         }
-//     }
+pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: VerticalAlign, x: f64, y: f64, w: f64, h: f64) -> (f64, f64, f64, f64) {
+    let mut ty = 0f64;
+    if text_line_type == TextLineType::Underline {
+        if vertical_align == VerticalAlign::Top {
+            ty = -h
+        } else if vertical_align == VerticalAlign::Middle {
+            ty = -h / 2f64
+        }
+    } else if text_line_type == TextLineType::StrikeThrough {
+        if vertical_align == VerticalAlign::Top {
+            ty = -h / 2f64
+        } else if vertical_align == VerticalAlign::Middle {
+            ty = h / 2f64
+        }
+    }
 
-//     let mut tx = 0f64;
+    let mut tx = 0f64;
 
-//     if align == Align::Center {
-//         tx = w / 2_f64
-//     } else if align == Align::Right {
-//         tx = w
-//     }
+    if align == Align::Center {
+        tx = w / 2_f64
+    } else if align == Align::Right {
+        tx = w
+    }
 
-//     return (x - tx, y - ty, x - tx + w, y - ty)
-// }
+    return (x - tx, y - ty, x - tx + w, y - ty)
+}
 
-// pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String {
-//     let mut font = String::from("");
-//     if italic {
-//         font.push_str("italic ");
-//     }
+pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String {
+    let mut font = String::from("");
+    if italic {
+        font.push_str("italic ");
+    }
 
-//     if bold {
-//         font.push_str("bold ");
-//     }
+    if bold {
+        font.push_str("bold ");
+    }
 
-//     format!("{} {}px {}", font, size, family)
-// }
+    format!("{} {}px {}", font, size, family)
+}
 
-// pub fn cell_border_render(canvas: &Canvas, rect: &Rect, border_line: &BorderLine, auto_align: Option<bool>) {
+pub fn cell_border_render(canvas: &Canvas, rect: &Rect, border_line: &BorderLine, auto_align: Option<bool>) {
 
-// }
+}
 
-// pub fn cell_render<R, F>(canvas: Canvas, cell: Cell, rect: Rect, style: Style, cell_renderer: R, formatter: F)
-//     where R: Fn(Canvas, Rect, Cell, String) -> bool + 'static,
-//           F: Fn(Cell) -> String + 'static 
-//     {
-//     let text = formatter(cell.clone());
+pub fn cell_render<R, F>(canvas: &Canvas, cell: Cell, rect: Rect, style: Style, cell_renderer: R, formatter: F)
+    where R: Fn(Canvas, Rect, Cell, String) -> bool + 'static,
+          F: Fn(Cell) -> String + 'static 
+    {
+    let text = formatter(cell.clone());
 
-//     canvas.save().begin_path().translate(rect.x, rect.y);
+    canvas.save().begin_path().translate(rect.x, rect.y);
 
-//     canvas.rect(0f64, 0f64, rect.width, rect.height).clip(None);
+    canvas.rect(0f64, 0f64, rect.width, rect.height).clip(None);
 
-//     match style.bgcolor {
-//         Some(bgcolor) => {
-//             canvas.prop("fillStyle", bgcolor.as_str());
-//         },
-//         _ => {}
-//     }
+    match style.bgcolor {
+        Some(bgcolor) => {
+            // canvas.prop("fillStyle", bgcolor.as_str());
+        },
+        _ => {}
+    }
 
-//     match style.rotation {
-//         Some(rotation) => {
-//             canvas.rotate(rotation * ( PI / 180_f64));
+    match style.rotation {
+        Some(rotation) => {
+            canvas.rotate(rotation * ( PI / 180_f64));
 
-//         },
-//         _ => {}
-//     }
+        },
+        _ => {}
+    }
     
-//     canvas.save();
-//     if !cell_renderer(canvas, rect, cell, text.clone()) {
-//         canvas.restore();
-//         return;
-//     }
-//     canvas.restore();
+    canvas.save();
+    if !cell_renderer(canvas.clone(), rect, cell, text.clone()) {
+        canvas.restore();
+        return;
+    }
+    canvas.restore();
 
-//     //
-//     let re = Regex::new(r"^\s*$").unwrap();
-//     if re.is_match(text.as_str()) {
-//         canvas
-//             .save()
-//             .begin_path()
-//             .prop("textAlign", style.align.to_string().as_str())
-//             .prop("textBaseline", style.valign.to_string().as_str())
-//             .prop("font", font_string(&style.font_family, style.font_size as f64, style.italic, style.bold).as_str())
-//             .prop("fillStyle", style.color.as_str());
+    //
+    let re = Regex::new(r"^\s*$").unwrap();
+    if re.is_match(text.as_str()) {
+        canvas
+            .save()
+            .begin_path();
+            // .prop("textAlign", style.align.to_string().as_str())
+            // .prop("textBaseline", style.valign.to_string().as_str())
+            // .prop("font", font_string(&style.font_family, style.font_size as f64, style.italic, style.bold).as_str())
+            // .prop("fillStyle", style.color.as_str());
 
-//         let (xp, yp) = match style.padding {
-//             Some(padding) => {
-//                 padding
-//             },
-//             _ => {
-//                 (5f64, 5f64)
-//             }
-//         };
+        let (xp, yp) = match style.padding {
+            Some(padding) => {
+                padding
+            },
+            _ => {
+                (5f64, 5f64)
+            }
+        };
 
-//         let tx = text_x(&style.align, rect.width.clone(), xp);
-//         let txts = text.split("\n");
-//         let inner_width = &rect.width - xp * 2_f64;
-//         let mut ntxts = vec![];
+        let tx = text_x(&style.align, rect.width.clone(), xp);
+        let txts = text.split("\n");
+        let inner_width = &rect.width - xp * 2_f64;
+        let mut ntxts = vec![];
 
-//         for it in txts {
-//             let txt_width = canvas.measure_text_width(it);
+        for it in txts {
+            let txt_width = canvas.measure_text_width(it);
 
-//             if style.text_wrap && txt_width > inner_width {
-//                 let mut text_line = TextLine {
-//                     width: 0f64,
-//                     length: 0,
-//                     start: 0
-//                 };
+            if style.text_wrap && txt_width > inner_width {
+                let mut text_line = TextLine {
+                    width: 0f64,
+                    length: 0,
+                    start: 0
+                };
 
-//                 for i in 0..it.len() {
-//                     if text_line.width > inner_width {
-//                         ntxts.push(&it[text_line.start..text_line.length]);
-//                         text_line = TextLine {
-//                             width: 0f64,
-//                             length: 0,
-//                             start: i
-//                         }
-//                     }
-//                     text_line.length += 1;
-//                     text_line.width += canvas.measure_text_width(&it[i..i + 1]) + 1f64;
-//                 }
+                for i in 0..it.len() {
+                    if text_line.width > inner_width {
+                        ntxts.push(&it[text_line.start..text_line.length]);
+                        text_line = TextLine {
+                            width: 0f64,
+                            length: 0,
+                            start: i
+                        }
+                    }
+                    text_line.length += 1;
+                    text_line.width += canvas.measure_text_width(&it[i..i + 1]) + 1f64;
+                }
 
-//                 if text_line.length > 0 {
-//                     ntxts.push(&it[text_line.start..text_line.length]);
-//                 }
-//             } else {
-//                 ntxts.push(it);
-//             }
-//         }
+                if text_line.length > 0 {
+                    ntxts.push(&it[text_line.start..text_line.length]);
+                }
+            } else {
+                ntxts.push(it);
+            }
+        }
 
-//         let font_height = style.font_size as f64 / 0.75;
-//         let text_height = font_height * (ntxts.len() - 1) as f64;
-//         let mut line_types = vec![];
+        let font_height = style.font_size as f64 / 0.75;
+        let text_height = font_height * (ntxts.len() - 1) as f64;
+        let mut line_types = vec![];
 
-//         if style.underline {
-//             line_types.push(TextLineType::Underline);
-//         }
+        if style.underline {
+            line_types.push(TextLineType::Underline);
+        }
 
-//         if style.strike_through {
-//             line_types.push(TextLineType::StrikeThrough);
-//         }
+        if style.strike_through {
+            line_types.push(TextLineType::StrikeThrough);
+        }
 
-//         let ty = text_y(style.valign.clone(), rect.height.clone(), text_height, font_height, yp);
+        let ty = text_y(style.valign.clone(), rect.height.clone(), text_height, font_height, yp);
 
-//         for it in ntxts {
-//             let text_width = canvas.measure_text_width(it);
-//             canvas.fill_text(it, tx, ty, None);
-//             for line_type in line_types.clone() {
-//                 let (x1, y1, x2, y2) = text_line(line_type, style.align.clone(), style.valign.clone(), tx, ty, text_width, font_height);
-//                 canvas.line(x1, y1, x2, y2);
-//             }
-//         }
-//         canvas.restore();
-//     }
+        for it in ntxts {
+            let text_width = canvas.measure_text_width(it);
+            canvas.fill_text(it, tx, ty, None);
+            for line_type in line_types.clone() {
+                let (x1, y1, x2, y2) = text_line(line_type, style.align.clone(), style.valign.clone(), tx, ty, text_width, font_height);
+                canvas.line(x1, y1, x2, y2);
+            }
+        }
+        canvas.restore();
+    }
 
-//     canvas.restore();
-// }
+    canvas.restore();
+}
