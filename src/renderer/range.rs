@@ -2,7 +2,7 @@
 
 use super::alphabets::xy2expr;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Copy)]
 pub struct Range {
     pub start_row: usize,
     pub start_col: usize,

@@ -1,53 +1,60 @@
 #![allow(dead_code)]
 
+use web_sys::Window;
+
+use crate::TABLE_DATA;
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
-use crate::renderer::table_renderer::{TableRenderer, ViewportCell};
-use crate::renderer::table_renderer::Placement::{All, Body, ColHeader, RowHeader};
+use crate::renderer::table_renderer::ViewportCell;
+use crate::renderer::table_renderer::Placement;
 
-pub type GetRowHeight = fn(usize) -> f64;
-pub type GetColWidth = fn(usize) -> f64;
+use super::table_renderer::{ RowHeader, ColHeader};
 
 
 pub struct Viewport {
     pub areas: Vec<Area>,
     pub header_areas: Vec<Area>,
-    // pub render: &'static mut TableRenderer,
 }
 
 impl Viewport {
-    pub fn new(render: &'static mut TableRenderer) -> Viewport {
-        let (tx, ty) = (render.row_header.width, render.col_header.height);
-        let (frow, fcol) = render.freeze;
-        let start_row = render.start_row;
-        let start_col = render.start_col;
-        let rows = render.rows;
-        let cols = render.cols;
-        let width = render.width;
-        let height = render.height;
+    pub fn new(
+        freeze: (usize, usize),
+        start_row: usize,
+        start_col: usize,
+        rows: usize,
+        cols: usize,
+        width: f64,
+        height: f64,
+        scroll_rows: usize,
+        scroll_cols: usize,
+        row_header: RowHeader,
+        col_header: ColHeader,
+    ) -> Viewport {
+        let (tx, ty) = (row_header.width, col_header.height);
+        let (frow, fcol) = freeze;
 
-        let get_row_height = |row: usize| -> f64 {
-            render.row_height_at(row)
-        };
+        // let get_row_height = |row: usize| -> f64 {
+        //     TABLE_DATA.get_row(row).unwrap().height
+        // };
 
-        let get_col_width = |col: usize| -> f64 {
-            render.col_width_at(col)
-        };
+        // let get_col_width = |col: usize| -> f64 {
+        //     TABLE_DATA.get_col(col).unwrap().width
+        // };
 
         let area2 = Area::new(Range {
             start_row,
             start_col,
             end_row: frow - 1,
             end_col: fcol - 1,
-        }, tx, ty, 0f64, 0f64, get_row_height, get_col_width);
+        }, tx, ty, 0f64, 0f64);
 
-        let (start_row_4, start_col_4) = (frow + render.scroll_rows, fcol + render.scroll_cols);
+        let (start_row_4, start_col_4) = (frow + scroll_rows, fcol + scroll_cols);
 
         // end row
         let mut y = area2.height + ty;
         let mut end_row = start_row_4;
         while y < height && end_row < rows {
-            y += get_row_height(end_row);
+            y += TABLE_DATA.get_row(end_row).unwrap().height;
             end_row += 1;
         }
 
@@ -55,7 +62,7 @@ impl Viewport {
         let mut x = area2.width + tx;
         let mut end_col = start_col_4;
         while x < width && end_col < cols {
-            x += get_col_width(end_col);
+            x += TABLE_DATA.get_col(end_col).unwrap().width;
             end_col += 1;
         }
 
@@ -80,14 +87,14 @@ impl Viewport {
             start_col: start_col_4,
             end_row,
             end_col,
-        }, x4, y4, w4, h4, get_row_height, get_col_width);
+        }, x4, y4, w4, h4);
 
         let area1 = Area::new(Range {
             start_row,
             start_col: start_col_4,
             end_row: frow - 1,
             end_col,
-        }, x4, ty, w4, 0f64, get_row_height, get_col_width);
+        }, x4, ty, w4, 0f64);
 
 
         let area3 = Area::new(Range {
@@ -95,20 +102,10 @@ impl Viewport {
             start_col,
             end_row,
             end_col: fcol - 1,
-        }, tx, y4, 0f64, h4, get_row_height, get_col_width);
+        }, tx, y4, 0f64, h4);
 
 
         // header areas
-        let row_header = &render.row_header;
-        let col_header = &render.col_header;
-
-        let get_col_header_row = |row: usize| -> f64 {
-            col_header.height / col_header.rows as f64
-        };
-
-        let get_row_header_col = |col: usize| -> f64 {
-            row_header.width / row_header.cols as f64
-        };
 
         // 1, 2-1, 2-3, 3
         let header_area1 = Area::new(Range {
@@ -116,28 +113,28 @@ impl Viewport {
             start_col: area1.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area1.range.end_col,
-        }, area4.x, 0f64, area4.width, 0f64, get_col_header_row, get_col_width);
+        }, area4.x, 0f64, area4.width, 0f64);
 
         let header_area2 = Area::new(Range {
             start_row: 0,
             start_col: area2.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area2.range.end_col,
-        }, area2.x, 0f64, area2.width, 0f64, get_col_header_row, get_col_width);
+        }, area2.x, 0f64, area2.width, 0f64);
 
         let header_area3 = Area::new(Range {
             start_row: 0,
             start_col: area3.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area3.range.end_col,
-        }, area3.x, 0f64, area3.width, 0f64, get_col_header_row, get_col_width);
+        }, area3.x, 0f64, area3.width, 0f64);
 
         let header_area4 = Area::new(Range {
             start_row: 0,
             start_col: area4.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area4.range.end_col,
-        }, area4.x, 0f64, area4.width, 0f64, get_col_header_row, get_col_width);
+        }, area4.x, 0f64, area4.width, 0f64);
 
 
         Viewport {
@@ -148,11 +145,11 @@ impl Viewport {
     }
 
     fn in_areas(&self, row: usize, col: usize) -> bool {
-        // for it in self.areas  {
-        //     if it.range.contains(row, col) {
-        //         return true;
-        //     }
-        // }
+        for it in &self.areas  {
+            if it.range.contains(row, col) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -167,7 +164,7 @@ impl Viewport {
 
         if x < a2.x && y < a2.y {
             return Option::from(ViewportCell {
-                placement: All,
+                placement: Placement::All,
                 row: 0,
                 col: 0,
                 x: 0f64,
@@ -187,7 +184,7 @@ impl Viewport {
             let area_cell = header_area.cell_at(x, y);
 
             return Some(ViewportCell {
-                placement: RowHeader,
+                placement: Placement::RowHeader,
                 row: area_cell.row,
                 col: area_cell.col,
                 x: area_cell.x,
@@ -207,7 +204,7 @@ impl Viewport {
             let area_cell = header_area.cell_at(x, y);
 
             return Some(ViewportCell {
-                placement: ColHeader,
+                placement: Placement:: ColHeader,
                 row: area_cell.row,
                 col: area_cell.col,
                 x: area_cell.x,
@@ -221,7 +218,7 @@ impl Viewport {
             if area.contains(x, y) {
                 let area_cell = area.cell_at(x, y);
                 return Some(ViewportCell {
-                    placement: Body,
+                    placement: Placement::Body,
                     row: area_cell.row,
                     col: area_cell.col,
                     x: area_cell.x,

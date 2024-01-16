@@ -12,7 +12,7 @@ mod data;
 use data::table_data::{ TableData, Table };
 
 
-const TABLE_DATA: &TableData = &TableData {
+const TABLE_DATA: &dyn Table = &TableData {
     cols: vec![],
     rows: vec![],
     cells: vec![]

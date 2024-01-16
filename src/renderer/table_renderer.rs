@@ -156,32 +156,30 @@ pub struct Cell {
 }
 #[derive(Debug, Clone)]
 pub struct Row {
-    height: f64,
-    hide: bool,
-    auto_fit: bool,
-    style: usize,
+    pub height: f64,
+    pub hide: bool,
+    pub auto_fit: bool,
+    pub style: usize,
 }
 #[derive(Debug, Clone)]
 pub struct Col {
-    width: f64,
-    hide: bool,
-    auto_fit: bool,
-    style: usize,
+    pub width: f64,
+    pub hide: bool,
+    pub auto_fit: bool,
+    pub style: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct RowHeader {
     pub width: f64,
     pub cols: usize,
-    pub cell_getter: Box<dyn Fn(usize, usize) -> Option<Cell> + 'static>,
-    pub cell_renderer: Box<dyn Fn(Canvas, Rect, Cell, String) -> bool + 'static>,
     pub merges: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct ColHeader {
     pub height: f64,
     pub rows: usize,
-    pub cell_getter: Box<dyn Fn(usize, usize) -> Option<Cell> + 'static>,
-    pub cell_renderer: Box<dyn Fn(Canvas, Rect, Cell, String) -> bool + 'static>,
     pub merges: Vec<String>,
 }
 #[derive(Debug, Clone, Copy)]
@@ -225,9 +223,6 @@ pub struct TableRenderer {
     pub start_col: usize,
     pub scroll_rows: usize,
     pub scroll_cols: usize,
-    // pub row_getter: Box<dyn Fn(usize) -> Option<Row> + 'static>,
-    // pub col_getter: Box<dyn Fn(usize) -> Option<Col> + 'static>,
-    // pub cell_getter: Box<dyn Fn(usize, usize) -> Option<Cell> + 'static>,
     pub cell_renderer: Box<dyn Fn(Canvas, Rect, Cell, String) -> bool + 'static>,
     pub formatter: Box<dyn Fn(Cell, String) + 'static>,
     pub merges: Vec<String>,
@@ -241,8 +236,7 @@ pub struct TableRenderer {
     pub header_style: Style,
     pub freeze: (usize, usize),
     pub freeze_gridline: Gridline,
-    pub viewport: Option<&'static Viewport>,
-    pub table: &'static TableData,
+    pub viewport: Option<Viewport>,
 }
 
 impl TableRenderer {
@@ -275,15 +269,11 @@ impl TableRenderer {
             col_header: ColHeader {
                 height: 20f64,
                 rows: 1usize,
-                cell_getter: Box::new(|_, _| None),
-                cell_renderer: Box::new(|_, _, _, _| true),
                 merges: vec![],
             },
             row_header: RowHeader {
                 width: 50f64,
                 cols: 1usize,
-                cell_getter: Box::new(|_, _| None),
-                cell_renderer: Box::new(|_, _, _, _| true),
                 merges: vec![],
             },
             header_gridline: Gridline {
@@ -313,13 +303,23 @@ impl TableRenderer {
                 style: None,
             },
             viewport: None,
-            table: TABLE_DATA
         }
     }
 
     fn render(&mut self) {
-        // let viewport:&'static Viewport = &Viewport::new(self);
-        // self.viewport = Some(viewport);
+        // self.viewport = Viewport::new(self);
+
+        Viewport::new(
+            self.freeze, 
+            self.start_row, 
+            self.start_col, 
+            self.rows, 
+            self.cols, 
+            self.width, self.height, 
+            self.scroll_rows, self.scroll_cols, 
+            self.row_header.clone(), 
+            self.col_header.clone());
+
         render(self);
     }
 
@@ -454,7 +454,7 @@ impl TableRenderer {
     }
 
     pub fn row_height_at(&self, index: usize) -> f64 {
-        let r = self.table.get_row(index);
+        let r = TABLE_DATA.get_row(index);
         return match r {
             Some(row) => {
                 if row.hide {
@@ -468,7 +468,7 @@ impl TableRenderer {
     }
 
     pub fn col_width_at(&self, index: usize) -> f64 {
-        let c = self.table.get_col(index);
+        let c = TABLE_DATA.get_col(index);
         return match c {
             Some(col) => {
                 if col.hide {
@@ -479,9 +479,5 @@ impl TableRenderer {
             }
             None => self.col_width,
         };
-    }
-
-    fn get_viewport(&self) -> &Viewport {
-        &self.viewport.as_ref().unwrap()
     }
 }

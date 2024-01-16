@@ -1,42 +1,37 @@
 #![allow(dead_code)]
 
-use crate::renderer::table_renderer::{AreaCell, Rect};
+use crate::{renderer::table_renderer::{AreaCell, Rect}, TABLE_DATA};
 use super::range::Range;
 
-#[derive()]
+#[derive(Copy, Clone, Debug)]
 pub struct Area {
     pub range: Range,
     pub x: f64,
     pub y: f64,
     pub width: f64,
-    pub height: f64,
-    pub row_height: Box<dyn Fn(usize) -> f64 + 'static>,
-    pub col_width: Box<dyn Fn(usize) -> f64 + 'static>,
+    pub height: f64
 }
 
 impl Area {
-    pub fn new<F, G>(range: Range, x: f64, y: f64, width: f64, height: f64, row_height: F, col_width: G) -> Area 
-    where 
-        F: Fn(usize) -> f64 + 'static,
-        G: Fn(usize) -> f64 + 'static,
+    pub fn new(range: Range, x: f64, y: f64, width: f64, height: f64) -> Area 
     {
         Area {
             range,
             x,
             y,
             width,
-            height,
-            row_height: Box::new(row_height),
-            col_width: Box::new(col_width),
+            height
         }
     }
 
     pub fn get_row_height(&self, index: usize) -> f64 {
-        return (self.row_height)(index)
+        let row = &TABLE_DATA.get_row(index).unwrap();
+        return row.height;
     }
 
     pub fn get_col_width(&self, index: usize) -> f64 {
-        return (self.col_width)(index)
+        let col = &TABLE_DATA.get_col(index).unwrap();
+        return col.width;
     }
 
     pub fn contains_x(&self, x: f64) -> bool {
