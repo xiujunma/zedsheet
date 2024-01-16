@@ -306,7 +306,7 @@ impl TableRenderer {
         }
     }
 
-    fn render(&mut self) {
+    pub fn render(&mut self) {
         // self.viewport = Viewport::new(self);
 
         Viewport::new(
