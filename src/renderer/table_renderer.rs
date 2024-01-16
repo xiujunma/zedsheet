@@ -66,7 +66,7 @@ pub enum TextLineType {
     StrikeThrough,
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum BorderType {
     All,
     Inside,
@@ -105,10 +105,10 @@ pub struct BorderLine {
 
 #[derive(Debug, Clone)]
 pub struct Border {
-    reference: String,
-    border_type: BorderType,
-    border_line: BorderLineStyle,
-    color: String,
+    pub reference: String,
+    pub border_type: BorderType,
+    pub border_line: BorderLineStyle,
+    pub color: String,
 }
 #[derive(Debug, Clone)]
 pub struct Style {
@@ -307,9 +307,7 @@ impl TableRenderer {
     }
 
     pub fn render(&mut self) {
-        // self.viewport = Viewport::new(self);
-
-        Viewport::new(
+        self.viewport = Some(Viewport::new(
             self.freeze, 
             self.start_row, 
             self.start_col, 
@@ -318,7 +316,7 @@ impl TableRenderer {
             self.width, self.height, 
             self.scroll_rows, self.scroll_cols, 
             self.row_header.clone(), 
-            self.col_header.clone());
+            self.col_header.clone()));
 
         render(self);
     }

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use wasm_bindgen::JsValue;
 use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
 use wasm_bindgen::JsCast;
@@ -101,7 +102,7 @@ impl Canvas {
         }
     }
 
-    pub fn set_size(&self, width: u32, height: u32) -> &Self {
+    pub fn set_size(&self, width: f64, height: f64) -> &Self {
         let style = self.target.style();
         style.set_property("width", &format!("{}px", width)).unwrap();
         style.set_property("height", &format!("{}px", height)).unwrap();
@@ -348,6 +349,12 @@ impl Canvas {
 
     pub fn restore(&self) -> &Self {
         self.ctx.restore();
+        return self
+    }
+
+    // properties
+    pub fn set_fill_style(&self, style: &str) -> &Self {
+        self.ctx.set_fill_style(&JsValue::from_str(style));
         return self
     }
 }

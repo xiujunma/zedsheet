@@ -7,6 +7,10 @@ use crate::renderer::range::Range;
 use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Gridline, Rect, TableRenderer};
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
+use super::border::border_ranges;
+use super::table_renderer::Placement;
+use super::viewport;
+
 pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
     if gridline.width > 0f64 {
         canvas
@@ -115,11 +119,89 @@ pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &
 }
 
 pub fn render_borders(canvas: &Canvas, area: &Area, borders: Option<Vec<Border>>, area_merges: Vec<Range>) {
-    if borders.is_some() && borders.unwrap().len() > 0 {
-
+    if let Some(borders) = borders {
+        borders.into_iter().for_each(|border| {
+            let border_style = border.border_line;
+            let border_color = border.color;
+            border_ranges(area, &border, area_merges.clone()).into_iter().for_each(|(range, rect, border_type)| {
+                render_border(canvas, area, &range, &rect, border_type, border_style.clone(), &border_color, None);
+            });
+        });
     }
 }
 
-pub fn render(renderer: &TableRenderer) {
+pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
 
+}
+
+pub fn render(renderer: &TableRenderer) {
+    let width = renderer.width;
+    let height = renderer.height;
+    let target = renderer.target.clone();
+    let scale = renderer.scale;
+    if let Some(viewport) = &renderer.viewport {
+        let canvas = Canvas::new(target, scale);
+        canvas.set_size(width, height);
+
+        let area1 = viewport.areas.get(0).unwrap();
+        let area2 = viewport.areas.get(1).unwrap();
+        let area3 = viewport.areas.get(2).unwrap();
+        let area4 = viewport.areas.get(3).unwrap();
+
+        let header_area1 = viewport.header_areas.get(0).unwrap();
+        let header_area21 = viewport.header_areas.get(1).unwrap();
+        let header_area23 = viewport.header_areas.get(2).unwrap();
+        let header_area3 = viewport.header_areas.get(3).unwrap();
+
+        // render-4
+        render_area(Placement::Body, &canvas, &area4, renderer);
+
+        // render-1
+        render_area(Placement::Body, &canvas, &area1, renderer);
+        render_area(Placement::ColHeader, &canvas, &header_area1, renderer);
+
+        // render-3
+        render_area(Placement::Body, &canvas, &area3, renderer);
+        render_area(Placement::RowHeader, &canvas, &header_area3, renderer);
+
+        // render 2
+        render_area(Placement::Body, &canvas, &area2, renderer);
+        render_area(Placement::ColHeader, &canvas, &header_area21, renderer);
+        render_area(Placement::RowHeader, &canvas, &header_area23, renderer);
+
+        // render freeze
+        let (row, col) = renderer.freeze;
+        if row > 0 || col > 0 {
+            render_lines(&canvas, &renderer.freeze_gridline, || {
+                if col > 0 {
+                    canvas.line(0.0, area4.y, width, area4.y);
+                }
+
+                if row > 0 {
+                    canvas.line(area4.x, 0.0, area4.x, height);
+                }
+            });
+        }
+
+        let (x, y) = (area2.x, area1.y);
+        if x > 0.0 && y > 0.0 {
+            let height = renderer.col_header.height;
+            let width = renderer.row_header.width;
+
+            if let Some(bgcolor) = renderer.header_style.bgcolor.clone() {
+                canvas
+                    .save()
+                    .set_fill_style(bgcolor.as_str())
+                    .rect(0.0, 0.0, width, height)
+                    .fill(None)
+                    .restore();
+
+                render_lines(&canvas, &renderer.header_gridline, || {
+                    canvas
+                        .line(0.0, height, width, height)
+                        .line(width, 0.0, width, height);
+                });
+            }
+        }
+    }
 }
