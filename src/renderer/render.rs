@@ -1,14 +1,16 @@
+use std::default;
+
 use wasm_bindgen::JsValue;
 use BorderType::{Bottom, Horizontal, Left, Outside, Right, Top};
 use crate::renderer::area::Area;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::cell_render::cell_border_render;
 use crate::renderer::range::Range;
-use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Gridline, Rect, TableRenderer};
+use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Gridline, Rect, TableRenderer, Cell};
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
 use super::border::border_ranges;
-use super::table_renderer::Placement;
+use super::table_renderer::{Placement, ColHeader};
 use super::viewport;
 
 pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
@@ -131,7 +133,37 @@ pub fn render_borders(canvas: &Canvas, area: &Area, borders: Option<Vec<Border>>
 }
 
 pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
+    match placement {
+        Placement::RowHeader => {
+            if renderer.row_header.width <= 0f64 {
+                return;
+            }
+        }
 
+        Placement::ColHeader => {
+            if renderer.col_header.height <= 0f64 {
+                return;
+            }
+        }
+
+        _default => {
+        }
+    }
+
+    canvas.save()
+        .translate(area.x, area.y)
+        .set_fill_style(renderer.bgcolor.as_str())
+        .rect(0.0, 0.0, area.width, area.height)
+        .fill(None)
+        .clip(None);
+
+    fn merge_cell_style(r: f64, c: f64, cell: Cell) {
+
+    }
+
+    let mut area_merges: Vec<Range> = vec![];
+
+    // TODO
 }
 
 pub fn render(renderer: &TableRenderer) {
