@@ -121,8 +121,8 @@ pub fn render_border(canvas: &Canvas, area: &Area, range: &Range, border_rect: &
 pub fn render_borders(canvas: &Canvas, area: &Area, borders: Option<Vec<Border>>, area_merges: Vec<Range>) {
     if let Some(borders) = borders {
         borders.into_iter().for_each(|border| {
-            let border_style = border.border_line;
-            let border_color = border.color;
+            let border_style = border.clone().border_line;
+            let border_color = border.clone().color;
             border_ranges(area, &border, area_merges.clone()).into_iter().for_each(|(range, rect, border_type)| {
                 render_border(canvas, area, &range, &rect, border_type, border_style.clone(), &border_color, None);
             });
