@@ -5,7 +5,7 @@ use BorderType::{Bottom, Horizontal, Left, Outside, Right, Top};
 use crate::renderer::area::Area;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::cell_render::cell_border_render;
-use crate::renderer::range::Range;
+use crate::renderer::range::{each_range, Range};
 use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Gridline, Rect, TableRenderer, Cell};
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
@@ -162,8 +162,9 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
     }
 
     let mut area_merges: Vec<Range> = vec![];
-
-    // TODO
+    if renderer.merges.len() > 0 {
+        // each_range(renderer.merges, cb)
+    }
 }
 
 pub fn render(renderer: &TableRenderer) {

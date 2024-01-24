@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use super::alphabets::xy2expr;
+use super::alphabets::exp2xy;
 
 #[derive(Clone, PartialEq, Debug, Copy)]
 pub struct Range {
@@ -227,4 +228,34 @@ impl Range {
             end_col,
         }
     }
+
+    pub fn with(reference: &str) -> Self {
+        let refs = reference.split(":").collect::<Vec<&str>>();
+        let (col, row) = exp2xy(refs.first().unwrap());
+        if refs.len() == 1 {
+            return Range::new(row, col, row, col);
+        }
+        let (col1, row1) = exp2xy(refs.get(1).unwrap());
+        return Range::new(row, col, row1, col1);
+    }
+}
+
+pub fn each_range(refs: Vec<&str>, cb: impl Fn(Range)) {
+    if refs.len() > 0 {
+        for r in refs {
+            cb(Range::with(r));
+        }
+    }
+}
+
+pub fn find_ranges(refs: Vec<&str>, filter: impl Fn(Range) -> bool) -> Option<Range> {
+    if refs.len() > 0 {
+        for r in refs {
+            let range = Range::with(r);
+            if filter(range) {
+                return Some(range);
+            }
+        }
+    }
+    return None;
 }

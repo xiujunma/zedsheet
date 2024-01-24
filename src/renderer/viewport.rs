@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use web_sys::Window;
-
 use crate::TABLE_DATA;
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
