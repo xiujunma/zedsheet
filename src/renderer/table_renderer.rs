@@ -2,13 +2,13 @@
 
 use std::fmt::Display;
 
-use crate::{renderer::alphabets::exp2xy, TABLE_DATA};
+use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::render::render;
 use web_sys::HtmlCanvasElement;
 
 use super::viewport::Viewport;
-use crate::data::table_data::{Table, TableData};
+use crate::data::table_data::TableData;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Align {
@@ -211,6 +211,7 @@ pub struct ViewportCell {
 
 pub struct TableRenderer {
     pub target: HtmlCanvasElement,
+    pub data: &'static TableData,
     pub bgcolor: String,
     pub width: f64,
     pub height: f64,
@@ -240,9 +241,10 @@ pub struct TableRenderer {
 }
 
 impl TableRenderer {
-    pub fn new(container: HtmlCanvasElement, width: f64, height: f64) -> TableRenderer {
+    pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: &'static TableData) -> TableRenderer {
         TableRenderer {
             target: container,
+            data,
             bgcolor: String::from("#ffffff"),
             width,
             height,
@@ -308,6 +310,7 @@ impl TableRenderer {
 
     pub fn render(&mut self) {
         self.viewport = Some(Viewport::new(
+            self.data,
             self.freeze, 
             self.start_row, 
             self.start_col, 
@@ -452,7 +455,7 @@ impl TableRenderer {
     }
 
     pub fn row_height_at(&self, index: usize) -> f64 {
-        let r = TABLE_DATA.get_row(index);
+        let r = self.data.get_row(index);
         return match r {
             Some(row) => {
                 if row.hide {
@@ -466,7 +469,7 @@ impl TableRenderer {
     }
 
     pub fn col_width_at(&self, index: usize) -> f64 {
-        let c = TABLE_DATA.get_col(index);
+        let c: Option<Col> = self.data.get_col(index);
         return match c {
             Some(col) => {
                 if col.hide {

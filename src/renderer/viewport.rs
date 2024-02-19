@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::TABLE_DATA;
+use crate::data::table_data::TableData;
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
 use crate::renderer::table_renderer::ViewportCell;
@@ -10,12 +10,14 @@ use super::table_renderer::{ RowHeader, ColHeader};
 
 
 pub struct Viewport {
+    pub data: &'static TableData,
     pub areas: Vec<Area>,
     pub header_areas: Vec<Area>,
 }
 
 impl Viewport {
     pub fn new(
+        data: &'static TableData,
         freeze: (usize, usize),
         start_row: usize,
         start_col: usize,
@@ -39,7 +41,7 @@ impl Viewport {
         //     TABLE_DATA.get_col(col).unwrap().width
         // };
 
-        let area2 = Area::new(Range {
+        let area2 = Area::new(data, Range {
             start_row,
             start_col,
             end_row: frow - 1,
@@ -52,7 +54,7 @@ impl Viewport {
         let mut y = area2.height + ty;
         let mut end_row = start_row_4;
         while y < height && end_row < rows {
-            y += TABLE_DATA.get_row(end_row).unwrap().height;
+            y += data.get_row(end_row).unwrap().height;
             end_row += 1;
         }
 
@@ -60,7 +62,7 @@ impl Viewport {
         let mut x = area2.width + tx;
         let mut end_col = start_col_4;
         while x < width && end_col < cols {
-            x += TABLE_DATA.get_col(end_col).unwrap().width;
+            x += data.get_col(end_col).unwrap().width;
             end_col += 1;
         }
 
@@ -80,14 +82,16 @@ impl Viewport {
         end_col -= 1;
         end_row -= 1;
 
-        let area4 = Area::new(Range {
+        let area4 = Area::new(data, 
+            Range {
             start_row: start_row_4,
             start_col: start_col_4,
             end_row,
             end_col,
         }, x4, y4, w4, h4);
 
-        let area1 = Area::new(Range {
+        let area1 = Area::new(data, 
+            Range {
             start_row,
             start_col: start_col_4,
             end_row: frow - 1,
@@ -95,7 +99,8 @@ impl Viewport {
         }, x4, ty, w4, 0f64);
 
 
-        let area3 = Area::new(Range {
+        let area3 = Area::new(data, 
+            Range {
             start_row: start_row_4,
             start_col,
             end_row,
@@ -106,28 +111,29 @@ impl Viewport {
         // header areas
 
         // 1, 2-1, 2-3, 3
-        let header_area1 = Area::new(Range {
+        let header_area1 = Area::new(data, 
+            Range {
             start_row: 0,
             start_col: area1.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area1.range.end_col,
         }, area4.x, 0f64, area4.width, 0f64);
 
-        let header_area2 = Area::new(Range {
+        let header_area2 = Area::new(data, Range {
             start_row: 0,
             start_col: area2.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area2.range.end_col,
         }, area2.x, 0f64, area2.width, 0f64);
 
-        let header_area3 = Area::new(Range {
+        let header_area3 = Area::new(data, Range {
             start_row: 0,
             start_col: area3.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area3.range.end_col,
         }, area3.x, 0f64, area3.width, 0f64);
 
-        let header_area4 = Area::new(Range {
+        let header_area4 = Area::new(data, Range {
             start_row: 0,
             start_col: area4.range.start_col,
             end_row: col_header.rows - 1,
@@ -136,6 +142,7 @@ impl Viewport {
 
 
         Viewport {
+            data,
             areas: vec![area1, area2, area3, area4],
             header_areas: vec![header_area1, header_area2, header_area3, header_area4],
             // render

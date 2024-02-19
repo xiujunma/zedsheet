@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
-use crate::{renderer::table_renderer::{AreaCell, Rect}, TABLE_DATA};
+use crate::{data::table_data::TableData, renderer::table_renderer::{AreaCell, Rect}};
 use super::range::Range;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Area {
+    pub data: &'static TableData,
     pub range: Range,
     pub x: f64,
     pub y: f64,
@@ -13,9 +14,10 @@ pub struct Area {
 }
 
 impl Area {
-    pub fn new(range: Range, x: f64, y: f64, width: f64, height: f64) -> Area 
+    pub fn new(data: &'static TableData, range: Range, x: f64, y: f64, width: f64, height: f64) -> Area 
     {
         Area {
+            data,
             range,
             x,
             y,
@@ -25,12 +27,12 @@ impl Area {
     }
 
     pub fn get_row_height(&self, index: usize) -> f64 {
-        let row = &TABLE_DATA.get_row(index).unwrap();
+        let row = self.data.get_row(index).unwrap();
         return row.height;
     }
 
     pub fn get_col_width(&self, index: usize) -> f64 {
-        let col = &TABLE_DATA.get_col(index).unwrap();
+        let col = self.data.get_col(index).unwrap();
         return col.width;
     }
 

@@ -12,10 +12,10 @@ mod config;
 mod core;
 mod data;
 
-use data::table_data::{ TableData, Table };
+use data::table_data::TableData;
 
 
-const TABLE_DATA: &dyn Table = &TableData {
+const TABLE_DATA: &'static TableData = &TableData {
     cols: vec![],
     rows: vec![],
     cells: vec![]
@@ -25,6 +25,6 @@ const TABLE_DATA: &dyn Table = &TableData {
 pub fn start() {
     // ZedSheet::new("#zedsheet", Options::default());
     let container = document().query_selector("#zedsheet").unwrap().unwrap().dyn_into::<HtmlCanvasElement>().unwrap();
-    let mut table_renderer = TableRenderer::new(container, 500f64, 500f64);
+    let mut table_renderer = TableRenderer::new(container, 500f64, 500f64, TABLE_DATA);
     table_renderer.render();
 }
