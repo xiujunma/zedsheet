@@ -311,14 +311,14 @@ impl TableRenderer {
     pub fn render(&mut self) {
         self.viewport = Some(Viewport::new(
             self.data,
-            self.freeze, 
-            self.start_row, 
-            self.start_col, 
-            self.rows, 
-            self.cols, 
-            self.width, self.height, 
-            self.scroll_rows, self.scroll_cols, 
-            self.row_header.clone(), 
+            self.freeze,
+            self.start_row,
+            self.start_col,
+            self.rows,
+            self.cols,
+            self.width, self.height,
+            self.scroll_rows, self.scroll_cols,
+            self.row_header.clone(),
             self.col_header.clone()));
 
         render(self);
@@ -443,7 +443,7 @@ impl TableRenderer {
         return self;
     }
 
-    fn freeze(&mut self, reference: &str) -> &Self {
+    pub fn freeze(&mut self, reference: &str) -> &Self {
         let (x, y) = exp2xy(reference);
         self.freeze = (y, x);
         return self;

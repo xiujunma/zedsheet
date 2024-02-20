@@ -157,7 +157,7 @@ impl Range {
             )
     }
 
-    pub fn each_row(&self, cb: impl Fn(usize), max: Option<usize>) -> &Self {
+    pub fn each_row(&self, mut cb: impl FnMut(usize), max: Option<usize>) -> &Self {
         let mut end_row = self.end_row;
         if max.is_some() && max.unwrap() < end_row {
             end_row = max.unwrap();
@@ -170,7 +170,7 @@ impl Range {
         return self
     }
 
-    pub fn each_col(&self, cb: impl Fn(usize), max: Option<usize>) -> &Self {
+    pub fn each_col(&self, mut cb: impl FnMut(usize), max: Option<usize>) -> &Self {
         let mut end_col = self.end_col;
         if max.is_some() && max.unwrap() < end_col {
             end_col = max.unwrap();

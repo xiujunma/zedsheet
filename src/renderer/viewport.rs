@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+use gloo::console::console;
+use wasm_bindgen::JsValue;
+
 use crate::data::table_data::TableData;
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
@@ -10,7 +13,6 @@ use super::table_renderer::{ RowHeader, ColHeader};
 
 
 pub struct Viewport {
-    pub data: &'static TableData,
     pub areas: Vec<Area>,
     pub header_areas: Vec<Area>,
 }
@@ -32,16 +34,7 @@ impl Viewport {
     ) -> Viewport {
         let (tx, ty) = (row_header.width, col_header.height);
         let (frow, fcol) = freeze;
-
-        // let get_row_height = |row: usize| -> f64 {
-        //     TABLE_DATA.get_row(row).unwrap().height
-        // };
-
-        // let get_col_width = |col: usize| -> f64 {
-        //     TABLE_DATA.get_col(col).unwrap().width
-        // };
-
-        let area2 = Area::new(data, Range {
+        let area2: Area = Area::new(data, Range {
             start_row,
             start_col,
             end_row: frow - 1,
@@ -111,7 +104,7 @@ impl Viewport {
         // header areas
 
         // 1, 2-1, 2-3, 3
-        let header_area1 = Area::new(data, 
+        let header_area1 = Area::new(data,
             Range {
             start_row: 0,
             start_col: area1.range.start_col,
@@ -142,7 +135,6 @@ impl Viewport {
 
 
         Viewport {
-            data,
             areas: vec![area1, area2, area3, area4],
             header_areas: vec![header_area1, header_area2, header_area3, header_area4],
             // render

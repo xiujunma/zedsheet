@@ -29,16 +29,17 @@ pub fn exp2xy(expr: &str) -> (usize, usize) {
     let mut y_vec:Vec<char>  = Vec::new();
 
     for c in expr.chars() {
-        if c.is_alphanumeric() {
+        if c.is_digit(10) {
             y_vec.push(c);
         } else {
-            x_vec.push(c);
+            let uc = c.to_uppercase().next().unwrap();
+            x_vec.push(uc);
         }
     }
 
     let x = index_at(&String::from_iter(x_vec.into_iter()));
     let y = String::from_iter(y_vec.into_iter()).parse::<usize>().unwrap();
-    return (x, y)
+    return (x, y - 1)
 }
 
 pub fn xy2expr(x: usize, y: usize) -> String {
