@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-use gloo::console::console;
-use wasm_bindgen::JsValue;
-
 use crate::data::table_data::TableData;
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
@@ -19,7 +16,7 @@ pub struct Viewport {
 
 impl Viewport {
     pub fn new(
-        data: &'static TableData,
+        data: &TableData,
         freeze: (usize, usize),
         start_row: usize,
         start_col: usize,

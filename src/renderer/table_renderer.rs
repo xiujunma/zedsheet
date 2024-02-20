@@ -161,12 +161,36 @@ pub struct Row {
     pub auto_fit: bool,
     pub style: usize,
 }
+
+impl Default for Row {
+    fn default() -> Self {
+        Row {
+            height: 20f64,
+            hide: false,
+            auto_fit: false,
+            style: 0usize,
+        }
+    }
+    
+}
+
 #[derive(Debug, Clone)]
 pub struct Col {
     pub width: f64,
     pub hide: bool,
     pub auto_fit: bool,
     pub style: usize,
+}
+
+impl Default for Col {
+    fn default() -> Self {
+        Col {
+            width: 100f64,
+            hide: false,
+            auto_fit: false,
+            style: 0usize,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,7 +235,7 @@ pub struct ViewportCell {
 
 pub struct TableRenderer {
     pub target: HtmlCanvasElement,
-    pub data: &'static TableData,
+    pub data: TableData,
     pub bgcolor: String,
     pub width: f64,
     pub height: f64,
@@ -241,7 +265,7 @@ pub struct TableRenderer {
 }
 
 impl TableRenderer {
-    pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: &'static TableData) -> TableRenderer {
+    pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: TableData) -> TableRenderer {
         TableRenderer {
             target: container,
             data,
@@ -249,8 +273,8 @@ impl TableRenderer {
             width,
             height,
             scale: 1f64,
-            rows: 50,
-            cols: 26,
+            rows: 5,
+            cols: 5,
             row_height: 20f64,
             col_width: 100f64,
             start_row: 0usize,
@@ -310,7 +334,7 @@ impl TableRenderer {
 
     pub fn render(&mut self) {
         self.viewport = Some(Viewport::new(
-            self.data,
+            &self.data,
             self.freeze,
             self.start_row,
             self.start_col,

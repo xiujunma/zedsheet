@@ -52,7 +52,7 @@ impl Range {
         return self.contains_row(row) && self.contains_col(col)
     }
 
-    fn within(&self, other: &Range) -> bool {
+    pub fn within(&self, other: &Range) -> bool {
         return self.contains(other.start_row, other.start_col) && self.contains(other.end_row, other.end_col)
     }
 

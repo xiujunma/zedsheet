@@ -1,10 +1,6 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-
-use gloo::console::console;
-use wasm_bindgen::JsValue;
-
 use crate::{data::table_data::TableData, renderer::table_renderer::{AreaCell, Rect}};
 use super::range::Range;
 
