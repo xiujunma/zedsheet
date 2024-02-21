@@ -12,7 +12,7 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
     let border_ref = border.reference.clone();
     let border_type = border.border_type.clone();
     let border_range = Range::with(&border_ref);
-    let intersect_merges = area_merges.iter().filter(|r| r.intersects(&border_range)).map(|r| r.clone()).collect::<Vec<Range>>();
+    let intersect_merges = area_merges.iter().filter(|r| r.intersects(&border_range)).cloned().collect::<Vec<Range>>();
 
     let mut ret: Vec<(Range, Rect, BorderType)> = vec![]; 
 
@@ -49,14 +49,13 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
                     ));
                     break;
                 } else {
-
                    let imerges = intersect_merges.iter()
                         .filter(|it| { (*it).clone() != merge.clone() })
-                        .map(|r| r.clone())
+                        .cloned()
                         .collect::<Vec<Range>>();
                     border_range.difference(merge).iter().for_each(|it| {
                         if it.intersects(&area.range) {
-                            let border_rect = area.rect(&it);
+                            let border_rect = area.rect(it);
                             // TODO: Implement this
                         }
                     });
