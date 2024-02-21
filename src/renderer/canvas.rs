@@ -355,6 +355,31 @@ impl Canvas {
     // properties
     pub fn set_fill_style(&self, style: &str) -> &Self {
         self.ctx.set_fill_style(&JsValue::from_str(style));
-        return self
+        self
+    }
+
+    pub fn set_text_align(&self, text_align: &str) -> &Self {
+        self.ctx.set_text_align(text_align);
+        self
+    }
+
+    pub fn set_text_baseline(&self, text_baseline: &str) -> &Self {
+        self.ctx.set_text_baseline(text_baseline);
+        self
+    }
+
+    pub fn set_font(&self, font: &str) -> &Self {
+        self.ctx.set_font(font);
+        self
+    }
+
+    pub fn set_line_width(&self, width: f64) -> &Self {
+        self.ctx.set_line_width(width);
+        self
+    }
+
+    pub fn set_stroke_style(&self, style: &str) -> &Self {
+        self.ctx.set_stroke_style(&JsValue::from_str(style));
+        self
     }
 }
