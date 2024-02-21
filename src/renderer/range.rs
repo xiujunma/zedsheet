@@ -191,7 +191,7 @@ impl Range {
         }, None);
         return self
     }
-    fn to_string(&self) -> String {
+    pub fn to_string(&self) -> String {
         let mut expr = xy2expr(self.start_col, self.start_row);
         if self.get_multiple() {
             expr = format!("{}:{}", expr, xy2expr(self.end_col, self.end_row));

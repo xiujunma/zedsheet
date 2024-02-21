@@ -1,12 +1,4 @@
-use super::{area::Area, table_renderer::{BorderType, BorderLineStyle, Rect, Border}, range::Range};
-
-// #[derive(Debug, Clone)]
-// pub struct Border {
-//     reference: String,
-//     border_type: BorderType,
-//     style: BorderLineStyle, 
-//     color: String
-// }
+use super::{area::Area, range::Range, table_renderer::{Border, BorderLineStyle, BorderType, Rect}};
 
 pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> Vec<(Range, Rect, BorderType)> {
     let border_ref = border.reference.clone();
@@ -56,9 +48,57 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
                     border_range.difference(merge).iter().for_each(|it| {
                         if it.intersects(&area.range) {
                             let border_rect = area.rect(it);
-                            // TODO: Implement this
+                            let boreder = Border {
+                                reference: it.to_string(),
+                                border_type: border_type.clone(),
+                                border_line: BorderLineStyle::Thin,
+                                color: String::from("")
+                            };
+                            let border_ranges = border_ranges(area, &boreder, imerges.clone());
+                            border_ranges.into_iter()
+                                .for_each(|range| ret.push(range));
+
+                            if border_type == BorderType::Inside || border_type == BorderType::Horizontal {
+                                if it.start_row < merge.start_row && it.end_row < merge.start_row {
+                                    // top
+                                    ret.push((it.clone(), border_rect.clone(), BorderType::Bottom));
+                                } else if it.start_row > merge.start_row && it.end_row > merge.start_row {
+                                    // bottom
+                                    ret.push((it.clone(), border_rect.clone(), BorderType::Top));
+                                }
+                            }
+
+                            if border_type == BorderType::Inside || border_type == BorderType::Vertical {
+                                if it.start_col < merge.start_col && it.end_col < merge.start_col {
+                                    // left
+                                    ret.push((it.clone(), border_rect.clone(), BorderType::Right));
+                                }
+                                if it.start_col > merge.start_col && it.end_col > merge.start_col {
+                                    // right
+                                    ret.push((it.clone(), border_rect.clone(), BorderType::Left));
+                                }
+                            }
                         }
                     });
+                    if border_type == BorderType::All {
+                        let border_rect = area.rect(merge);
+                        if border_range.start_row == merge.start_row {
+                            ret.push((merge.clone(), border_rect.clone(), BorderType::Top));
+                        }
+
+                        if border_range.end_row == merge.end_row {
+                            ret.push((merge.clone(), border_rect.clone(), BorderType::Bottom));
+                        }
+
+                        if border_range.start_col == merge.start_col {
+                            ret.push((merge.clone(), border_rect.clone(), BorderType::Left));
+                        }
+
+                        if border_range.end_col == merge.end_col {
+                            ret.push((merge.clone(), border_rect.clone(), BorderType::Right));
+                        }
+                    }
+                    break;
                 }
             }
         }
