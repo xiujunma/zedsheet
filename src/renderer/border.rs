@@ -12,7 +12,7 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
     let border_ref = border.reference.clone();
     let border_type = border.border_type.clone();
     let border_range = Range::with(&border_ref);
-    let mut intersect_merges = area_merges.iter().filter(|r| r.intersects(&border_range)).collect::<Vec<&Range>>();
+    let intersect_merges = area_merges.iter().filter(|r| r.intersects(&border_range)).map(|r| r.clone()).collect::<Vec<Range>>();
 
     let mut ret: Vec<(Range, Rect, BorderType)> = vec![]; 
 
@@ -20,8 +20,8 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
         if intersect_merges.len() <= 0 {
             ret.push((border_range.clone(), area.rect(&border_range), border_type.clone()));
         } else {
-            for merge in intersect_merges {
-                if border_range.within(merge) {
+            for merge in &intersect_merges {
+                if border_range.within(&merge) {
                     if border_range.start_row == merge.start_row 
                         && border_range.start_col == merge.start_col
                         && border_type != BorderType::Inside
@@ -29,8 +29,13 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
                         && border_type != BorderType::Vertical {
                         ret.push((
                             merge.clone(), 
-                            area.rect(merge), 
-                            if border_type == BorderType::All { BorderType::Outside} else { border_type }))
+                            area.rect(&merge), 
+                            if border_type == BorderType::All { 
+                                BorderType::Outside
+                            } else { 
+                                border_type 
+                            }
+                        ))
                     }
                 } else if border_type == BorderType::Outside
                     || border_type == BorderType::Left
@@ -44,7 +49,17 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
                     ));
                     break;
                 } else {
-                    // TODO: Implement this
+
+                   let imerges = intersect_merges.iter()
+                        .filter(|it| { (*it).clone() != merge.clone() })
+                        .map(|r| r.clone())
+                        .collect::<Vec<Range>>();
+                    border_range.difference(merge).iter().for_each(|it| {
+                        if it.intersects(&area.range) {
+                            let border_rect = area.rect(&it);
+                            // TODO: Implement this
+                        }
+                    });
                 }
             }
         }

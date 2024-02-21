@@ -3,7 +3,7 @@
 use super::alphabets::xy2expr;
 use super::alphabets::exp2xy;
 
-#[derive(Clone, PartialEq, Debug, Copy)]
+#[derive(Clone, Debug, Copy)]
 pub struct Range {
     pub start_row: usize,
     pub start_col: usize,
@@ -111,7 +111,7 @@ impl Range {
         }
     }
 
-    fn difference(&self, other: &Range) -> Vec<Range> {
+    pub fn difference(&self, other: &Range) -> Vec<Range> {
         let mut ranges:Vec<Range> = Vec::new();
         if !self.intersects(other) {
             return ranges;
@@ -237,6 +237,15 @@ impl Range {
         }
         let (col1, row1) = exp2xy(refs.get(1).unwrap());
         return Range::new(row, col, row1, col1);
+    }
+}
+
+impl PartialEq for Range {
+    fn eq(&self, other: &Self) -> bool {
+        return self.start_row == other.start_row 
+            && self.start_col == other.start_col 
+            && self.end_row == other.end_row 
+            && self.end_col == other.end_col
     }
 }
 
