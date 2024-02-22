@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use super::alphabets::xy2expr;
 use super::alphabets::exp2xy;
+use super::alphabets::xy2expr;
 
 #[derive(Clone, Debug, Copy)]
 pub struct Range {
@@ -21,98 +21,132 @@ pub enum Position {
 
 impl Range {
     fn get_start(&self) -> (usize, usize) {
-        return (self.start_row, self.start_col)
+        return (self.start_row, self.start_col);
     }
 
     fn get_end(&self) -> (usize, usize) {
-        return (self.end_row, self.end_col)
+        return (self.end_row, self.end_col);
     }
 
     fn get_rows(&self) -> usize {
-        return self.end_row - self.start_row
+        return self.end_row - self.start_row;
     }
 
     fn get_cols(&self) -> usize {
-        return self.end_col - self.start_col
+        return self.end_col - self.start_col;
     }
 
     fn get_multiple(&self) -> bool {
-        return self.get_rows() > 0 || self.get_cols() > 0
+        return self.get_rows() > 0 || self.get_cols() > 0;
     }
 
     fn contains_row(&self, index: usize) -> bool {
-        return index >= self.start_row && index <= self.end_row
+        return index >= self.start_row && index <= self.end_row;
     }
 
     fn contains_col(&self, index: usize) -> bool {
-        return index >= self.start_col && index <= self.end_col
+        return index >= self.start_col && index <= self.end_col;
     }
 
     pub fn contains(&self, row: usize, col: usize) -> bool {
-        return self.contains_row(row) && self.contains_col(col)
+        return self.contains_row(row) && self.contains_col(col);
     }
 
     pub fn within(&self, other: &Range) -> bool {
-        return self.contains(other.start_row, other.start_col) && self.contains(other.end_row, other.end_col)
+        return self.contains(other.start_row, other.start_col)
+            && self.contains(other.end_row, other.end_col);
     }
 
     fn position(&self, other: &Range) -> Position {
         if self.start_row <= other.start_row && self.end_row >= other.end_row {
             if other.start_col > self.end_col {
-                return Position::Right
+                return Position::Right;
             } else if other.end_col < self.start_col {
-                return Position::Left
+                return Position::Left;
             }
         } else if self.start_col <= other.start_col && self.end_col >= other.end_col {
             if other.start_row > self.end_row {
-                return Position::Down
+                return Position::Down;
             } else if other.end_row < self.start_row {
-                return Position::Up
+                return Position::Up;
             }
         }
-        return Position::None
+        return Position::None;
     }
 
     fn intersects_row(&self, start_row: usize, end_row: usize) -> bool {
-        return self.start_row <= end_row && self.end_row >= start_row
+        return self.start_row <= end_row && self.end_row >= start_row;
     }
 
     fn intersects_col(&self, start_col: usize, end_col: usize) -> bool {
-        return self.start_col <= end_col && self.end_col >= start_col
+        return self.start_col <= end_col && self.end_col >= start_col;
     }
 
     pub fn intersects(&self, other: &Range) -> bool {
-        return self.intersects_row(other.start_row, other.end_row) && self.intersects_col(other.start_col, other.end_col)
+        return self.intersects_row(other.start_row, other.end_row)
+            && self.intersects_col(other.start_col, other.end_col);
     }
 
     fn intersection(&self, other: &Range) -> Range {
-        let start_row = if self.start_row > other.start_row { self.start_row } else { other.start_row };
-        let start_col = if self.start_col > other.start_col { self.start_col } else { other.start_col };
-        let end_row = if self.end_row < other.end_row { self.end_row } else { other.end_row };
-        let end_col = if self.end_col < other.end_col { self.end_col } else { other.end_col };
+        let start_row = if self.start_row > other.start_row {
+            self.start_row
+        } else {
+            other.start_row
+        };
+        let start_col = if self.start_col > other.start_col {
+            self.start_col
+        } else {
+            other.start_col
+        };
+        let end_row = if self.end_row < other.end_row {
+            self.end_row
+        } else {
+            other.end_row
+        };
+        let end_col = if self.end_col < other.end_col {
+            self.end_col
+        } else {
+            other.end_col
+        };
         return Range {
             start_row,
             start_col,
             end_row,
             end_col,
-        }
+        };
     }
 
     fn union(&self, other: &Range) -> Range {
-        let start_row = if self.start_row < other.start_row { self.start_row } else { other.start_row };
-        let start_col = if self.start_col < other.start_col { self.start_col } else { other.start_col };
-        let end_row = if self.end_row > other.end_row { self.end_row } else { other.end_row };
-        let end_col = if self.end_col > other.end_col { self.end_col } else { other.end_col };
+        let start_row = if self.start_row < other.start_row {
+            self.start_row
+        } else {
+            other.start_row
+        };
+        let start_col = if self.start_col < other.start_col {
+            self.start_col
+        } else {
+            other.start_col
+        };
+        let end_row = if self.end_row > other.end_row {
+            self.end_row
+        } else {
+            other.end_row
+        };
+        let end_col = if self.end_col > other.end_col {
+            self.end_col
+        } else {
+            other.end_col
+        };
         return Range {
             start_row,
             start_col,
             end_row,
             end_col,
-        }
+        };
     }
 
     pub fn difference(&self, other: &Range) -> Vec<Range> {
-        let mut ranges:Vec<Range> = Vec::new();
+        let mut ranges: Vec<Range> = Vec::new();
         if !self.intersects(other) {
             return ranges;
         }
@@ -141,20 +175,18 @@ impl Range {
             end_row: n_other.end_row,
             end_col: self.end_col,
         });
-        // return ranges.iter().filter(|r| r.get_rows() >= 0 && r.get_cols() >= 0).map(|r| r.clone()).collect();
-        return ranges;
+        return ranges
+            .into_iter()
+            .filter(|r| r.get_rows() >= 0 && r.get_cols() >= 0)
+            .collect();
     }
     fn touches(&self, other: &Range) -> bool {
-        return
-            (
-                other.start_row == self.start_row && other.end_row == self.end_row && (
-                    other.start_col == self.end_col + 1 || other.end_col == self.start_col - 1
-                )
-            ) || (
-                other.start_col == self.start_col && other.end_col == self.end_col && (
-                    other.start_row == self.end_row + 1 || other.end_row == self.start_row - 1
-                )
-            )
+        return (other.start_row == self.start_row
+            && other.end_row == self.end_row
+            && (other.start_col == self.end_col + 1 || other.end_col == self.start_col - 1))
+            || (other.start_col == self.start_col
+                && other.end_col == self.end_col
+                && (other.start_row == self.end_row + 1 || other.end_row == self.start_row - 1));
     }
 
     pub fn each_row(&self, mut cb: impl FnMut(usize), max: Option<usize>) -> &Self {
@@ -167,7 +199,7 @@ impl Range {
             cb(row);
         }
 
-        return self
+        return self;
     }
 
     pub fn each_col(&self, mut cb: impl FnMut(usize), max: Option<usize>) -> &Self {
@@ -180,30 +212,36 @@ impl Range {
             cb(col);
         }
 
-        return self
+        return self;
     }
 
     fn each(&self, cb: impl Fn(usize, usize)) -> &Self {
-        self.each_row(|row| {
-            self.each_col(|col| {
-                cb(row, col);
-            }, None);
-        }, None);
-        return self
+        self.each_row(
+            |row| {
+                self.each_col(
+                    |col| {
+                        cb(row, col);
+                    },
+                    None,
+                );
+            },
+            None,
+        );
+        return self;
     }
     pub fn to_string(&self) -> String {
         let mut expr = xy2expr(self.start_col, self.start_row);
         if self.get_multiple() {
             expr = format!("{}:{}", expr, xy2expr(self.end_col, self.end_row));
         }
-        return expr
+        return expr;
     }
 
     fn equals(&self, other: &Range) -> bool {
-        return self.start_row == other.start_row 
-            && self.start_col == other.start_col 
-            && self.end_row == other.end_row 
-            && self.end_col == other.end_col
+        return self.start_row == other.start_row
+            && self.start_col == other.start_col
+            && self.end_row == other.end_row
+            && self.end_col == other.end_col;
     }
 
     pub fn new(row: usize, col: usize, row1: usize, col1: usize) -> Self {
@@ -226,7 +264,7 @@ impl Range {
             start_col,
             end_row,
             end_col,
-        }
+        };
     }
 
     pub fn with(reference: &str) -> Self {
@@ -242,10 +280,10 @@ impl Range {
 
 impl PartialEq for Range {
     fn eq(&self, other: &Self) -> bool {
-        return self.start_row == other.start_row 
-            && self.start_col == other.start_col 
-            && self.end_row == other.end_row 
-            && self.end_col == other.end_col
+        return self.start_row == other.start_row
+            && self.start_col == other.start_col
+            && self.end_row == other.end_row
+            && self.end_col == other.end_col;
     }
 }
 

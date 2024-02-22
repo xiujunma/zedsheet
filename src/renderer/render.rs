@@ -137,6 +137,8 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
         Placement::RowHeader => {
             if renderer.row_header.width <= 0f64 {
                 return;
+            } else {
+                
             }
         }
 

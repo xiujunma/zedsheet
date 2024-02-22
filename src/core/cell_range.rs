@@ -60,23 +60,23 @@ impl CellRange {
         }
     }
 
-    pub fn contains(&self, range: Self) -> bool {
+    pub fn contains(&self, range: &Self) -> bool {
         self.sri <= range.sri && self.sci <= range.sci && self.eri >= range.eri && self.eci >= range.eci
     }
 
-    pub fn within(&self, range: Self) -> bool {
+    pub fn within(&self, range: &Self) -> bool {
         self.sri >= range.sri && self.sci >= range.sci && self.eri <= range.eri && self.eci <= range.eci
     }
 
-    pub fn disjoint(&self, range: Self) -> bool {
+    pub fn disjoint(&self, range: &Self) -> bool {
         self.sri > range.eri || self.sci > range.eci || self.eri < range.sri || self.eci < range.sci
     }
 
-    pub fn intersects(&self, range: Self) -> bool {
+    pub fn intersects(&self, range: &Self) -> bool {
         !self.disjoint(range)
     }
 
-    pub fn union(&self, range: Self) -> Self {
+    pub fn union(&self, range: &Self) -> Self {
         let mut sri = self.sri;
         let mut sci = self.sci;
         let mut eri = self.eri;
@@ -101,7 +101,7 @@ impl CellRange {
         CellRange::new(sri, sci, eri, eci)
     }
 
-    pub fn difference(&self, range: Self) -> Vec<Self> {
+    pub fn difference(&self, range: &Self) -> Vec<Self> {
         vec![]
     }
 }
