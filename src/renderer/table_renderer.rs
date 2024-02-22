@@ -7,6 +7,7 @@ use crate::renderer::canvas::Canvas;
 use crate::renderer::render::render;
 use web_sys::HtmlCanvasElement;
 
+use super::alphabets::string_at;
 use super::viewport::Viewport;
 use crate::data::table_data::TableData;
 
@@ -193,11 +194,25 @@ impl Default for Col {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RowHeader {
+#[derive(Debug, Clone)]pub struct RowHeader {
     pub width: f64,
     pub cols: usize,
     pub merges: Vec<String>,
+}
+
+impl RowHeader {
+    pub fn cell(row_index: usize, _: usize) -> Cell {
+        return Cell {
+            value: format!("{}", row_index + 1),
+            cell_type: String::from("text"),
+            style: 0usize,
+            formula: String::from(""),
+        }
+    }
+
+    pub fn cell_render(canvas: Canvas, rect: Rect, cell: Cell, style: String) -> bool {
+        return true;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +221,23 @@ pub struct ColHeader {
     pub rows: usize,
     pub merges: Vec<String>,
 }
+
+impl ColHeader {
+    pub fn cell(_: usize, col_index: usize) -> Cell {
+        return Cell {
+            value: string_at(col_index),
+            cell_type: String::from("text"),
+            style: 0usize,
+            formula: String::from(""),
+        }
+    }
+
+    pub fn cell_render(canvas: Canvas, rect: Rect, cell: Cell, style: String) -> bool {
+        return true;
+    }
+    
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Rect {
     pub x: f64,
