@@ -127,11 +127,11 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: Cell, rect: Rect, style: Style, 
     if re.is_match(text.as_str()) {
         canvas
             .save()
-            .begin_path();
-            // .prop("textAlign", style.align.to_string().as_str())
-            // .prop("textBaseline", style.valign.to_string().as_str())
-            // .prop("font", font_string(&style.font_family, style.font_size as f64, style.italic, style.bold).as_str())
-            // .prop("fillStyle", style.color.as_str());
+            .begin_path()
+            .set_text_align(style.align.to_string().as_str())
+            .set_text_baseline(style.valign.to_string().as_str())
+            .set_font(font_string(&style.font_family, style.font_size as f64, style.italic, style.bold).as_str())
+            .set_fill_style(style.color.as_str());
 
         let (xp, yp) = match style.padding {
             Some(padding) => {

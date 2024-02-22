@@ -334,7 +334,7 @@ impl TableRenderer {
 
     pub fn render(&mut self) {
         self.viewport = Some(Viewport::new(
-            &self.data,
+            self.data.clone(),
             self.freeze,
             self.start_row,
             self.start_col,

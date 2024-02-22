@@ -16,7 +16,7 @@ pub struct Viewport {
 
 impl Viewport {
     pub fn new(
-        data: &TableData,
+        data: TableData,
         freeze: (usize, usize),
         start_row: usize,
         start_col: usize,
@@ -31,7 +31,7 @@ impl Viewport {
     ) -> Viewport {
         let (tx, ty) = (row_header.width, col_header.height);
         let (frow, fcol) = freeze;
-        let area2: Area = Area::new(data, Range {
+        let area2: Area = Area::new(data.clone(), Range {
             start_row,
             start_col,
             end_row: frow - 1,
@@ -72,7 +72,7 @@ impl Viewport {
         end_col -= 1;
         end_row -= 1;
 
-        let area4 = Area::new(data, 
+        let area4 = Area::new(data.clone(), 
             Range {
             start_row: start_row_4,
             start_col: start_col_4,
@@ -80,7 +80,7 @@ impl Viewport {
             end_col,
         }, x4, y4, w4, h4);
 
-        let area1 = Area::new(data, 
+        let area1 = Area::new(data.clone(), 
             Range {
             start_row,
             start_col: start_col_4,
@@ -89,7 +89,7 @@ impl Viewport {
         }, x4, ty, w4, 0f64);
 
 
-        let area3 = Area::new(data, 
+        let area3 = Area::new(data.clone(), 
             Range {
             start_row: start_row_4,
             start_col,
@@ -101,7 +101,7 @@ impl Viewport {
         // header areas
 
         // 1, 2-1, 2-3, 3
-        let header_area1 = Area::new(data,
+        let header_area1 = Area::new(data.clone(),
             Range {
             start_row: 0,
             start_col: area1.range.start_col,
@@ -109,21 +109,21 @@ impl Viewport {
             end_col: area1.range.end_col,
         }, area4.x, 0f64, area4.width, 0f64);
 
-        let header_area2 = Area::new(data, Range {
+        let header_area2 = Area::new(data.clone(), Range {
             start_row: 0,
             start_col: area2.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area2.range.end_col,
         }, area2.x, 0f64, area2.width, 0f64);
 
-        let header_area3 = Area::new(data, Range {
+        let header_area3 = Area::new(data.clone(), Range {
             start_row: 0,
             start_col: area3.range.start_col,
             end_row: col_header.rows - 1,
             end_col: area3.range.end_col,
         }, area3.x, 0f64, area3.width, 0f64);
 
-        let header_area4 = Area::new(data, Range {
+        let header_area4 = Area::new(data.clone(), Range {
             start_row: 0,
             start_col: area4.range.start_col,
             end_row: col_header.rows - 1,

@@ -18,7 +18,7 @@ pub struct Area {
 }
 
 impl Area {
-    pub fn new(data: &TableData, range: Range, x: f64, y: f64, width: f64, height: f64) -> Self 
+    pub fn new(data: TableData, range: Range, x: f64, y: f64, width: f64, height: f64) -> Self 
     {
         let mut row_map: HashMap<usize, (f64, f64)> = HashMap::new();
         let mut col_map: HashMap<usize, (f64, f64)> = HashMap::new();
