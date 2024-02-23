@@ -210,7 +210,7 @@ impl RowHeader {
         }
     }
 
-    pub fn cell_render(canvas: Canvas, rect: Rect, cell: Cell, style: String) -> bool {
+    pub fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
         return true;
     }
 }
@@ -232,7 +232,14 @@ impl ColHeader {
         }
     }
 
-    pub fn cell_render(canvas: Canvas, rect: Rect, cell: Cell, style: String) -> bool {
+    pub fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
+        canvas.set_fill_style("#0069c2")
+            .begin_path()
+            .move_to(rect.width - 12f64, 2f64)
+            .line_to(rect.width - 2f64, 2f64)
+            .line_to(rect.width - 7f64, 10f64)
+            .close_path()
+            .fill(None);
         return true;
     }
     

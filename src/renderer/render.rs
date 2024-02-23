@@ -6,7 +6,7 @@ use crate::renderer::area::Area;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::cell_render::cell_border_render;
 use crate::renderer::range::{each_range, Range};
-use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Gridline, Rect, TableRenderer, Cell};
+use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Cell, Gridline, Rect, Style, TableRenderer};
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
 use super::border::border_ranges;
@@ -133,6 +133,8 @@ pub fn render_borders(canvas: &Canvas, area: &Area, borders: Option<Vec<Border>>
 }
 
 pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
+    // TODO
+    let style = renderer.style.clone();
     match placement {
         Placement::RowHeader => {
             if renderer.row_header.width <= 0f64 {
@@ -159,14 +161,18 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
         .fill(None)
         .clip(None);
 
-    fn merge_cell_style(r: f64, c: f64, cell: Cell) {
-
-    }
+    let merge_cell_style = |r: f64, c: f64, cell: &Cell|-> Style {
+        //TODO
+        style.clone()
+    };
 
     let mut area_merges: Vec<Range> = vec![];
     if renderer.merges.len() > 0 {
         // each_range(renderer.merges, cb)
     }
+
+    render_borders(canvas, area, renderer.borders.clone(), area_merges.clone());
+    canvas.restore();
 }
 
 pub fn render(renderer: &TableRenderer) {
