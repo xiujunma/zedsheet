@@ -5,6 +5,8 @@ use regex::Regex;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::table_renderer::{Align, BorderLine, Cell, Rect, Style, TextLineType, VerticalAlign};
 
+use super::table_renderer::BorderLineStyle;
+
 #[derive(Debug, Clone)]
 pub struct TextLine {
     pub width: f64,
@@ -87,22 +89,76 @@ pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String 
 }
 
 pub fn cell_border_render(canvas: &Canvas, rect: &Rect, border_line: &BorderLine, auto_align: Option<bool>) {
+    canvas.save()
+        .begin_path()
+        .translate(rect.x, rect.y);
+
+    let line_rects = |index: usize, offset: f64| -> (f64, f64, f64, f64) {
+        let array = vec![
+            ( 0f64 - offset, 0f64, rect.width + offset, 0f64),
+            (rect.width, 0f64, rect.width, rect.height),
+            (0f64 - offset, rect.height, rect.width + offset, rect.height),
+            (0f64, 0f64, 0f64, rect.height)
+        ];
+        array[index]
+    };
+
+    let directions = vec![
+        border_line.top.clone(), 
+        border_line.right.clone(), 
+        border_line.bottom.clone(), 
+        border_line.left.clone()];
+
+    for (i, it) in directions.into_iter().enumerate() {
+        match it {
+            Some(border) => {
+                let mut line_dash: Vec<f64> = vec![];
+                let mut line_width = 1f64;
+
+                let style = border.0;
+                if style == BorderLineStyle::Thick {
+                    line_width = 3f64;
+                } else if style == BorderLineStyle::Medium {
+                    line_width = 2f64;
+                } else if style == BorderLineStyle::Dotted {
+                    line_dash = vec![1f64, 1f64];
+                } else if style == BorderLineStyle::Dashed {
+                    line_dash = vec![2f64, 2f64];
+                }
+
+                let mut offset = 0f64;
+
+                if auto_align.unwrap_or(false) {
+                    offset = line_width / 2f64;
+                }
+
+                let rects = line_rects(i, offset);
+                canvas
+                    .set_stroke_style(border.1.as_str())
+                    .set_line_width(line_width)
+                    .set_line_dash(&line_dash)
+                    .line(rects.0, rects.1, rects.2, rects.3);
+            },
+            _ => {}
+        }
+    }
+    canvas.restore();
 
 }
 
-pub fn cell_render<R, F>(canvas: &Canvas, cell: Cell, rect: Rect, style: Style, cell_renderer: R, formatter: F)
-    where R: Fn(Canvas, Rect, Cell, String) -> bool + 'static,
-          F: Fn(Cell) -> String + 'static 
+pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Style, cell_renderer: R, formatter: F)
+    where R: Fn(&Canvas, &Rect, &Cell, &str) -> bool + 'static,
+          F: Fn(&Cell) -> String + 'static 
     {
-    let text = formatter(cell.clone());
+    let text = formatter(cell);
 
     canvas.save().begin_path().translate(rect.x, rect.y);
 
     canvas.rect(0f64, 0f64, rect.width, rect.height).clip(None);
 
-    match style.bgcolor {
+    match &style.bgcolor {
         Some(bgcolor) => {
-            // canvas.prop("fillStyle", bgcolor.as_str());
+            canvas.set_fill_style(bgcolor);
         },
         _ => {}
     }
@@ -110,13 +166,12 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: Cell, rect: Rect, style: Style, 
     match style.rotation {
         Some(rotation) => {
             canvas.rotate(rotation * ( PI / 180_f64));
-
         },
         _ => {}
     }
     
     canvas.save();
-    if !cell_renderer(canvas.clone(), rect, cell, text.clone()) {
+    if !cell_renderer(canvas, rect, cell, text.as_str()) {
         canvas.restore();
         return;
     }
