@@ -289,7 +289,7 @@ pub struct TableRenderer {
     pub scroll_cols: usize,
     pub cell_renderer: Box<dyn Fn(Canvas, Rect, Cell, String) -> bool + 'static>,
     pub formatter: Box<dyn Fn(Cell, String) + 'static>,
-    pub merges: Vec<String>,
+    pub merges: Vec<&'static str>,
     pub borders: Vec<Border>,
     pub styles: Vec<Style>,
     pub gridline: Gridline,
@@ -461,7 +461,7 @@ impl TableRenderer {
         return self;
     }
 
-    fn merges(&mut self, merges: Vec<String>) -> &Self {
+    fn merges(&mut self, merges: Vec<&'static str>) -> &Self {
         self.merges = merges;
         return self;
     }

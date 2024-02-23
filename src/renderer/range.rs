@@ -215,7 +215,7 @@ impl Range {
         return self;
     }
 
-    fn each(&self, cb: impl Fn(usize, usize)) -> &Self {
+    pub fn each(&self, mut cb: impl FnMut(usize, usize)) -> &Self {
         self.each_row(
             |row| {
                 self.each_col(
@@ -287,7 +287,7 @@ impl PartialEq for Range {
     }
 }
 
-pub fn each_range(refs: Vec<&str>, cb: impl Fn(Range)) {
+pub fn each_range(refs: Vec<&str>, mut cb: impl FnMut(Range)) {
     if refs.len() > 0 {
         for r in refs {
             cb(Range::with(r));

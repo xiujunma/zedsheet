@@ -11,7 +11,7 @@ use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
 use super::border::border_ranges;
 use super::table_renderer::{Placement, ColHeader};
-use super::viewport;
+use super::{cell_render, viewport};
 
 pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
     if gridline.width > 0f64 {
@@ -161,17 +161,42 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
         .fill(None)
         .clip(None);
 
-    let merge_cell_style = |r: f64, c: f64, cell: &Cell|-> Style {
+    let merge_cell_style = |r: usize, c: usize, cell: &Cell|-> Style {
         //TODO
         style.clone()
     };
 
     let mut area_merges: Vec<Range> = vec![];
+    let mut area_merge_render_params: Vec<(Cell, Rect, Style)> = vec![];
+    let cell_merges: Vec<Range> = vec![];
     if renderer.merges.len() > 0 {
-        // each_range(renderer.merges, cb)
+        each_range(renderer.merges.clone(), |range| {
+            if range.intersects(&area.range) {
+                let cell_v = renderer.data.get_cell(range.start_row, range.start_col).unwrap();
+                let cell_style = merge_cell_style(range.start_row, range.start_col, &cell_v);
+                let cell_rect = area.rect(&range);
+                area_merge_render_params.push((cell_v, cell_rect, cell_style));
+                area_merges.push(range.clone());
+
+                range.each(|r, c| {
+                    if r > range.start_row || c > range.start_col {
+                        area_merges.push(Range::new(r, c, r, c));
+                    }
+                });
+            }
+        });
     }
 
-    render_borders(canvas, area, renderer.borders.clone(), area_merges.clone());
+    let render = |cell: &Cell, rect: &Rect, style: &Style| {
+        if placement == Placement::Body {
+            render_cell_grid_line(canvas, &renderer.gridline, rect);
+            // TODO
+        } else {
+
+        }
+    };
+
+    render_borders(canvas, area, Some(renderer.borders.clone()), area_merges.clone());
     canvas.restore();
 }
 
