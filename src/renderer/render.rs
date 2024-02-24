@@ -1,7 +1,7 @@
-use std::default;
-
 use wasm_bindgen::JsValue;
+
 use BorderType::{Bottom, Horizontal, Left, Outside, Right, Top};
+
 use crate::renderer::area::Area;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::cell_render::cell_border_render;
@@ -10,8 +10,13 @@ use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, Borde
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
 use super::border::border_ranges;
-use super::table_renderer::{Placement, ColHeader};
-use super::{cell_render, viewport};
+use super::table_renderer::Placement;
+
+pub trait AreaRenderer {
+    fn cell(&self, row_index: usize, col_index: usize) -> Option<Cell>;
+    fn get_merges(&self) -> Vec<String>;
+    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, text: String) -> bool;
+}
 
 pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
     if gridline.width > 0f64 {
