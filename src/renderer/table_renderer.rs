@@ -4,7 +4,7 @@ use std::fmt::Display;
 
 use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
-use crate::renderer::render::render;
+use crate::renderer::render::{AreaRenderer, render};
 use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
@@ -200,8 +200,8 @@ impl Default for Col {
     pub merges: Vec<String>,
 }
 
-impl RowHeader {
-    pub fn cell(row_index: usize, _: usize) -> Cell {
+impl AreaRenderer for RowHeader {
+    fn cell(&self, row_index: usize, _: usize) -> Cell {
         return Cell {
             value: format!("{}", row_index + 1),
             cell_type: String::from("text"),
@@ -210,7 +210,11 @@ impl RowHeader {
         }
     }
 
-    pub fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
+    fn get_merges(&self) -> Vec<String> {
+        self.merges.clone()
+    }
+
+    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
         return true;
     }
 }
@@ -222,8 +226,8 @@ pub struct ColHeader {
     pub merges: Vec<String>,
 }
 
-impl ColHeader {
-    pub fn cell(_: usize, col_index: usize) -> Cell {
+impl AreaRenderer for ColHeader {
+    fn cell(&self, _: usize, col_index: usize) -> Cell {
         return Cell {
             value: string_at(col_index),
             cell_type: String::from("text"),
@@ -232,7 +236,11 @@ impl ColHeader {
         }
     }
 
-    pub fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
+    fn get_merges(&self) -> Vec<String> {
+        self.merges.clone()
+    }
+
+    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
         canvas.set_fill_style("#0069c2")
             .begin_path()
             .move_to(rect.width - 12f64, 2f64)
@@ -242,7 +250,6 @@ impl ColHeader {
             .fill(None);
         return true;
     }
-    
 }
 
 #[derive(Debug, Clone, Copy)]
