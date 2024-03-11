@@ -3,7 +3,7 @@
 const ALPHABETS: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 fn alphabet(index: usize) -> char {
-    return ALPHABETS.chars().nth(index as usize).unwrap()
+    return ALPHABETS.chars().nth(index).unwrap()
 }
 
 pub fn string_at(index: usize) -> String {

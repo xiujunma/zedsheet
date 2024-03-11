@@ -48,13 +48,13 @@ pub fn border_ranges(area: &Area, border: &Border, area_merges: Vec<Range>) -> V
                     border_range.difference(merge).iter().for_each(|it| {
                         if it.intersects(&area.range) {
                             let border_rect = area.rect(it);
-                            let boreder = Border {
+                            let border = Border {
                                 reference: it.to_string(),
                                 border_type: border_type.clone(),
                                 border_line: BorderLineStyle::Thin,
                                 color: String::from("")
                             };
-                            let border_ranges = border_ranges(area, &boreder, imerges.clone());
+                            let border_ranges = border_ranges(area, &border, imerges.clone());
                             border_ranges.into_iter()
                                 .for_each(|range| ret.push(range));
 

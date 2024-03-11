@@ -108,8 +108,8 @@ impl Canvas {
         style.set_property("height", &format!("{}px", height)).unwrap();
         let dpr = web_sys::window().unwrap().device_pixel_ratio();
 
-        self.target.set_width((width as f64 * dpr).floor() as u32);
-        self.target.set_height((height as f64 * dpr).floor() as u32);
+        self.target.set_width((width * dpr).floor() as u32);
+        self.target.set_height((height * dpr).floor() as u32);
         self.ctx.scale(dpr * self.scale, dpr * self.scale).unwrap();
         
         return self
@@ -289,10 +289,10 @@ impl Canvas {
     }
 
     pub fn is_point_in_path(&self, x: f64, y: f64, winding_rule: Option<CanvasWindingRule>) -> bool {
-        if winding_rule.is_some() {
-            return self.ctx.is_point_in_path_with_f64_and_canvas_winding_rule(x, y, winding_rule.unwrap())
+        return if winding_rule.is_some() {
+            self.ctx.is_point_in_path_with_f64_and_canvas_winding_rule(x, y, winding_rule.unwrap())
         } else {
-            return self.ctx.is_point_in_path_with_f64(x, y)
+            self.ctx.is_point_in_path_with_f64(x, y)
         }
     }
 

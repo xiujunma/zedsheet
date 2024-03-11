@@ -125,9 +125,9 @@ impl Area {
 
         return Rect {
             x: 0f64,
-            y: y,
+            y,
             width: self.width,
-            height: height,
+            height,
         }
     }
 
@@ -145,9 +145,9 @@ impl Area {
         }
 
         return Rect {
-            x: x,
+            x,
             y: 0f64,
-            width: width,
+            width,
             height: self.height,
         }
     }
@@ -177,7 +177,7 @@ impl Area {
         };
 
         // row
-        while cell.y < y as f64 {
+        while cell.y < y {
             let h = self.get_row_height(cell.row);
             cell.row += 1;
             cell.y += h;
@@ -188,7 +188,7 @@ impl Area {
         cell.row -= 1;
 
         // col
-        while cell.x < x as f64 {
+        while cell.x < x {
             let w = self.get_col_width(cell.col);
             cell.col += 1;
             cell.x += w;

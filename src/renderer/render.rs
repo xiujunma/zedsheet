@@ -173,7 +173,7 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
 
     let mut area_merges: Vec<Range> = vec![];
     let mut area_merge_render_params: Vec<(Cell, Rect, Style)> = vec![];
-    let cell_merges: Vec<Range> = vec![];
+    // let cell_merges: Vec<Range> = vec![];
     if renderer.merges.len() > 0 {
         each_range(renderer.merges.clone(), |range| {
             if range.intersects(&area.range) {
