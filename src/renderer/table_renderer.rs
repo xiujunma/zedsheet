@@ -201,13 +201,13 @@ impl Default for Col {
 }
 
 impl AreaRenderer for RowHeader {
-    fn cell(&self, row_index: usize, _: usize) -> Cell {
-        return Cell {
+    fn cell(&self, row_index: usize, _: usize) -> Option<Cell> {
+        return Some(Cell {
             value: format!("{}", row_index + 1),
             cell_type: String::from("text"),
             style: 0usize,
             formula: String::from(""),
-        }
+        })
     }
 
     fn get_merges(&self) -> Vec<String> {
@@ -227,13 +227,13 @@ pub struct ColHeader {
 }
 
 impl AreaRenderer for ColHeader {
-    fn cell(&self, _: usize, col_index: usize) -> Cell {
-        return Cell {
+    fn cell(&self, _: usize, col_index: usize) -> Option<Cell> {
+        return Some(Cell {
             value: string_at(col_index),
             cell_type: String::from("text"),
             style: 0usize,
             formula: String::from(""),
-        }
+        })
     }
 
     fn get_merges(&self) -> Vec<String> {

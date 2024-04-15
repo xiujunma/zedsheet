@@ -15,7 +15,7 @@ use super::table_renderer::Placement;
 pub trait AreaRenderer {
     fn cell(&self, row_index: usize, col_index: usize) -> Option<Cell>;
     fn get_merges(&self) -> Vec<String>;
-    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, text: String) -> bool;
+    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, text: &str) -> bool;
 }
 
 pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
