@@ -66,32 +66,82 @@ impl Toolbar {
     }
 
     fn build_toolbar(&mut self) {
-        // Build toolbar structure with all buttons
-        let items = vec![
-            ("undo", "Undo"),
-            ("redo", "Redo"),
-            ("print", "Print"),
-            ("paint-format", "Paint Format"),
-            ("clear-format", "Clear Format"),
-            ("bold", "B"),
-            ("italic", "I"),
-            ("underline", "U"),
-            ("strike", "S"),
-            ("merge", "Merge"),
-            ("text-wrap", "Wrap"),
-            ("freeze", "Freeze"),
-            ("autofilter", "Filter"),
-            ("formula", "fx"),
+        // Each entry is (data-action, sprite-icon-class). `None` marks a group
+        // divider. Icon classes match the sprite positions in index.css.
+        let items: Vec<Option<(&str, &str)>> = vec![
+            Some(("undo", "undo")),
+            Some(("redo", "redo")),
+            None,
+            Some(("print", "print")),
+            Some(("paintformat", "paintformat")),
+            Some(("clearformat", "clearformat")),
+            None,
+            Some(("font-bold", "font-bold")),
+            Some(("font-italic", "font-italic")),
+            Some(("underline", "underline")),
+            Some(("strike", "strike")),
+            Some(("color", "color")),
+            Some(("bgcolor", "bgcolor")),
+            None,
+            Some(("merge", "merge")),
+            None,
+            Some(("align-left", "align-left")),
+            Some(("align-center", "align-center")),
+            Some(("align-right", "align-right")),
+            Some(("align-top", "align-top")),
+            Some(("align-middle", "align-middle")),
+            Some(("align-bottom", "align-bottom")),
+            Some(("textwrap", "textwrap")),
+            None,
+            Some(("freeze", "freeze")),
+            Some(("autofilter", "autofilter")),
+            Some(("formula", "formula")),
         ];
 
-        // Build button elements
-        for (id, label) in items.iter() {
-            let mut btn = h("button", Some(&format!("{}-btn", CSS_PREFIX)));
-            btn.dataset_set("action", id);
-            btn.set_inner_html(label.to_string());
-            self.element.append_child(&mut btn);
+        let mut btns = h("div", Some(&format!("{}-toolbar-btns", CSS_PREFIX)));
+
+        // Dropdown buttons (format / font / fontsize) precede the icon groups.
+        for (action, title, width, id) in [
+            ("dd-format", "Normal", 72, "zs-dd-format"),
+            ("dd-font", "Arial", 72, "zs-dd-font"),
+            ("dd-fontsize", "10", 30, "zs-dd-fontsize"),
+        ] {
+            let mut btn = h("div", Some(&format!("{}-toolbar-btn", CSS_PREFIX)));
+            btn.dataset_set("action", action);
+            btn.set_inner_html(format!(
+                "<div class=\"{p}-dropdown bottom-left\"><div class=\"{p}-dropdown-header\">\
+                   <div class=\"{p}-dropdown-title\" id=\"{id}\" style=\"display:inline-block;width:{w}px;text-align:left;padding:0 4px;line-height:26px;\">{title}</div>\
+                   <div class=\"{p}-icon arrow-right\"><div class=\"{p}-icon-img arrow-down\"></div></div>\
+                 </div></div>",
+                p = CSS_PREFIX, id = id, w = width, title = title
+            ));
+            btns.append_child(&mut btn);
             self.buttons.push(btn);
         }
+        let mut divider0 = h("div", Some(&format!("{}-toolbar-divider", CSS_PREFIX)));
+        btns.append_child(&mut divider0);
+
+        for item in items.iter() {
+            match item {
+                Some((action, icon)) => {
+                    let mut btn = h("div", Some(&format!("{}-toolbar-btn", CSS_PREFIX)));
+                    btn.dataset_set("action", action);
+                    btn.set_inner_html(format!(
+                        "<div class=\"{prefix}-icon\"><div class=\"{prefix}-icon-img {icon}\"></div></div>",
+                        prefix = CSS_PREFIX,
+                        icon = icon
+                    ));
+                    btns.append_child(&mut btn);
+                    self.buttons.push(btn);
+                }
+                None => {
+                    let mut divider = h("div", Some(&format!("{}-toolbar-divider", CSS_PREFIX)));
+                    btns.append_child(&mut divider);
+                }
+            }
+        }
+
+        self.element.append_child(&mut btns);
     }
 
     pub fn set_state(&mut self, state: ToolbarState) {

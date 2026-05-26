@@ -35,6 +35,8 @@ features = [
   "console",
   "Event",
   "MouseEvent",
+  "KeyboardEvent",
+  "WheelEvent",
   "DomRect",
   "NodeList",
   "DomTokenList",

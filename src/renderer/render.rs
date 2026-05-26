@@ -232,38 +232,153 @@ pub fn render_scrollbar(canvas: &Canvas, x: f64, y: f64, width: f64, height: f64
     canvas.restore();
 }
 
-/// Render body cells. Assumes the caller has already translated the canvas to
-/// the area origin; `rect` coordinates are area-relative.
+/// Render body cells with per-cell styles, formula values and merges. Assumes
+/// the caller has translated the canvas to the area origin; `rect` coordinates
+/// are area-relative.
 pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
-    let style = renderer.style.clone();
     let grid = &renderer.gridline;
-    let font = format!("{}px {}", style.font_size, style.font_family);
+    let pad = 5f64;
 
     area.each(|row, col, rect| {
-        // Cell text (prefer computed value, fall back to raw text).
-        if let Some(cell) = renderer.data.get_cell(row, col) {
-            let text = if !cell.value.is_empty() { cell.value.clone() } else { cell.text.clone() };
-            if !text.is_empty() {
-                canvas.save();
-                canvas.begin_path();
-                canvas.rect(rect.x, rect.y, rect.width, rect.height);
-                canvas.clip(None);
-                canvas
-                    .set_font(&font)
-                    .set_fill_style(style.color.as_str())
-                    .set_text_align("left")
-                    .set_text_baseline("middle");
-                canvas.fill_text(&text, rect.x + 5f64, rect.y + rect.height / 2f64, None);
-                canvas.restore();
+        // Merge handling: skip cells covered by (but not the origin of) a merge.
+        let merge = renderer.data.cell_merge(row, col);
+        let mut draw_rect = rect;
+        if let Some(m) = &merge {
+            if row != m.sri || col != m.sci {
+                return; // covered cell: nothing to draw (origin paints over it)
+            }
+            // Expand the draw rect to span the full merged range.
+            let mut w = 0f64;
+            for c in m.sci..=m.eci {
+                w += renderer.col_width_at(c);
+            }
+            let mut h = 0f64;
+            for r in m.sri..=m.eri {
+                h += renderer.row_height_at(r);
+            }
+            draw_rect = Rect { x: rect.x, y: rect.y, width: w, height: h };
+        }
+
+        let style = renderer.data.get_cell_style(row, col);
+
+        // Background fill (only when non-white, to preserve gridlines elsewhere).
+        if let Some(bg) = &style.bgcolor {
+            if !is_white(bg) {
+                canvas.set_fill_style(bg.as_str());
+                canvas.fill_rect(draw_rect.x, draw_rect.y, draw_rect.width, draw_rect.height);
             }
         }
 
-        // Right + bottom gridlines (drawn in absolute area-relative coords).
+        // Cell text (formulas resolved to their value).
+        let text = renderer.data.cell_display_value(row, col);
+        if !text.is_empty() {
+            let font = format!(
+                "{}{}{}px {}",
+                if style.italic { "italic " } else { "" },
+                if style.bold { "bold " } else { "" },
+                style.font_size,
+                style.font_family
+            );
+            let (tx, talign) = match style.align.as_str() {
+                "center" => (draw_rect.x + draw_rect.width / 2f64, "center"),
+                "right" => (draw_rect.x + draw_rect.width - pad, "right"),
+                _ => (draw_rect.x + pad, "left"),
+            };
+
+            canvas.save();
+            canvas.begin_path();
+            canvas.rect(draw_rect.x, draw_rect.y, draw_rect.width, draw_rect.height);
+            canvas.clip(None);
+            canvas
+                .set_font(&font)
+                .set_fill_style(style.color.as_str())
+                .set_text_align(talign);
+
+            if style.text_wrap {
+                // Wrap the text into lines that fit the cell width.
+                canvas.set_text_baseline("top");
+                let max_w = (draw_rect.width - 2f64 * pad).max(1f64);
+                let lines = wrap_text(canvas, &text, max_w);
+                let line_h = style.font_size as f64 * 1.3;
+                let total_h = line_h * lines.len() as f64;
+                let start_y = match style.valign.as_str() {
+                    "bottom" => draw_rect.y + draw_rect.height - pad - total_h,
+                    "middle" => draw_rect.y + (draw_rect.height - total_h) / 2f64,
+                    _ => draw_rect.y + pad,
+                }
+                .max(draw_rect.y + pad);
+                for (i, line) in lines.iter().enumerate() {
+                    canvas.fill_text(line, tx, start_y + i as f64 * line_h, None);
+                }
+            } else {
+                let (ty, tbaseline) = match style.valign.as_str() {
+                    "top" => (draw_rect.y + pad, "top"),
+                    "bottom" => (draw_rect.y + draw_rect.height - pad, "bottom"),
+                    _ => (draw_rect.y + draw_rect.height / 2f64, "middle"),
+                };
+                canvas.set_text_baseline(tbaseline);
+                canvas.fill_text(&text, tx, ty, None);
+
+                // Underline / strike-through across the text width.
+                if style.underline || style.strike {
+                    let tw = canvas.measure_text_width(&text);
+                    let (lx0, lx1) = match talign {
+                        "center" => (tx - tw / 2f64, tx + tw / 2f64),
+                        "right" => (tx - tw, tx),
+                        _ => (tx, tx + tw),
+                    };
+                    canvas.set_stroke_style(style.color.as_str());
+                    canvas.set_line_width(1.0);
+                    if style.underline {
+                        let ly = ty + style.font_size as f64 * 0.4;
+                        canvas.line(lx0, ly, lx1, ly);
+                    }
+                    if style.strike {
+                        canvas.line(lx0, ty, lx1, ty);
+                    }
+                }
+            }
+            canvas.restore();
+        }
+
+        // Right + bottom gridlines (spanning the merged rect where applicable).
         canvas.set_stroke_style(grid.color.as_str());
         canvas.set_line_width(grid.width);
-        canvas.line(rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height);
-        canvas.line(rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height);
+        canvas.line(draw_rect.x + draw_rect.width, draw_rect.y, draw_rect.x + draw_rect.width, draw_rect.y + draw_rect.height);
+        canvas.line(draw_rect.x, draw_rect.y + draw_rect.height, draw_rect.x + draw_rect.width, draw_rect.y + draw_rect.height);
     });
+}
+
+fn is_white(color: &str) -> bool {
+    let c = color.trim().to_lowercase();
+    c == "#fff" || c == "#ffffff" || c == "white"
+}
+
+/// Break `text` into lines that fit within `max_width`, breaking on spaces
+/// (and honoring explicit newlines). The canvas font must already be set.
+fn wrap_text(canvas: &Canvas, text: &str, max_width: f64) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        let mut cur = String::new();
+        for word in raw_line.split(' ') {
+            let trial = if cur.is_empty() {
+                word.to_string()
+            } else {
+                format!("{} {}", cur, word)
+            };
+            if !cur.is_empty() && canvas.measure_text_width(&trial) > max_width {
+                lines.push(std::mem::take(&mut cur));
+                cur = word.to_string();
+            } else {
+                cur = trial;
+            }
+        }
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 /// Render the scrollable body area (background + cells), offsetting the canvas

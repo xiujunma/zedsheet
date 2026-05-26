@@ -9,7 +9,29 @@ use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
-use crate::core::data_proxy::DataProxy;
+use crate::core::data_proxy::{DataProxy, Style as CellStyle};
+use crate::core::cell_range::CellRange;
+use crate::core::cell::Cell as DataCell;
+
+/// A snapshot of cells held for copy/cut/paste.
+#[derive(Clone)]
+pub struct ClipboardData {
+    pub r0: usize,
+    pub c0: usize,
+    pub r1: usize,
+    pub c1: usize,
+    pub cells: Vec<Vec<DataCell>>,
+    pub is_cut: bool,
+}
+
+/// An in-progress pointer drag on the headers or scrollbars.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DragKind {
+    ColResize(usize),
+    RowResize(usize),
+    VScroll,
+    HScroll,
+}
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Align {
@@ -339,6 +361,7 @@ pub struct TableRenderer {
     pub freeze_gridline: Gridline,
     pub viewport: Option<Viewport>,
     pub selector: SelectorRect,
+    pub clipboard: Option<ClipboardData>,
 }
 
 impl TableRenderer {
@@ -407,6 +430,7 @@ impl TableRenderer {
             },
             viewport: None,
             selector: SelectorRect::default(),
+            clipboard: None,
         }
     }
 
@@ -568,8 +592,453 @@ impl TableRenderer {
         self.selector = SelectorRect { ri, ci, eri, eci };
     }
 
+    /// First body column/row currently scrolled into view.
+    fn body_start_col(&self) -> usize {
+        self.freeze.1 + self.scroll_cols
+    }
+
+    fn body_start_row(&self) -> usize {
+        self.freeze.0 + self.scroll_rows
+    }
+
+    /// Map a canvas pixel position to a (row, col) cell index. Returns None for
+    /// the header gutters. Handles the scrolled body (no-freeze) case.
+    pub fn cell_at(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        let tx = self.row_header.width;
+        let ty = self.col_header.height;
+        if x < tx || y < ty {
+            return None;
+        }
+
+        let total_cols = self.data.col_count();
+        let total_rows = self.data.row_count();
+        if total_cols == 0 || total_rows == 0 {
+            return None;
+        }
+
+        let mut cx = tx;
+        let mut ci = self.body_start_col();
+        while ci < total_cols {
+            let w = self.col_width_at(ci);
+            if x < cx + w {
+                break;
+            }
+            cx += w;
+            ci += 1;
+        }
+        if ci >= total_cols {
+            ci = total_cols - 1;
+        }
+
+        let mut cy = ty;
+        let mut ri = self.body_start_row();
+        while ri < total_rows {
+            let h = self.row_height_at(ri);
+            if y < cy + h {
+                break;
+            }
+            cy += h;
+            ri += 1;
+        }
+        if ri >= total_rows {
+            ri = total_rows - 1;
+        }
+
+        Some((ri, ci))
+    }
+
+    /// On-screen rect (canvas pixels) of a cell currently in the body viewport.
+    pub fn cell_screen_rect(&self, ri: usize, ci: usize) -> Rect {
+        let mut x = self.row_header.width;
+        for c in self.body_start_col()..ci {
+            x += self.col_width_at(c);
+        }
+        let mut y = self.col_header.height;
+        for r in self.body_start_row()..ri {
+            y += self.row_height_at(r);
+        }
+        Rect {
+            x,
+            y,
+            width: self.col_width_at(ci),
+            height: self.row_height_at(ri),
+        }
+    }
+
+    /// Scroll the body by whole-cell steps, clamped to the data bounds.
+    pub fn scroll_by(&mut self, d_rows: i32, d_cols: i32) {
+        let max_row = self.data.row_count().saturating_sub(1);
+        let max_col = self.data.col_count().saturating_sub(1);
+        let nr = (self.scroll_rows as i32 + d_rows).clamp(0, max_row as i32);
+        let nc = (self.scroll_cols as i32 + d_cols).clamp(0, max_col as i32);
+        self.scroll_rows = nr as usize;
+        self.scroll_cols = nc as usize;
+    }
+
+    /// Move the single-cell selection by a delta, clamped to the data bounds.
+    /// Scrolls the body if the new selection falls outside the visible range.
+    pub fn move_selection(&mut self, d_rows: i32, d_cols: i32) {
+        let max_row = self.data.row_count().saturating_sub(1) as i32;
+        let max_col = self.data.col_count().saturating_sub(1) as i32;
+        // Navigate from the selection's edge in the direction of travel so we
+        // step past merged regions instead of staying inside them.
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        let base_r = if d_rows > 0 { r1 } else { r0 };
+        let base_c = if d_cols > 0 { c1 } else { c0 };
+        let nr = (base_r as i32 + d_rows).clamp(0, max_row) as usize;
+        let nc = (base_c as i32 + d_cols).clamp(0, max_col) as usize;
+        self.select_cell(nr, nc);
+        self.ensure_visible(nr, nc);
+    }
+
+    /// Select a cell. If it falls inside a merge, the whole merged range is
+    /// selected (with the merge origin as the active cell).
+    pub fn select_cell(&mut self, ri: usize, ci: usize) {
+        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(ri, ci, ri, ci);
+        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+    }
+
+    /// Extend the selection to (ri, ci) for drag/shift-select, growing the
+    /// rectangle to fully cover any merges it touches.
+    pub fn select_to(&mut self, ri: usize, ci: usize) {
+        let ar = self.selector.ri;
+        let ac = self.selector.ci;
+        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(
+            ar.min(ri),
+            ac.min(ci),
+            ar.max(ri),
+            ac.max(ci),
+        );
+        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+    }
+
+    /// The origin (top-left) of the merge covering (ri, ci), else (ri, ci).
+    pub fn merge_origin(&self, ri: usize, ci: usize) -> (usize, usize) {
+        match self.data.cell_merge(ri, ci) {
+            Some(m) => (m.sri, m.sci),
+            None => (ri, ci),
+        }
+    }
+
+    /// Adjust scroll so (ri, ci) is within the body viewport.
+    fn ensure_visible(&mut self, ri: usize, ci: usize) {
+        if ri < self.body_start_row() {
+            self.scroll_rows = ri.saturating_sub(self.freeze.0);
+        }
+        if ci < self.body_start_col() {
+            self.scroll_cols = ci.saturating_sub(self.freeze.1);
+        }
+        // Scroll down/right until the target fits in the viewport.
+        let avail_h = self.height - self.col_header.height;
+        let avail_w = self.width - self.row_header.width;
+        while ri > self.body_start_row() {
+            let visible: f64 = (self.body_start_row()..=ri).map(|r| self.row_height_at(r)).sum();
+            if visible <= avail_h { break; }
+            self.scroll_rows += 1;
+        }
+        while ci > self.body_start_col() {
+            let visible: f64 = (self.body_start_col()..=ci).map(|c| self.col_width_at(c)).sum();
+            if visible <= avail_w { break; }
+            self.scroll_cols += 1;
+        }
+    }
+
+    pub fn set_cell_text_at(&mut self, ri: usize, ci: usize, text: &str) {
+        self.data.set_cell_text(ri, ci, text);
+    }
+
+    /// Replace the active sheet data (used when switching sheet tabs), resetting
+    /// the view state to the top-left.
+    pub fn set_data(&mut self, data: DataProxy) {
+        self.freeze = data.freeze;
+        self.data = data;
+        self.start_row = 0;
+        self.start_col = 0;
+        self.scroll_rows = 0;
+        self.scroll_cols = 0;
+        self.selector = SelectorRect::default();
+    }
+
+    pub fn data_clone(&self) -> DataProxy {
+        self.data.clone()
+    }
+
+    /// Normalized selection bounds (top-left .. bottom-right).
+    fn selection_bounds(&self) -> (usize, usize, usize, usize) {
+        let s = self.selector;
+        (
+            s.ri.min(s.eri),
+            s.ci.min(s.eci),
+            s.ri.max(s.eri),
+            s.ci.max(s.eci),
+        )
+    }
+
+    /// Apply a style mutation to every cell in the current selection.
+    pub fn update_selection_style<F: Fn(&mut CellStyle)>(&mut self, f: F) {
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        for ri in r0..=r1 {
+            for ci in c0..=c1 {
+                let mut style = self.data.get_cell_style(ri, ci);
+                f(&mut style);
+                let idx = self.data.add_style(style);
+                self.data.set_cell_style(ri, ci, idx);
+            }
+        }
+    }
+
+    pub fn toggle_bold(&mut self) {
+        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).bold;
+        self.update_selection_style(move |s| s.bold = t);
+    }
+
+    pub fn toggle_italic(&mut self) {
+        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).italic;
+        self.update_selection_style(move |s| s.italic = t);
+    }
+
+    pub fn toggle_underline(&mut self) {
+        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).underline;
+        self.update_selection_style(move |s| s.underline = t);
+    }
+
+    pub fn toggle_strike(&mut self) {
+        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).strike;
+        self.update_selection_style(move |s| s.strike = t);
+    }
+
+    pub fn set_align(&mut self, align: &str) {
+        let a = align.to_string();
+        self.update_selection_style(move |s| s.align = a.clone());
+    }
+
+    pub fn set_valign(&mut self, valign: &str) {
+        let a = valign.to_string();
+        self.update_selection_style(move |s| s.valign = a.clone());
+    }
+
+    pub fn set_bgcolor(&mut self, color: &str) {
+        let c = color.to_string();
+        self.update_selection_style(move |s| s.bgcolor = Some(c.clone()));
+    }
+
+    pub fn set_text_color(&mut self, color: &str) {
+        let c = color.to_string();
+        self.update_selection_style(move |s| s.color = c.clone());
+    }
+
+    pub fn toggle_text_wrap(&mut self) {
+        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).text_wrap;
+        self.update_selection_style(move |s| s.text_wrap = t);
+    }
+
+    pub fn set_format(&mut self, format: &str) {
+        let f = format.to_string();
+        self.update_selection_style(move |s| s.format = f.clone());
+    }
+
+    pub fn set_font_family(&mut self, family: &str) {
+        let f = family.to_string();
+        self.update_selection_style(move |s| s.font_family = f.clone());
+    }
+
+    pub fn set_font_size(&mut self, px: usize) {
+        self.update_selection_style(move |s| s.font_size = px);
+    }
+
+    /// Remove styling from every cell in the selection.
+    pub fn clear_format(&mut self) {
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        for ri in r0..=r1 {
+            for ci in c0..=c1 {
+                if let Some(cell) = self.data.get_cell_mut(ri, ci) {
+                    cell.style = None;
+                }
+            }
+        }
+    }
+
+    /// Merge the selection (or unmerge when a single merged cell is selected).
+    pub fn merge_selection(&mut self) {
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        if r0 == r1 && c0 == c1 {
+            if let Some(m) = self.data.cell_merge(r0, c0) {
+                self.data.merges.delete(m.sri, m.sci);
+            }
+            return;
+        }
+        self.data.merges.add(CellRange::new(r0, c0, r1, c1));
+    }
+
+    fn snapshot_clipboard(&mut self, is_cut: bool) {
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        let mut cells = Vec::new();
+        for ri in r0..=r1 {
+            let mut row = Vec::new();
+            for ci in c0..=c1 {
+                row.push(self.data.get_cell(ri, ci).cloned().unwrap_or_default());
+            }
+            cells.push(row);
+        }
+        self.clipboard = Some(ClipboardData { r0, c0, r1, c1, cells, is_cut });
+    }
+
+    pub fn copy_selection(&mut self) {
+        self.snapshot_clipboard(false);
+    }
+
+    pub fn cut_selection(&mut self) {
+        self.snapshot_clipboard(true);
+    }
+
+    /// Paste the clipboard at the current selection's top-left. A cut clears
+    /// the source cells afterwards.
+    pub fn paste(&mut self) {
+        let Some(cb) = self.clipboard.take() else { return };
+        let (dr0, dc0, _, _) = self.selection_bounds();
+        for (i, row) in cb.cells.iter().enumerate() {
+            for (j, cell) in row.iter().enumerate() {
+                self.data.set_cell(dr0 + i, dc0 + j, cell.clone());
+            }
+        }
+        if cb.is_cut {
+            for ri in cb.r0..=cb.r1 {
+                for ci in cb.c0..=cb.c1 {
+                    self.data.delete_cell(ri, ci);
+                }
+            }
+        } else {
+            self.clipboard = Some(cb); // keep for repeated paste
+        }
+    }
+
+    pub fn clear_selection_content(&mut self) {
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        for ri in r0..=r1 {
+            for ci in c0..=c1 {
+                self.data.delete_cell(ri, ci);
+            }
+        }
+    }
+
+    pub fn insert_row_at_selection(&mut self) {
+        let (r0, _, _, _) = self.selection_bounds();
+        self.data.insert_row(r0, 1);
+    }
+
+    pub fn delete_rows_at_selection(&mut self) {
+        let (r0, _, r1, _) = self.selection_bounds();
+        for _ in r0..=r1 {
+            self.data.delete_row(r0);
+        }
+    }
+
+    pub fn insert_col_at_selection(&mut self) {
+        let (_, c0, _, _) = self.selection_bounds();
+        self.data.insert_col(c0, 1);
+    }
+
+    pub fn delete_cols_at_selection(&mut self) {
+        let (_, c0, _, c1) = self.selection_bounds();
+        for _ in c0..=c1 {
+            self.data.delete_col(c0);
+        }
+    }
+
+    /// Freeze panes at the selection's top-left, or unfreeze if already there.
+    pub fn toggle_freeze(&mut self) {
+        let (r0, c0, _, _) = self.selection_bounds();
+        if self.freeze == (r0, c0) {
+            self.freeze = (0, 0);
+        } else {
+            self.freeze = (r0, c0);
+        }
+    }
+
+    pub fn cell_text_at(&self, ri: usize, ci: usize) -> String {
+        self.data.get_cell_text(ri, ci)
+    }
+
     pub fn get_selector(&self) -> SelectorRect {
         self.selector
+    }
+
+    /// Set the canvas cursor (e.g. "col-resize", "row-resize", "default").
+    pub fn set_cursor(&self, cursor: &str) {
+        let _ = self.target.style().set_property("cursor", cursor);
+    }
+
+    /// If the pointer is near a header boundary, the column/row it would resize.
+    pub fn resize_target(&self, x: f64, y: f64) -> Option<DragKind> {
+        let tx = self.row_header.width;
+        let ty = self.col_header.height;
+        let tol = 4f64;
+
+        // Column boundary, within the column-header strip.
+        if y <= ty && x >= tx {
+            let mut cx = tx;
+            let mut ci = self.body_start_col();
+            let total = self.data.col_count();
+            while ci < total && cx <= self.width {
+                let right = cx + self.col_width_at(ci);
+                if (x - right).abs() <= tol {
+                    return Some(DragKind::ColResize(ci));
+                }
+                cx = right;
+                ci += 1;
+            }
+        }
+
+        // Row boundary, within the row-header gutter.
+        if x <= tx && y >= ty {
+            let mut cy = ty;
+            let mut ri = self.body_start_row();
+            let total = self.data.row_count();
+            while ri < total && cy <= self.height {
+                let bottom = cy + self.row_height_at(ri);
+                if (y - bottom).abs() <= tol {
+                    return Some(DragKind::RowResize(ri));
+                }
+                cy = bottom;
+                ri += 1;
+            }
+        }
+
+        None
+    }
+
+    /// If the pointer is over a scrollbar track, which one.
+    pub fn scrollbar_target(&self, x: f64, y: f64) -> Option<DragKind> {
+        let size = 12f64;
+        if x >= self.width - size && y >= self.col_header.height && y <= self.height {
+            return Some(DragKind::VScroll);
+        }
+        if y >= self.height - size && x >= self.row_header.width && x <= self.width {
+            return Some(DragKind::HScroll);
+        }
+        None
+    }
+
+    pub fn set_col_width_clamped(&mut self, ci: usize, w: f64) {
+        self.data.set_col_width(ci, w.max(20f64));
+    }
+
+    pub fn set_row_height_clamped(&mut self, ri: usize, h: f64) {
+        self.data.set_row_height(ri, h.max(12f64));
+    }
+
+    /// Scroll vertically to a fraction [0, 1] of the rows.
+    pub fn scroll_to_fraction_v(&mut self, frac: f64) {
+        let total = self.data.row_count();
+        let idx = (frac.clamp(0f64, 1f64) * total as f64) as usize;
+        self.scroll_rows = idx.min(total.saturating_sub(1));
+    }
+
+    /// Scroll horizontally to a fraction [0, 1] of the columns.
+    pub fn scroll_to_fraction_h(&mut self, frac: f64) {
+        let total = self.data.col_count();
+        let idx = (frac.clamp(0f64, 1f64) * total as f64) as usize;
+        self.scroll_cols = idx.min(total.saturating_sub(1));
     }
 
     pub fn set_row_height_at(&mut self, row_index: usize, height: f64) {
