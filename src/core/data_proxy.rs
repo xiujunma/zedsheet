@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::core::cell_range::CellRange;
 use crate::core::cell::Cell;
 use crate::core::row::Row;
-use crate::core::col::Cols;
+use crate::core::col::{Col, Cols};
 use crate::core::merges::Merges;
 use crate::core::state::{Selector, Scroll, Clipboard, History};
 use crate::core::validation::Validations;
@@ -102,6 +102,22 @@ impl DataProxy {
 
     pub fn get_cell(&self, ri: usize, ci: usize) -> Option<&Cell> {
         self.rows.get(&ri).and_then(|row| row.get_cell(ci))
+    }
+
+    pub fn get_row(&self, ri: usize) -> Option<&Row> {
+        self.rows.get(&ri)
+    }
+
+    pub fn get_col(&self, ci: usize) -> Option<&Col> {
+        self.cols.get(ci)
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.row_count
+    }
+
+    pub fn col_count(&self) -> usize {
+        self.cols.len
     }
 
     pub fn get_cell_or_new(&mut self, ri: usize, ci: usize) -> &mut Cell {

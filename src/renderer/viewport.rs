@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::data::table_data::TableData;
+use crate::core::data_proxy::DataProxy;
 use crate::renderer::area::Area;
 use crate::renderer::range::Range;
 use crate::renderer::table_renderer::ViewportCell;
@@ -16,7 +16,7 @@ pub struct Viewport {
 
 impl Viewport {
     pub fn new(
-        data: TableData,
+        data: DataProxy,
         freeze: (usize, usize),
         start_row: usize,
         start_col: usize,
@@ -29,50 +29,46 @@ impl Viewport {
         row_header: RowHeader,
         col_header: ColHeader,
     ) -> Viewport {
+        // tx/ty: width/height reserved for the row/column headers.
         let (tx, ty) = (row_header.width, col_header.height);
+        // (frow, fcol) are COUNTS of frozen rows/cols. 0 means "no freeze".
         let (frow, fcol) = freeze;
+
+        // Ranges below use EXCLUSIVE end bounds (start..end), matching Range::each_*.
+        // area2: frozen top-left corner = rows [start_row, frow) x cols [start_col, fcol).
         let area2: Area = Area::new(data.clone(), Range {
             start_row,
             start_col,
-            end_row: frow - 1,
-            end_col: fcol - 1,
+            end_row: start_row.max(frow),
+            end_col: start_col.max(fcol),
         }, tx, ty, 0f64, 0f64);
 
+        // Body scroll origin sits just past the frozen panes.
         let (start_row_4, start_col_4) = (frow + scroll_rows, fcol + scroll_cols);
 
-        // end row
+        // Walk rows/cols until the body viewport is filled; end_* is the first
+        // row/col that no longer fits (exclusive upper bound).
         let mut y = area2.height + ty;
         let mut end_row = start_row_4;
         while y < height && end_row < rows {
-            y += data.get_row(end_row).unwrap().height;
+            y += data.get_row_height(end_row);
             end_row += 1;
         }
 
-        // end col
         let mut x = area2.width + tx;
         let mut end_col = start_col_4;
         while x < width && end_col < cols {
-            x += data.get_col(end_col).unwrap().width;
+            x += data.get_col_width(end_col);
             end_col += 1;
         }
 
-        // area4
+        // area4: the scrollable body.
         let x4 = tx + area2.width;
         let y4 = ty + area2.height;
-        let mut w4 = width - x4;
-        let mut h4 = height - y4;
-        if end_col == cols {
-            w4 -= width - x;
-        }
+        let w4 = width - x4;
+        let h4 = height - y4;
 
-        if end_row == rows {
-            h4 -= height - y;
-        }
-
-        end_col -= 1;
-        end_row -= 1;
-
-        let area4 = Area::new(data.clone(), 
+        let area4 = Area::new(data.clone(),
             Range {
             start_row: start_row_4,
             start_col: start_col_4,
@@ -80,61 +76,58 @@ impl Viewport {
             end_col,
         }, x4, y4, w4, h4);
 
-        let area1 = Area::new(data.clone(), 
+        // area1: frozen rows above the body (frozen rows x body cols).
+        let area1 = Area::new(data.clone(),
             Range {
             start_row,
             start_col: start_col_4,
-            end_row: frow - 1,
+            end_row: start_row.max(frow),
             end_col,
         }, x4, ty, w4, 0f64);
 
-
-        let area3 = Area::new(data.clone(), 
+        // area3: frozen cols left of the body (body rows x frozen cols).
+        let area3 = Area::new(data.clone(),
             Range {
             start_row: start_row_4,
             start_col,
             end_row,
-            end_col: fcol - 1,
+            end_col: start_col.max(fcol),
         }, tx, y4, 0f64, h4);
 
-
-        // header areas
-
-        // 1, 2-1, 2-3, 3
+        // header areas (column headers), one per body/frozen column span.
+        let header_rows = col_header.rows;
         let header_area1 = Area::new(data.clone(),
             Range {
             start_row: 0,
             start_col: area1.range.start_col,
-            end_row: col_header.rows - 1,
+            end_row: header_rows,
             end_col: area1.range.end_col,
         }, area4.x, 0f64, area4.width, 0f64);
 
         let header_area2 = Area::new(data.clone(), Range {
             start_row: 0,
             start_col: area2.range.start_col,
-            end_row: col_header.rows - 1,
+            end_row: header_rows,
             end_col: area2.range.end_col,
         }, area2.x, 0f64, area2.width, 0f64);
 
         let header_area3 = Area::new(data.clone(), Range {
             start_row: 0,
             start_col: area3.range.start_col,
-            end_row: col_header.rows - 1,
+            end_row: header_rows,
             end_col: area3.range.end_col,
         }, area3.x, 0f64, area3.width, 0f64);
 
         let header_area4 = Area::new(data.clone(), Range {
             start_row: 0,
             start_col: area4.range.start_col,
-            end_row: col_header.rows - 1,
+            end_row: header_rows,
             end_col: area4.range.end_col,
         }, area4.x, 0f64, area4.width, 0f64);
-
 
         Viewport {
             areas: vec![area1, area2, area3, area4],
             header_areas: vec![header_area1, header_area2, header_area3, header_area4],
-            // render
         }
     }
 

@@ -2,3 +2,4 @@
 /dist
 /pkg
 /.idea
+.gstack/

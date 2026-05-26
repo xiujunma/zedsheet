@@ -9,7 +9,7 @@ use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
-use crate::data::table_data::TableData;
+use crate::core::data_proxy::DataProxy;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Align {
@@ -311,7 +311,7 @@ pub struct ViewportCell {
 
 pub struct TableRenderer {
     pub target: HtmlCanvasElement,
-    pub data: TableData,
+    pub data: DataProxy,
     pub bgcolor: String,
     pub width: f64,
     pub height: f64,
@@ -342,7 +342,7 @@ pub struct TableRenderer {
 }
 
 impl TableRenderer {
-    pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: TableData) -> TableRenderer {
+    pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: DataProxy) -> TableRenderer {
         TableRenderer {
             target: container,
             data,
@@ -416,8 +416,8 @@ impl TableRenderer {
             self.freeze,
             self.start_row,
             self.start_col,
-            self.rows,
-            self.cols,
+            self.data.row_count(),
+            self.data.col_count(),
             self.width, self.height,
             self.scroll_rows, self.scroll_cols,
             self.row_header.clone(),
@@ -557,25 +557,11 @@ impl TableRenderer {
     }
 
     pub fn row_height_at(&self, index: usize) -> f64 {
-        let r = self.data.get_row(index);
-        return match r {
-            Some(row) => {
-                if row.hide {
-                    0f64
-                } else {
-                    row.height
-                }
-            }
-            None => self.row_height,
-        };
+        self.data.get_row_height(index)
     }
 
     pub fn col_width_at(&self, index: usize) -> f64 {
-        if let Some(col) = self.data.get_col(index) {
-            col.get_width()
-        } else {
-            self.col_width
-        }
+        self.data.get_col_width(index)
     }
 
     pub fn set_selector(&mut self, ri: usize, ci: usize, eri: usize, eci: usize) {

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use crate::{data::table_data::TableData, renderer::table_renderer::{AreaCell, Rect}};
+use crate::{core::data_proxy::DataProxy, renderer::table_renderer::{AreaCell, Rect}};
 use super::range::Range;
 
 #[derive(Clone, Debug)]
@@ -18,28 +18,28 @@ pub struct Area {
 }
 
 impl Area {
-    pub fn new(data: TableData, range: Range, x: f64, y: f64, width: f64, height: f64) -> Self 
+    pub fn new(data: DataProxy, range: Range, x: f64, y: f64, width: f64, height: f64) -> Self
     {
         let mut row_map: HashMap<usize, (f64, f64)> = HashMap::new();
         let mut col_map: HashMap<usize, (f64, f64)> = HashMap::new();
 
         let mut total_height: f64 = 0f64;
         range.each_row(|index| {
-            let row = data.get_row(index).unwrap();
-            row_map.insert(index, (total_height, row.height));
-            total_height += row.height;
+            let h = data.get_row_height(index);
+            row_map.insert(index, (total_height, h));
+            total_height += h;
         }, None);
 
         let mut height = height;
-        if height <= 0f64 { 
+        if height <= 0f64 {
             height = total_height;
         }
 
         let mut total_width: f64 = 0f64;
         range.each_col(|index| {
-            let col = data.get_col(index).unwrap();
-            col_map.insert(index, (total_width, col.width));
-            total_width += col.width;
+            let w = data.get_col_width(index);
+            col_map.insert(index, (total_width, w));
+            total_width += w;
         }, None);
 
         let mut width = width;

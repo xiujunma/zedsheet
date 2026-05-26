@@ -11,6 +11,7 @@ use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 
 use super::border::border_ranges;
 use super::table_renderer::Placement;
+use super::alphabets::string_at;
 
 pub trait AreaRenderer {
     fn cell(&self, row_index: usize, col_index: usize) -> Option<Cell>;
@@ -35,22 +36,30 @@ pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
 pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, renderer: &TableRenderer) {
     // Find the area containing the selector cells
     for area in &viewport.areas {
-        // Check if selector intersects with this area
+        // Skip empty areas (exclusive end bound => start >= end means no cells).
+        if area.range.start_row >= area.range.end_row || area.range.start_col >= area.range.end_col {
+            continue;
+        }
+
+        // The area's last visible row/col (end bound is exclusive).
+        let area_last_row = area.range.end_row - 1;
+        let area_last_col = area.range.end_col - 1;
+
         let min_r = selector.ri.min(selector.eri);
         let max_r = selector.ri.max(selector.eri);
         let min_c = selector.ci.min(selector.eci);
         let max_c = selector.ci.max(selector.eci);
 
-        if max_r < area.range.start_row || min_r > area.range.end_row ||
-           max_c < area.range.start_col || min_c > area.range.end_col {
+        if max_r < area.range.start_row || min_r > area_last_row ||
+           max_c < area.range.start_col || min_c > area_last_col {
             continue;
         }
 
-        // Calculate the rect for the selection
+        // Clamp the selection to the cells actually present in this area.
         let sel_min_r = min_r.max(area.range.start_row);
-        let sel_max_r = max_r.min(area.range.end_row);
+        let sel_max_r = max_r.min(area_last_row);
         let sel_min_c = min_c.max(area.range.start_col);
-        let sel_max_c = max_c.min(area.range.end_col);
+        let sel_max_c = max_c.min(area_last_col);
 
         // Get positions (accounting for area offset)
         let mut sel_x = area.x;
@@ -63,7 +72,7 @@ pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crat
             if row == sel_min_r {
                 sel_y += area.row_map.get(&row).map_or(0f64, |(y, _)| *y);
             }
-            sel_height += area.get_row_height(row);
+            sel_height += area.row_map.get(&row).map_or(0f64, |(_, h)| *h);
         }
 
         // Calculate X position and width
@@ -71,7 +80,7 @@ pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crat
             if col == sel_min_c {
                 sel_x += area.col_map.get(&col).map_or(0f64, |(x, _)| *x);
             }
-            sel_width += area.get_col_width(col);
+            sel_width += area.col_map.get(&col).map_or(0f64, |(_, w)| *w);
         }
 
         // Draw selection border
@@ -223,43 +232,133 @@ pub fn render_scrollbar(canvas: &Canvas, x: f64, y: f64, width: f64, height: f64
     canvas.restore();
 }
 
+/// Render body cells. Assumes the caller has already translated the canvas to
+/// the area origin; `rect` coordinates are area-relative.
 pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
-    let default_style = renderer.style.clone();
+    let style = renderer.style.clone();
+    let grid = &renderer.gridline;
+    let font = format!("{}px {}", style.font_size, style.font_family);
 
     area.each(|row, col, rect| {
+        // Cell text (prefer computed value, fall back to raw text).
         if let Some(cell) = renderer.data.get_cell(row, col) {
-            let style = default_style.clone();
-            // Render cell text
-            canvas.save().begin_path().translate(rect.x, rect.y);
-            canvas.rect(0f64, 0f64, rect.width, rect.height).clip(None);
-
-            // Set fill for cell background
-            if let Some(bgcolor) = style.bgcolor.clone() {
-                canvas.set_fill_style(bgcolor.as_str());
-                canvas.fill_rect(0f64, 0f64, rect.width, rect.height);
-            }
-
-            // Draw text
-            let font = format!("{} {}px {}", style.font_family, style.font_size, if style.bold { "bold" } else { "" });
-            canvas.set_font(&font)
-                .set_fill_style(style.color.as_str())
-                .set_text_align(&style.align.to_string())
-                .set_text_baseline(&style.valign.to_string());
-
-            let text = cell.value.clone();
+            let text = if !cell.value.is_empty() { cell.value.clone() } else { cell.text.clone() };
             if !text.is_empty() {
-                canvas.fill_text(&text, 5f64, rect.height / 2f64 + style.font_size as f64 / 3f64, None);
+                canvas.save();
+                canvas.begin_path();
+                canvas.rect(rect.x, rect.y, rect.width, rect.height);
+                canvas.clip(None);
+                canvas
+                    .set_font(&font)
+                    .set_fill_style(style.color.as_str())
+                    .set_text_align("left")
+                    .set_text_baseline("middle");
+                canvas.fill_text(&text, rect.x + 5f64, rect.y + rect.height / 2f64, None);
+                canvas.restore();
             }
-
-            // Draw grid line
-            render_cell_grid_line(canvas, &renderer.gridline, &rect);
-
-            canvas.restore();
-        } else {
-            // Render empty cell
-            render_cell_grid_line(canvas, &renderer.gridline, &rect);
         }
+
+        // Right + bottom gridlines (drawn in absolute area-relative coords).
+        canvas.set_stroke_style(grid.color.as_str());
+        canvas.set_line_width(grid.width);
+        canvas.line(rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + rect.height);
+        canvas.line(rect.x, rect.y + rect.height, rect.x + rect.width, rect.y + rect.height);
     });
+}
+
+/// Render the scrollable body area (background + cells), offsetting the canvas
+/// to the area's on-screen position.
+pub fn render_body(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
+    canvas.save();
+    canvas.translate(area.x, area.y);
+    canvas.begin_path();
+    canvas.rect(0f64, 0f64, area.width, area.height);
+    canvas.clip(None);
+    canvas.set_fill_style(renderer.bgcolor.as_str());
+    canvas.fill_rect(0f64, 0f64, area.width, area.height);
+    render_cells(canvas, area, renderer);
+    canvas.restore();
+}
+
+/// Render the column header strip (A, B, C, …) aligned above the body area.
+pub fn render_col_headers(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
+    let h = renderer.col_header.height;
+    if h <= 0f64 { return; }
+    let hs = &renderer.header_style;
+    let font = format!("{}px {}", hs.font_size, hs.font_family);
+
+    canvas.save();
+    canvas.translate(area.x, 0f64);
+    canvas.begin_path();
+    canvas.rect(0f64, 0f64, area.width, h);
+    canvas.clip(None);
+    if let Some(bg) = hs.bgcolor.clone() {
+        canvas.set_fill_style(bg.as_str());
+        canvas.fill_rect(0f64, 0f64, area.width, h);
+    }
+    canvas.set_line_width(renderer.header_gridline.width);
+    area.each_col(|col, x, width| {
+        canvas
+            .set_font(&font)
+            .set_fill_style(hs.color.as_str())
+            .set_text_align("center")
+            .set_text_baseline("middle");
+        canvas.fill_text(&string_at(col), x + width / 2f64, h / 2f64, None);
+        canvas.set_stroke_style(renderer.header_gridline.color.as_str());
+        canvas.line(x + width, 0f64, x + width, h);
+    });
+    canvas.set_stroke_style(renderer.header_gridline.color.as_str());
+    canvas.line(0f64, h, area.width, h);
+    canvas.restore();
+}
+
+/// Render the row header gutter (1, 2, 3, …) aligned left of the body area.
+pub fn render_row_headers(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
+    let w = renderer.row_header.width;
+    if w <= 0f64 { return; }
+    let hs = &renderer.header_style;
+    let font = format!("{}px {}", hs.font_size, hs.font_family);
+
+    canvas.save();
+    canvas.translate(0f64, area.y);
+    canvas.begin_path();
+    canvas.rect(0f64, 0f64, w, area.height);
+    canvas.clip(None);
+    if let Some(bg) = hs.bgcolor.clone() {
+        canvas.set_fill_style(bg.as_str());
+        canvas.fill_rect(0f64, 0f64, w, area.height);
+    }
+    canvas.set_line_width(renderer.header_gridline.width);
+    area.each_row(|row, y, height| {
+        canvas
+            .set_font(&font)
+            .set_fill_style(hs.color.as_str())
+            .set_text_align("center")
+            .set_text_baseline("middle");
+        canvas.fill_text(&format!("{}", row + 1), w / 2f64, y + height / 2f64, None);
+        canvas.set_stroke_style(renderer.header_gridline.color.as_str());
+        canvas.line(0f64, y + height, w, y + height);
+    });
+    canvas.set_stroke_style(renderer.header_gridline.color.as_str());
+    canvas.line(w, 0f64, w, area.height);
+    canvas.restore();
+}
+
+/// Render the top-left corner box where the headers meet.
+pub fn render_corner(canvas: &Canvas, renderer: &TableRenderer) {
+    let w = renderer.row_header.width;
+    let h = renderer.col_header.height;
+    if w <= 0f64 || h <= 0f64 { return; }
+    canvas.save();
+    if let Some(bg) = renderer.header_style.bgcolor.clone() {
+        canvas.set_fill_style(bg.as_str());
+        canvas.fill_rect(0f64, 0f64, w, h);
+    }
+    canvas.set_line_width(renderer.header_gridline.width);
+    canvas.set_stroke_style(renderer.header_gridline.color.as_str());
+    canvas.line(w, 0f64, w, h);
+    canvas.line(0f64, h, w, h);
+    canvas.restore();
 }
 
 pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
@@ -360,59 +459,49 @@ pub fn render(renderer: &TableRenderer) {
         let canvas = Canvas::new(target, scale);
         canvas.set_size(width, height);
 
+        // Clear the whole canvas first.
+        canvas.set_fill_style(renderer.bgcolor.as_str());
+        canvas.fill_rect(0f64, 0f64, width, height);
+
         let area1 = viewport.areas.get(0).unwrap();
         let area2 = viewport.areas.get(1).unwrap();
         let area3 = viewport.areas.get(2).unwrap();
         let area4 = viewport.areas.get(3).unwrap();
 
-        let header_area1 = viewport.header_areas.get(0).unwrap();
-        let header_area21 = viewport.header_areas.get(1).unwrap();
-        let header_area23 = viewport.header_areas.get(2).unwrap();
-        let header_area3 = viewport.header_areas.get(3).unwrap();
+        let (frow, fcol) = renderer.freeze;
 
-        // render-4 (body - scrollable area)
-        render_area(Placement::Body, &canvas, &area4, renderer);
+        // Body areas. With no freeze only area4 is non-empty; frozen panes are
+        // drawn on top so they stay fixed while the body scrolls.
+        render_body(&canvas, area4, renderer);
+        if frow > 0 { render_body(&canvas, area1, renderer); }
+        if fcol > 0 { render_body(&canvas, area3, renderer); }
+        if frow > 0 && fcol > 0 { render_body(&canvas, area2, renderer); }
 
-        // render-1 (frozen rows + column headers)
-        render_area(Placement::Body, &canvas, &area1, renderer);
-        render_area(Placement::ColHeader, &canvas, &header_area1, renderer);
+        // Column headers span the frozen + body columns; row headers span the
+        // frozen + body rows. area4 covers the common (no-freeze) case.
+        render_col_headers(&canvas, area4, renderer);
+        render_row_headers(&canvas, area4, renderer);
+        if frow > 0 { render_row_headers(&canvas, area1, renderer); }
+        if fcol > 0 { render_col_headers(&canvas, area3, renderer); }
+        render_corner(&canvas, renderer);
 
-        // render-3 (frozen columns + row headers)
-        render_area(Placement::Body, &canvas, &area3, renderer);
-        render_area(Placement::RowHeader, &canvas, &header_area3, renderer);
-
-        // render 2 (frozen top-left corner)
-        render_area(Placement::Body, &canvas, &area2, renderer);
-        render_area(Placement::ColHeader, &canvas, &header_area21, renderer);
-        render_area(Placement::RowHeader, &canvas, &header_area23, renderer);
-
-        // render freeze lines
-        let (row, col) = renderer.freeze;
-        if row > 0 || col > 0 {
+        // Freeze divider lines.
+        if frow > 0 || fcol > 0 {
             render_lines(&canvas, &renderer.freeze_gridline, || {
-                if col > 0 {
-                    let freeze_x = area4.x;
-                    canvas.line(freeze_x, 0.0, freeze_x, height);
-                }
-
-                if row > 0 {
-                    let freeze_y = area4.y;
-                    canvas.line(0.0, freeze_y, width, freeze_y);
-                }
+                if fcol > 0 { canvas.line(area4.x, 0.0, area4.x, height); }
+                if frow > 0 { canvas.line(0.0, area4.y, width, area4.y); }
             });
         }
 
-        // Render cell selector
+        // Selection rectangle.
         let selector = renderer.get_selector();
-        if selector.ri > 0 || selector.ci > 0 || selector.eri > 0 || selector.eci > 0 {
-            render_selector(&canvas, &selector, viewport, renderer);
-        }
+        render_selector(&canvas, &selector, viewport, renderer);
 
-        // Render scrollbars (if content exceeds viewport)
-        let total_row_height: f64 = (0..renderer.data.row_count).map(|i| renderer.row_height_at(i)).sum();
-        let total_col_width: f64 = (0..renderer.data.col_count).map(|i| renderer.col_width_at(i)).sum();
+        // Scrollbars (only when content exceeds the viewport).
+        let total_row_height: f64 = (0..renderer.data.row_count()).map(|i| renderer.row_height_at(i)).sum();
+        let total_col_width: f64 = (0..renderer.data.col_count()).map(|i| renderer.col_width_at(i)).sum();
 
-        let scrollbar_size = 16f64;
+        let scrollbar_size = 12f64;
         let has_vertical_scrollbar = total_row_height > height - renderer.col_header.height;
         let has_horizontal_scrollbar = total_col_width > width - renderer.row_header.width;
 
@@ -420,11 +509,9 @@ pub fn render(renderer: &TableRenderer) {
             let bar_x = width - scrollbar_size;
             let bar_y = renderer.col_header.height;
             let bar_height = height - renderer.col_header.height - if has_horizontal_scrollbar { scrollbar_size } else { 0f64 };
-            let content_height = total_row_height;
-            let ratio = bar_height / content_height;
+            let ratio = bar_height / total_row_height;
             let thumb_height = (bar_height * ratio).max(20f64).min(bar_height);
-            let thumb_y = renderer.scroll_rows as f64 / renderer.data.row_count as f64 * (bar_height - thumb_height);
-
+            let thumb_y = renderer.scroll_rows as f64 / renderer.data.row_count().max(1) as f64 * (bar_height - thumb_height);
             render_scrollbar(&canvas, bar_x, bar_y, scrollbar_size, bar_height, thumb_y, thumb_height, true);
         }
 
@@ -432,34 +519,10 @@ pub fn render(renderer: &TableRenderer) {
             let bar_x = renderer.row_header.width;
             let bar_y = height - scrollbar_size;
             let bar_width = width - renderer.row_header.width - if has_vertical_scrollbar { scrollbar_size } else { 0f64 };
-            let content_width = total_col_width;
-            let ratio = bar_width / content_width;
+            let ratio = bar_width / total_col_width;
             let thumb_width = (bar_width * ratio).max(20f64).min(bar_width);
-            let thumb_x = renderer.scroll_cols as f64 / renderer.data.col_count as f64 * (bar_width - thumb_width);
-
+            let thumb_x = renderer.scroll_cols as f64 / renderer.data.col_count().max(1) as f64 * (bar_width - thumb_width);
             render_scrollbar(&canvas, bar_x, bar_y, bar_width, scrollbar_size, thumb_x, thumb_width, false);
-        }
-
-        // Render corner header background
-        let (x, y) = (area2.x, area1.y);
-        if x > 0.0 && y > 0.0 {
-            let header_height = renderer.col_header.height;
-            let header_width = renderer.row_header.width;
-
-            if let Some(bgcolor) = renderer.header_style.bgcolor.clone() {
-                canvas
-                    .save()
-                    .set_fill_style(bgcolor.as_str())
-                    .rect(0.0, 0.0, header_width, header_height)
-                    .fill(None)
-                    .restore();
-
-                render_lines(&canvas, &renderer.header_gridline, || {
-                    canvas
-                        .line(0.0, header_height, header_width, header_height)
-                        .line(header_width, 0.0, header_width, header_height);
-                });
-            }
         }
     }
 }

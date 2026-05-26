@@ -1,8 +1,7 @@
 // Sheet component - basic structure
 // Full implementation will be in lib.rs / main entry point
 
-use crate::renderer::table_renderer::{Cell, Rect, Style};
-use crate::data::table_data::TableData;
+use crate::core::data_proxy::DataProxy;
 
 #[derive(Debug, Clone)]
 pub struct SheetState {
@@ -26,18 +25,18 @@ impl Default for SheetState {
 #[derive(Debug, Clone)]
 pub struct Sheet {
     pub state: SheetState,
-    pub data: TableData,
+    pub data: DataProxy,
 }
 
 impl Sheet {
     pub fn new(width: f64, height: f64) -> Self {
         Sheet {
             state: SheetState { width, height, scroll_x: 0f64, scroll_y: 0f64 },
-            data: TableData::new(100, 26),
+            data: DataProxy::new("sheet1"),
         }
     }
 
-    pub fn with_data(data: TableData, width: f64, height: f64) -> Self {
+    pub fn with_data(data: DataProxy, width: f64, height: f64) -> Self {
         Sheet {
             state: SheetState { width, height, scroll_x: 0f64, scroll_y: 0f64 },
             data,
