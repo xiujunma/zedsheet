@@ -6,6 +6,42 @@
     <link data-trunk rel="copy-dir" href="asset/" />
   </head>
   <body>
-    <canvas id="zedsheet" style="width: 600px; height: 600px;"></canvas>
+    <canvas id="zedsheet" style="width: 800px; height: 600px; border: 1px solid #ccc;"></canvas>
+
+    <script type="module">
+      import init, * as bindings from '/zedsheet-81bdd5af906f1818.js';
+
+      console.log('Loading WASM...');
+      const wasm = await init({ module_or_path: '/zedsheet-81bdd5af906f1818_bg.wasm' });
+      console.log('WASM loaded, calling start...');
+
+      window.wasmBindings = bindings;
+
+      // Call the start function that initializes the renderer
+      if (bindings.start) {
+        bindings.start();
+        console.log('start() called');
+      } else {
+        console.log('start function not found');
+      }
+
+      // Setup click handler
+      const canvas = document.getElementById('zedsheet');
+      canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        console.log('Click at:', x, y);
+        const row = Math.floor(y / 20);
+        const col = Math.floor(x / 100);
+        console.log('Cell:', row, col);
+      });
+
+      canvas.addEventListener('dblclick', (e) => {
+        console.log('Double click - enter edit mode');
+      });
+
+      console.log('Zedsheet initialized');
+    </script>
   </body>
 </html>

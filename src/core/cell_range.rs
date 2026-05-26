@@ -47,9 +47,17 @@ impl CellRange {
         self.sri != self.eri || self.sci != self.eci
     }
 
-    pub fn includes(&self, cell_ref: &str) -> bool {
+    pub fn includes(&self, ri: usize, ci: usize) -> bool {
+        self.sri <= ri && ri <= self.eri && self.sci <= ci && ci <= self.eci
+    }
+
+    pub fn includes_cell_ref(&self, cell_ref: &str) -> bool {
         let (ri, ci) = exp2xy(cell_ref);
         return self.sri < ri && self.eri > ri && self.sci < ci && self.eci > ci;
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        (self.eri - self.sri + 1, self.eci - self.sci + 1)
     }
 
     pub fn each(&self, f: impl Fn(usize, usize)) {

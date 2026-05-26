@@ -2,7 +2,6 @@ use crate::component::bottombar::{BottomBar, self};
 use crate::component::options::Options;
 use crate::component::sheet::Sheet;
 use gloo::utils::document;
-use web_sys::Event;
 
 use crate::config::CSS_PREFIX;
 use crate::component::element::h;
@@ -12,7 +11,7 @@ pub struct ZedSheet {
     options: Options,
     sheet_index: usize,
     bottom_bar: Option<BottomBar>,
-    sheet: Sheet
+    sheet: Sheet,
 }
 
 impl ZedSheet {
@@ -24,18 +23,18 @@ impl ZedSheet {
         } else {
             None
         };
-        
+
         let mut root_el = h("div", Some(CSS_PREFIX));
 
-        root_el.add_event_listener("contextmenu", |event: Event| event.prevent_default());
+        root_el.add_event_listener("contextmenu", |_event: web_sys::Event| {});
 
-        target_el.append_child(&root_el.el.unwrap()).unwrap();
+        target_el.append_child(&mut root_el.el.take().unwrap()).unwrap();
 
         Self {
             options,
             sheet_index: 0,
             bottom_bar,
-            sheet: Sheet {}
+            sheet: Sheet::new(800f64, 600f64),
         }
     }
 }

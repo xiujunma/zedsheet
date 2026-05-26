@@ -2,6 +2,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::EventTarget;
 
 /// Wrapper for `web_sys::Element` to simplify calling different interfaces
+#[derive(Debug, Clone)]
 pub struct Element {
     pub el: Option<web_sys::Element>,
 }
@@ -290,6 +291,88 @@ impl Element {
             self.el = Some(el);
         }
         text
+    }
+
+    /// Sets the value for the element in `self.el` (The element must be a textarea)
+    pub fn set_textarea_value(&mut self, value: &str) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlTextAreaElement>(&el) {
+                el.set_value(value);
+            }
+            self.el = Some(el);
+        }
+    }
+
+    /// Gets the value for the element in `self.el` (The element must be a textarea)
+    pub fn textarea_value(&mut self) -> String {
+        let mut v = String::new();
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlTextAreaElement>(&el) {
+                v = el.value();
+            }
+            self.el = Some(el);
+        }
+        v
+    }
+
+    /// Sets top position for absolute positioning
+    pub fn set_top(&mut self, top: f64) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
+                el.style().set_property("top", &format!("{}px", top)).unwrap();
+            }
+            self.el = Some(el);
+        }
+    }
+
+    /// Sets left position for absolute positioning
+    pub fn set_left(&mut self, left: f64) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
+                el.style().set_property("left", &format!("{}px", left)).unwrap();
+            }
+            self.el = Some(el);
+        }
+    }
+
+    /// Sets width for absolute positioning
+    pub fn set_width(&mut self, width: f64) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
+                el.style().set_property("width", &format!("{}px", width)).unwrap();
+            }
+            self.el = Some(el);
+        }
+    }
+
+    /// Sets height for absolute positioning
+    pub fn set_height(&mut self, height: f64) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
+                el.style().set_property("height", &format!("{}px", height)).unwrap();
+            }
+            self.el = Some(el);
+        }
+    }
+
+    /// Sets position style to absolute
+    pub fn set_position_absolute(&mut self) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
+                el.style().set_property("position", "absolute").unwrap();
+            }
+            self.el = Some(el);
+        }
+    }
+
+    /// Sets z-index for layering
+    pub fn set_z_index(&mut self, index: i32) {
+        if let Some(el) = self.el.take() {
+            if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
+                el.style().set_property("z-index", &index.to_string()).unwrap();
+            }
+            self.el = Some(el);
+        }
     }
 
     /// Sets the value for the element in `self.el` (The element must be an input)

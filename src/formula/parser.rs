@@ -1,0 +1,346 @@
+use regex::Regex;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    Number(f64),
+    CellRef(String),
+    Range(String),
+    Operator(String),
+    Function(String),
+    LeftParen,
+    RightParen,
+    Comma,
+    Colon,
+    String(String),
+}
+
+pub struct FormulaParser {
+    // regex for cell reference like A1, B2, AA100
+    cell_ref_regex: Regex,
+}
+
+impl Default for FormulaParser {
+    fn default() -> Self {
+        FormulaParser {
+            cell_ref_regex: Regex::new(r"^[A-Za-z]+[0-9]+$").unwrap(),
+        }
+    }
+}
+
+impl FormulaParser {
+    pub fn new() -> Self {
+        FormulaParser::default()
+    }
+
+    pub fn parse(&self, expr: &str) -> Result<Vec<Token>, String> {
+        let mut tokens = Vec::new();
+        let mut chars = expr.chars().peekable();
+        let mut current_number = String::new();
+        let mut in_string = false;
+        let mut string_content = String::new();
+
+        while let Some(c) = chars.next() {
+            if in_string {
+                if c == '"' {
+                    tokens.push(Token::String(string_content.clone()));
+                    string_content.clear();
+                    in_string = false;
+                } else {
+                    string_content.push(c);
+                }
+                continue;
+            }
+
+            if c == '"' {
+                in_string = true;
+                continue;
+            }
+
+            if c.is_whitespace() {
+                continue;
+            }
+
+            if c.is_numeric() || (c == '.' && !current_number.is_empty()) {
+                current_number.push(c);
+                while let Some(&next) = chars.peek() {
+                    if next.is_numeric() || next == '.' {
+                        current_number.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                tokens.push(Token::Number(current_number.parse().unwrap_or(0.0)));
+                current_number.clear();
+            } else if c.is_alphabetic() || c == '$' {
+                let mut ident = String::new();
+                ident.push(c);
+                while let Some(&next) = chars.peek() {
+                    if next.is_alphanumeric() || next == '$' {
+                        ident.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                // Check if it's a function call
+                if let Some(&'(') = chars.peek() {
+                    tokens.push(Token::Function(ident.to_uppercase()));
+                } else if self.cell_ref_regex.is_match(&ident) {
+                    tokens.push(Token::CellRef(ident.to_uppercase()));
+                } else {
+                    return Err(format!("Unknown identifier: {}", ident));
+                }
+            } else {
+                match c {
+                    '+' | '-' | '*' | '/' | '=' | '>' | '<' => {
+                        let mut op = String::from(c);
+                        if let Some(&next) = chars.peek() {
+                            if (c == '=' && next == '=') ||
+                               (c == '>' && (next == '=' || next == '>')) ||
+                               (c == '<' && (next == '=' || next == '<')) {
+                                op.push(chars.next().unwrap());
+                            }
+                        }
+                        // Handle = as comparison operator
+                        if op == "=" {
+                            // Could be comparison or formula marker - treat as comparison
+                        }
+                        tokens.push(Token::Operator(op));
+                    }
+                    '(' => tokens.push(Token::LeftParen),
+                    ')' => tokens.push(Token::RightParen),
+                    ':' => tokens.push(Token::Colon),
+                    ',' => tokens.push(Token::Comma),
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(tokens)
+    }
+}
+
+/// Convert infix expression to suffix expression
+/// Example: "AVERAGE(SUM(A1,A2), B1) + 50 + B20"
+/// Returns: tokens with operators and function markers
+pub fn infix_expr_to_suffix_expr(src: &str) -> Vec<String> {
+    let mut operator_stack: Vec<String> = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut fn_arg_type = 0; // 1 => comma, 2 => colon (range), 3 => comparison
+    let mut fn_arg_operator = String::new();
+    let mut fn_args_len = 1usize;
+    let mut oldc = ' ';
+    let mut sub_strs: Vec<char> = Vec::new();
+    let mut chars = src.chars().peekable();
+    let mut result: Vec<String> = Vec::new();
+
+    while let Some(c) = chars.next() {
+        if c == ' ' {
+            continue;
+        }
+
+        if c.is_alphabetic() {
+            sub_strs.push(c.to_ascii_uppercase());
+        } else if c.is_numeric() || (c == '.' && !sub_strs.is_empty()) {
+            sub_strs.push(c);
+        } else if c == '"' {
+            // String literal
+            let mut s = String::new();
+            loop {
+                if let Some(next) = chars.next() {
+                    if next == '"' {
+                        break;
+                    }
+                    s.push(next);
+                } else {
+                    break;
+                }
+            }
+            stack.push(format!("\"{}", s));
+        } else if c == '-' && is_arg_start(oldc) {
+            // Negative number
+            sub_strs.push(c);
+        } else {
+            // Operator or punctuation
+            if !sub_strs.is_empty() && c != '(' {
+                stack.push(sub_strs.iter().collect());
+            }
+
+            if c == '(' {
+                if !sub_strs.is_empty() {
+                    // Function call
+                    operator_stack.push(sub_strs.iter().collect());
+                }
+                sub_strs.clear();
+            } else if c == ')' {
+                // Pop from operator stack until matching '('
+                let mut top = operator_stack.pop();
+                while let Some(op) = top {
+                    if op == "(" {
+                        top = None;
+                        break;
+                    }
+                    stack.push(op);
+                    top = operator_stack.pop();
+                }
+
+                // Handle function argument types
+                if fn_arg_type == 2 {
+                    // Range: pop two cell refs and expand
+                    if let (Some(end), Some(start)) = (stack.pop(), stack.pop()) {
+                        // Range detected - push range token
+                        stack.push(format!("{}:{}", start, end));
+                        stack.push(vec![top.unwrap_or_default(), "2".to_string()].join(","));
+                    }
+                } else if fn_arg_type == 1 || fn_arg_type == 3 {
+                    if fn_arg_type == 3 && !fn_arg_operator.is_empty() {
+                        stack.push(fn_arg_operator.clone());
+                    }
+                    // Function args
+                    let func_name = operator_stack.pop().unwrap_or_default();
+                    stack.push(format!("[{},{}]", func_name, fn_args_len));
+                    fn_args_len = 1;
+                }
+
+                fn_arg_type = 0;
+            } else if c == '=' || c == '>' || c == '<' {
+                let mut nc = chars.peek().cloned();
+                fn_arg_operator = c.to_string();
+                if let Some('=') = nc {
+                    fn_arg_operator.push('=');
+                    chars.next();
+                } else if let Some('>') = nc {
+                    fn_arg_operator.push('>');
+                    chars.next();
+                } else if let Some('<') = nc {
+                    fn_arg_operator.push('<');
+                    chars.next();
+                }
+                fn_arg_type = 3;
+            } else if c == ':' {
+                fn_arg_type = 2;
+            } else if c == ',' {
+                if fn_arg_type == 3 {
+                    stack.push(fn_arg_operator.clone());
+                }
+                fn_arg_type = 1;
+                fn_args_len += 1;
+            } else if c == '+' || c == '-' || c == '*' || c == '/' {
+                // Operator precedence
+                while let Some(top) = operator_stack.last().cloned() {
+                    if top == "(" {
+                        break;
+                    }
+                    if (c == '+' || c == '-') && (top == "*" || top == "/") {
+                        break;
+                    }
+                    stack.push(operator_stack.pop().unwrap());
+                }
+                operator_stack.push(c.to_string());
+            }
+
+            sub_strs.clear();
+        }
+
+        oldc = c;
+    }
+
+    if !sub_strs.is_empty() {
+        stack.push(sub_strs.iter().collect());
+    }
+
+    while let Some(op) = operator_stack.pop() {
+        stack.push(op);
+    }
+
+    result
+}
+
+fn is_arg_start(c: char) -> bool {
+    matches!(c, '(') || c == ',' || c == '=' || c == '<' || c == '>'
+}
+
+// Tokenize a formula string for evaluation
+pub fn tokenize(formula: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = formula.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+
+        if c.is_numeric() || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_numeric()) {
+            let mut num_str = String::new();
+            while i < chars.len() && (chars[i].is_numeric() || chars[i] == '.') {
+                num_str.push(chars[i]);
+                i += 1;
+            }
+            if let Ok(num) = num_str.parse::<f64>() {
+                tokens.push(Token::Number(num));
+            }
+            continue;
+        }
+
+        if c == '"' {
+            let mut str_content = String::new();
+            i += 1;
+            while i < chars.len() && chars[i] != '"' {
+                str_content.push(chars[i]);
+                i += 1;
+            }
+            i += 1; // Skip closing quote
+            tokens.push(Token::String(str_content));
+            continue;
+        }
+
+        if c.is_alphabetic() || c == '$' {
+            let mut ident = String::new();
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '$') {
+                ident.push(chars[i].to_ascii_uppercase());
+                i += 1;
+            }
+            if i < chars.len() && chars[i] == '(' {
+                tokens.push(Token::Function(ident));
+            } else {
+                tokens.push(Token::CellRef(ident));
+            }
+            continue;
+        }
+
+        match c {
+            '+' => { tokens.push(Token::Operator("+".to_string())); i += 1; }
+            '-' => { tokens.push(Token::Operator("-".to_string())); i += 1; }
+            '*' => { tokens.push(Token::Operator("*".to_string())); i += 1; }
+            '/' => { tokens.push(Token::Operator("/".to_string())); i += 1; }
+            '(' => { tokens.push(Token::LeftParen); i += 1; }
+            ')' => { tokens.push(Token::RightParen); i += 1; }
+            ':' => { tokens.push(Token::Colon); i += 1; }
+            ',' => { tokens.push(Token::Comma); i += 1; }
+            _ => { i += 1; }
+        }
+    }
+
+    tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tokenize_simple() {
+        let tokens = tokenize("A1+B2");
+        println!("{:?}", tokens);
+    }
+
+    #[test]
+    fn test_parse() {
+        let parser = FormulaParser::new();
+        let result = parser.parse("SUM(A1,A2)");
+        println!("{:?}", result);
+    }
+}

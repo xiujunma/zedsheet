@@ -150,10 +150,40 @@ impl Default for Style {
 
 #[derive(Debug, Clone)]
 pub struct Cell {
-    value: String,
-    cell_type: String,
-    style: usize,
-    formula: String,
+    pub value: String,
+    pub cell_type: String,
+    pub style: usize,
+    pub formula: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SelectorRect {
+    pub ri: usize,
+    pub ci: usize,
+    pub eri: usize,
+    pub eci: usize,
+}
+
+impl Default for SelectorRect {
+    fn default() -> Self {
+        SelectorRect {
+            ri: 0,
+            ci: 0,
+            eri: 0,
+            eci: 0,
+        }
+    }
+}
+
+impl Default for Cell {
+    fn default() -> Self {
+        Cell {
+            value: String::new(),
+            cell_type: String::from("text"),
+            style: 0,
+            formula: String::new(),
+        }
+    }
 }
 #[derive(Debug, Clone)]
 pub struct Row {
@@ -308,6 +338,7 @@ pub struct TableRenderer {
     pub freeze: (usize, usize),
     pub freeze_gridline: Gridline,
     pub viewport: Option<Viewport>,
+    pub selector: SelectorRect,
 }
 
 impl TableRenderer {
@@ -375,6 +406,7 @@ impl TableRenderer {
                 style: None,
             },
             viewport: None,
+            selector: SelectorRect::default(),
         }
     }
 
@@ -539,16 +571,26 @@ impl TableRenderer {
     }
 
     pub fn col_width_at(&self, index: usize) -> f64 {
-        let c: Option<Col> = self.data.get_col(index);
-        return match c {
-            Some(col) => {
-                if col.hide {
-                    0f64
-                } else {
-                    col.width
-                }
-            }
-            None => self.col_width,
-        };
+        if let Some(col) = self.data.get_col(index) {
+            col.get_width()
+        } else {
+            self.col_width
+        }
+    }
+
+    pub fn set_selector(&mut self, ri: usize, ci: usize, eri: usize, eci: usize) {
+        self.selector = SelectorRect { ri, ci, eri, eci };
+    }
+
+    pub fn get_selector(&self) -> SelectorRect {
+        self.selector
+    }
+
+    pub fn set_row_height_at(&mut self, row_index: usize, height: f64) {
+        self.data.set_row_height(row_index, height);
+    }
+
+    pub fn set_col_width_at(&mut self, col_index: usize, width: f64) {
+        self.data.set_col_width(col_index, width);
     }
 }
