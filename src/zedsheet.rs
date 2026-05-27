@@ -190,6 +190,17 @@ impl ZedSheet {
         let fx_menu_node = fx_menu.el.clone();
         root.append_child(&mut fx_menu);
 
+        // Toolbar tooltip (shown on hover over a button).
+        let mut tooltip_el = h("div", Some(&format!("{}-tooltip", CSS_PREFIX)));
+        let _ = tooltip_el.el.as_ref().map(|e| {
+            let _ = e.set_attribute(
+                "style",
+                "display:none;transform:translateX(-50%);white-space:nowrap;pointer-events:none;",
+            );
+        });
+        let tooltip_node = tooltip_el.el.clone();
+        root.append_child(&mut tooltip_el);
+
         // Clear any prior mount so repeated init calls don't stack instances.
         target.set_inner_html("");
         let mut target_el: Element = target.into();
@@ -293,6 +304,9 @@ impl ZedSheet {
 
         if let Some(mut tb) = toolbar_el {
             wire_toolbar(&mut tb, &renderer, palette_node.clone(), &palette_mode, menus, &sync);
+        }
+        if let (Some(tb), Some(tip)) = (toolbar_node.clone(), tooltip_node) {
+            wire_tooltip(tb, tip);
         }
         if let Some(pal) = palette_node {
             wire_palette(pal, &renderer, &palette_mode);
@@ -982,6 +996,53 @@ fn hide_palette(palette: &web_sys::Element) {
         .unchecked_ref::<web_sys::HtmlElement>()
         .style()
         .set_property("display", "none");
+}
+
+fn hide_tooltip(tooltip: &web_sys::Element) {
+    let _ = tooltip
+        .unchecked_ref::<web_sys::HtmlElement>()
+        .style()
+        .set_property("display", "none");
+}
+
+/// Show a styled tooltip below the hovered toolbar button (`data-tip`), and
+/// hide it when the pointer leaves the toolbar.
+fn wire_tooltip(toolbar: web_sys::Element, tooltip: web_sys::Element) {
+    {
+        let tooltip = tooltip.clone();
+        let mut tb: Element = toolbar.clone().into();
+        tb.add_event_listener("mouseover", move |event: web_sys::Event| {
+            let Some(target) = event.target() else { return };
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+            let btn = el
+                .get_attribute("data-tip")
+                .map(|_| el.clone())
+                .or_else(|| el.closest("[data-tip]").ok().flatten());
+            match btn {
+                Some(btn) => {
+                    let tip = btn.get_attribute("data-tip").unwrap_or_default();
+                    if tip.is_empty() {
+                        hide_tooltip(&tooltip);
+                        return;
+                    }
+                    tooltip.set_text_content(Some(&tip));
+                    let rect = btn.get_bounding_client_rect();
+                    let style = tooltip.unchecked_ref::<web_sys::HtmlElement>().style();
+                    let _ = style.set_property("left", &format!("{}px", rect.left() + rect.width() / 2f64));
+                    let _ = style.set_property("top", &format!("{}px", rect.bottom() + 8f64));
+                    let _ = style.set_property("display", "block");
+                }
+                None => hide_tooltip(&tooltip),
+            }
+        });
+    }
+    {
+        let tooltip = tooltip.clone();
+        let mut tb: Element = toolbar.into();
+        tb.add_event_listener("mouseout", move |_event: web_sys::Event| {
+            hide_tooltip(&tooltip);
+        });
+    }
 }
 
 /// Delegated click handler on the toolbar: maps a button's `data-action` to a

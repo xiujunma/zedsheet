@@ -180,7 +180,33 @@ impl DataProxy {
     fn eval_expr(&self, expr: &str, visited: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
         let tokens = tokenize(expr);
         let mut pos = 0usize;
-        let v = self.parse_add(&tokens, &mut pos, visited)?;
+        let v = self.parse_cmp(&tokens, &mut pos, visited)?;
+        Ok(v)
+    }
+
+    // expr := add ((= | == | > | < | >= | <=) add)*  — comparisons yield 1.0/0.0
+    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
+        let mut v = self.parse_add(t, pos, vis)?;
+        while *pos < t.len() {
+            if let Token::Operator(op) = &t[*pos] {
+                if matches!(op.as_str(), "=" | "==" | ">" | "<" | ">=" | "<=") {
+                    let op = op.clone();
+                    *pos += 1;
+                    let r = self.parse_add(t, pos, vis)?;
+                    let b = match op.as_str() {
+                        "=" | "==" => v == r,
+                        ">" => v > r,
+                        "<" => v < r,
+                        ">=" => v >= r,
+                        "<=" => v <= r,
+                        _ => false,
+                    };
+                    v = if b { 1.0 } else { 0.0 };
+                    continue;
+                }
+            }
+            break;
+        }
         Ok(v)
     }
 
@@ -243,7 +269,7 @@ impl DataProxy {
             }
             Token::LeftParen => {
                 *pos += 1;
-                let v = self.parse_add(t, pos, vis)?;
+                let v = self.parse_cmp(t, pos, vis)?;
                 if matches!(t.get(*pos), Some(Token::RightParen)) {
                     *pos += 1;
                 }
@@ -294,7 +320,7 @@ impl DataProxy {
                 }
                 *pos += 3;
             } else {
-                args.push(self.parse_add(t, pos, vis)?);
+                args.push(self.parse_cmp(t, pos, vis)?);
             }
 
             match t.get(*pos) {
@@ -764,5 +790,55 @@ fn apply_function(name: &str, args: &[f64]) -> f64 {
             }
         }
         _ => 0.0,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a sheet where each referenced cell holds the value `row + col`,
+    /// mirroring the resolver `(x, y) => x + y` used in x-spreadsheet's
+    /// cell_test.js, then evaluate a formula placed in a spare cell.
+    fn eval(formula: &str, cells: &[(usize, usize)]) -> String {
+        let mut d = DataProxy::new("t");
+        for &(r, c) in cells {
+            d.set_cell_text(r, c, &(r + c).to_string());
+        }
+        d.set_cell_text(50, 50, formula);
+        d.cell_display_value(50, 50)
+    }
+
+    // Ported from x-spreadsheet test/core/cell_test.js (cell.render behavior).
+    #[test]
+    fn sum_plus_literals() {
+        // =SUM(A1,B2,C1,C5)+50+B20 = 0+2+2+6+50+20
+        let cells = [(0, 0), (1, 1), (0, 2), (4, 2), (19, 1)];
+        assert_eq!(eval("=SUM(A1,B2, C1, C5) + 50 + B20", &cells), "80");
+    }
+
+    #[test]
+    fn literal_plus_ref() {
+        assert_eq!(eval("=50 + B20", &[(19, 1)]), "70");
+    }
+
+    #[test]
+    fn if_with_comparison() {
+        assert_eq!(eval("=IF(2>1, 2, 1)", &[]), "2");
+        assert_eq!(eval("=IF(1>2, 2, 1)", &[]), "1");
+        assert_eq!(eval("=IF(1=1, 7, 9)", &[]), "7");
+    }
+
+    #[test]
+    fn average_range_with_arithmetic() {
+        // =AVERAGE(A1:A3)+50*10-B20 = 1 + 500 - 20
+        let cells = [(0, 0), (1, 0), (2, 0), (19, 1)];
+        assert_eq!(eval("=AVERAGE(A1:A3) + 50 * 10 - B20", &cells), "481");
+    }
+
+    #[test]
+    fn operator_precedence() {
+        assert_eq!(eval("=1+2*3+(4*5+6)*7", &[]), "189");
+        assert_eq!(eval("=10-5-20", &[]), "-15");
+        assert_eq!(eval("=10-5*20", &[]), "-90");
     }
 }

@@ -70,3 +70,25 @@ pub fn number_calc(type_: &str, a1: f64, a2: f64) -> String {
     };
     format!("{}", result)
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    // Ported from x-spreadsheet test/helper_test.js
+    #[test]
+    fn clone_deep_is_independent() {
+        let obj: Value = json!({ "k": { "k1": "v" } });
+        let mut obj1 = clone_deep(&obj);
+        obj1["k"]["k1"] = json!("v1");
+        assert_eq!(obj["k"]["k1"], json!("v"));
+    }
+
+    #[test]
+    fn merge_objects() {
+        let mut a: Value = json!({ "a": "a" });
+        merge(&mut a, &[json!({ "b": "b" })]);
+        assert_eq!(a["a"], json!("a"));
+        assert_eq!(a["b"], json!("b"));
+    }
+}

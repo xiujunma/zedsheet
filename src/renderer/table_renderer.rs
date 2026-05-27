@@ -361,6 +361,8 @@ pub struct TableRenderer {
     pub freeze_gridline: Gridline,
     pub viewport: Option<Viewport>,
     pub selector: SelectorRect,
+    /// Fixed corner of a drag/shift selection (the original mousedown cell).
+    pub selection_anchor: (usize, usize),
     pub clipboard: Option<ClipboardData>,
 }
 
@@ -430,6 +432,7 @@ impl TableRenderer {
             },
             viewport: None,
             selector: SelectorRect::default(),
+            selection_anchor: (0, 0),
             clipboard: None,
         }
     }
@@ -694,15 +697,16 @@ impl TableRenderer {
     /// Select a cell. If it falls inside a merge, the whole merged range is
     /// selected (with the merge origin as the active cell).
     pub fn select_cell(&mut self, ri: usize, ci: usize) {
+        self.selection_anchor = (ri, ci);
         let (r0, c0, r1, c1) = self.data.expand_range_with_merges(ri, ci, ri, ci);
         self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
     }
 
     /// Extend the selection to (ri, ci) for drag/shift-select, growing the
-    /// rectangle to fully cover any merges it touches.
+    /// rectangle to fully cover any merges it touches. Anchored on the fixed
+    /// mousedown cell so dragging in any direction works.
     pub fn select_to(&mut self, ri: usize, ci: usize) {
-        let ar = self.selector.ri;
-        let ac = self.selector.ci;
+        let (ar, ac) = self.selection_anchor;
         let (r0, c0, r1, c1) = self.data.expand_range_with_merges(
             ar.min(ri),
             ac.min(ci),

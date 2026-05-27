@@ -320,6 +320,16 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             ')' => { tokens.push(Token::RightParen); i += 1; }
             ':' => { tokens.push(Token::Colon); i += 1; }
             ',' => { tokens.push(Token::Comma); i += 1; }
+            // Comparison operators, consuming a trailing '=' for >=/<=/==.
+            '>' | '<' | '=' => {
+                let mut op = c.to_string();
+                if i + 1 < chars.len() && chars[i + 1] == '=' {
+                    op.push('=');
+                    i += 1;
+                }
+                tokens.push(Token::Operator(op));
+                i += 1;
+            }
             _ => { i += 1; }
         }
     }

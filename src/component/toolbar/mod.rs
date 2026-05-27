@@ -108,6 +108,7 @@ impl Toolbar {
         ] {
             let mut btn = h("div", Some(&format!("{}-toolbar-btn", CSS_PREFIX)));
             btn.dataset_set("action", action);
+            btn.dataset_set("tip", tip_for(action));
             btn.set_inner_html(format!(
                 "<div class=\"{p}-dropdown bottom-left\"><div class=\"{p}-dropdown-header\">\
                    <div class=\"{p}-dropdown-title\" id=\"{id}\" style=\"display:inline-block;width:{w}px;text-align:left;padding:0 4px;line-height:26px;\">{title}</div>\
@@ -126,6 +127,7 @@ impl Toolbar {
                 Some((action, icon)) => {
                     let mut btn = h("div", Some(&format!("{}-toolbar-btn", CSS_PREFIX)));
                     btn.dataset_set("action", action);
+                    btn.dataset_set("tip", tip_for(action));
                     btn.set_inner_html(format!(
                         "<div class=\"{prefix}-icon\"><div class=\"{prefix}-icon-img {icon}\"></div></div>",
                         prefix = CSS_PREFIX,
@@ -169,6 +171,38 @@ impl Toolbar {
 impl Default for Toolbar {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Human-readable tooltip text for a toolbar button's `data-action`.
+fn tip_for(action: &str) -> &'static str {
+    match action {
+        "dd-format" => "Format",
+        "dd-font" => "Font",
+        "dd-fontsize" => "Font size",
+        "undo" => "Undo",
+        "redo" => "Redo",
+        "print" => "Print",
+        "paintformat" => "Paint format",
+        "clearformat" => "Clear format",
+        "font-bold" => "Bold (Ctrl+B)",
+        "font-italic" => "Italic (Ctrl+I)",
+        "underline" => "Underline (Ctrl+U)",
+        "strike" => "Strikethrough",
+        "color" => "Text color",
+        "bgcolor" => "Fill color",
+        "merge" => "Merge cells",
+        "align-left" => "Align left",
+        "align-center" => "Align center",
+        "align-right" => "Align right",
+        "align-top" => "Align top",
+        "align-middle" => "Align middle",
+        "align-bottom" => "Align bottom",
+        "textwrap" => "Text wrap",
+        "freeze" => "Freeze",
+        "autofilter" => "Filter",
+        "formula" => "Functions",
+        _ => "",
     }
 }
 
