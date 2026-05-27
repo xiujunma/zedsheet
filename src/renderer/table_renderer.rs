@@ -9,7 +9,7 @@ use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
-use crate::core::data_proxy::{DataProxy, Style as CellStyle};
+use crate::core::data_proxy::{DataProxy, Style as CellStyle, Border as CellBorder};
 use crate::core::cell_range::CellRange;
 use crate::core::cell::Cell as DataCell;
 
@@ -946,6 +946,41 @@ impl TableRenderer {
     pub fn set_format(&mut self, format: &str) {
         let f = format.to_string();
         self.update_selection_style(move |s| s.format = f.clone());
+    }
+
+    /// Apply borders to the selection. `mode` is one of:
+    /// all | outer | none | top | bottom | left | right.
+    pub fn set_borders(&mut self, mode: &str) {
+        self.snapshot();
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        let line = Some(("thin".to_string(), "#000000".to_string()));
+        for ri in r0..=r1 {
+            for ci in c0..=c1 {
+                let mut style = self.data.get_cell_style(ri, ci);
+                if mode == "none" {
+                    style.border = None;
+                } else {
+                    let mut b = style.border.clone().unwrap_or(CellBorder {
+                        left: None,
+                        right: None,
+                        top: None,
+                        bottom: None,
+                    });
+                    let want_top = mode == "all" || mode == "top" || (mode == "outer" && ri == r0);
+                    let want_bottom = mode == "all" || mode == "bottom" || (mode == "outer" && ri == r1);
+                    let want_left = mode == "all" || mode == "left" || (mode == "outer" && ci == c0);
+                    let want_right = mode == "all" || mode == "right" || (mode == "outer" && ci == c1);
+                    if want_top { b.top = line.clone(); }
+                    if want_bottom { b.bottom = line.clone(); }
+                    if want_left { b.left = line.clone(); }
+                    if want_right { b.right = line.clone(); }
+                    let empty = b.top.is_none() && b.bottom.is_none() && b.left.is_none() && b.right.is_none();
+                    style.border = if empty { None } else { Some(b) };
+                }
+                let idx = self.data.add_style(style);
+                self.data.set_cell_style(ri, ci, idx);
+            }
+        }
     }
 
     pub fn set_font_family(&mut self, family: &str) {

@@ -191,6 +191,18 @@ impl ZedSheet {
         let fx_menu_node = fx_menu.el.clone();
         root.append_child(&mut fx_menu);
 
+        // Borders dropdown menu (opened by the toolbar borders button).
+        let mut border_menu = h("div", Some(&format!("{}-dropdown-menu", CSS_PREFIX)));
+        border_menu.set_inner_html(border_menu_html());
+        let _ = border_menu.el.as_ref().map(|e| {
+            let _ = e.set_attribute(
+                "style",
+                "display:none;position:absolute;z-index:200;background:#fff;border:1px solid #ccc;box-shadow:1px 2px 5px 2px rgba(51,51,51,0.15);width:130px;",
+            );
+        });
+        let border_menu_node = border_menu.el.clone();
+        root.append_child(&mut border_menu);
+
         // Toolbar tooltip (shown on hover over a button).
         let mut tooltip_el = h("div", Some(&format!("{}-tooltip", CSS_PREFIX)));
         let _ = tooltip_el.el.as_ref().map(|e| {
@@ -312,13 +324,19 @@ impl ZedSheet {
             wire_formula_bar(fb, &renderer, &sync, fx_menu_node);
         }
         // Map of toolbar action → dropdown menu node (for show-on-click).
-        let menus: Vec<(String, web_sys::Element)> = dropdown_nodes
+        let mut menus: Vec<(String, web_sys::Element)> = dropdown_nodes
             .iter()
             .map(|(a, n, _, _)| (a.clone(), n.clone()))
             .collect();
+        if let Some(bm) = border_menu_node.clone() {
+            menus.push(("borders".to_string(), bm));
+        }
 
         if let Some(mut tb) = toolbar_el {
             wire_toolbar(&mut tb, &renderer, palette_node.clone(), &palette_mode, menus, &sync);
+        }
+        if let Some(bm) = border_menu_node {
+            wire_border_menu(bm, &renderer, &sync);
         }
         if let (Some(tb), Some(tip)) = (toolbar_node.clone(), tooltip_node) {
             wire_tooltip(tb, tip);
@@ -1431,6 +1449,54 @@ fn dropdown_menu_html(items: &[(&str, &str)]) -> String {
         ));
     }
     s
+}
+
+/// Rows for the borders dropdown (each with a sprite icon + label).
+fn border_menu_html() -> String {
+    let items = [
+        ("all", "border-all", "All borders"),
+        ("outer", "border-outside", "Outer"),
+        ("top", "border-top", "Top"),
+        ("bottom", "border-bottom", "Bottom"),
+        ("left", "border-left", "Left"),
+        ("right", "border-right", "Right"),
+        ("none", "border-none", "None"),
+    ];
+    let mut s = String::new();
+    for (mode, icon, label) in items {
+        s.push_str(&format!(
+            "<div class=\"{p}-item\" data-border=\"{mode}\" style=\"cursor:pointer;display:flex;align-items:center;gap:6px;\">\
+               <span class=\"{p}-icon\"><span class=\"{p}-icon-img {icon}\"></span></span>{label}\
+             </div>",
+            p = CSS_PREFIX, mode = mode, icon = icon, label = label
+        ));
+    }
+    s
+}
+
+/// Wire the borders dropdown: a row applies that border mode to the selection.
+fn wire_border_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    let renderer = renderer.clone();
+    let sync = sync.clone();
+    let menu_for_hide = menu.clone();
+    let mut el: Element = menu.into();
+    el.add_event_listener("click", move |event: web_sys::Event| {
+        let Some(target) = event.target() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let item = elx
+            .get_attribute("data-border")
+            .map(|_| elx.clone())
+            .or_else(|| elx.closest("[data-border]").ok().flatten());
+        let Some(item) = item else { return };
+        let Some(mode) = item.get_attribute("data-border") else { return };
+        {
+            let mut r = renderer.borrow_mut();
+            r.set_borders(&mode);
+            r.render();
+        }
+        sync();
+        hide_palette(&menu_for_hide);
+    });
 }
 
 /// Wire a toolbar dropdown: a row click applies the value, updates the button

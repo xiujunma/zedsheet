@@ -346,7 +346,34 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
         canvas.set_line_width(grid.width);
         canvas.line(draw_rect.x + draw_rect.width, draw_rect.y, draw_rect.x + draw_rect.width, draw_rect.y + draw_rect.height);
         canvas.line(draw_rect.x, draw_rect.y + draw_rect.height, draw_rect.x + draw_rect.width, draw_rect.y + draw_rect.height);
+
+        // Per-cell borders (drawn on top of the gridlines).
+        if let Some(b) = &style.border {
+            let x0 = draw_rect.x;
+            let y0 = draw_rect.y;
+            let x1 = draw_rect.x + draw_rect.width;
+            let y1 = draw_rect.y + draw_rect.height;
+            draw_border_side(canvas, &b.top, x0, y0, x1, y0);
+            draw_border_side(canvas, &b.bottom, x0, y1, x1, y1);
+            draw_border_side(canvas, &b.left, x0, y0, x0, y1);
+            draw_border_side(canvas, &b.right, x1, y0, x1, y1);
+        }
     });
+}
+
+/// Draw one border edge if present. The tuple is (style, color); the style
+/// name selects the line width.
+fn draw_border_side(canvas: &Canvas, side: &Option<(String, String)>, x0: f64, y0: f64, x1: f64, y1: f64) {
+    if let Some((style, color)) = side {
+        let w = match style.as_str() {
+            "medium" => 2.0,
+            "thick" => 3.0,
+            _ => 1.0, // thin / unknown
+        };
+        canvas.set_stroke_style(color.as_str());
+        canvas.set_line_width(w);
+        canvas.line(x0, y0, x1, y1);
+    }
 }
 
 fn is_white(color: &str) -> bool {
