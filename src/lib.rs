@@ -2,6 +2,7 @@ extern crate console_error_panic_hook;
 use std::panic;
 
 use wasm_bindgen::prelude::*;
+use gloo::utils::document;
 
 mod renderer;
 mod component;
@@ -15,18 +16,42 @@ use core::cell_range::CellRange;
 use component::options::Options;
 use zedsheet::ZedSheet;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-static STARTED: AtomicBool = AtomicBool::new(false);
-
+/// Module init. Installs the panic hook. For the standalone Trunk demo it also
+/// auto-mounts sample data into `#zedsheet` if that element is present; in a
+/// host app (React, etc.) there is no such element, so nothing auto-mounts and
+/// the host calls `mount` explicitly.
 #[wasm_bindgen(start)]
 pub fn start() {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
 
-    // Guard against repeated init (trunk can run the start hook more than once).
-    if STARTED.swap(true, Ordering::SeqCst) {
-        return;
+    if document().query_selector("#zedsheet").ok().flatten().is_some() {
+        let sheet = ZedSheet::new("#zedsheet", Options::default(), demo_data());
+        std::mem::forget(sheet);
     }
+}
 
+/// Mount a spreadsheet into the element matching `selector`. Optionally seed it
+/// with x-spreadsheet-format JSON; pass `undefined`/empty for a blank sheet.
+///
+/// ```js
+/// import init, { mount } from "zedsheet";
+/// await init();
+/// mount("#my-grid", JSON.stringify(data)); // data optional
+/// ```
+#[wasm_bindgen]
+pub fn mount(selector: &str, data_json: Option<String>) {
+    let mut data = DataProxy::new("sheet1");
+    if let Some(json) = data_json {
+        if !json.trim().is_empty() {
+            data.set_data_json(&json);
+        }
+    }
+    let sheet = ZedSheet::new(selector, Options::default(), data);
+    std::mem::forget(sheet);
+}
+
+/// Sample data for the standalone demo.
+fn demo_data() -> DataProxy {
     let mut data = DataProxy::new("sheet1");
 
     // Bold, centered, shaded header row.
@@ -87,7 +112,5 @@ pub fn start() {
     data.set_cell_style(0, 3, m_idx);
     data.merges.add(CellRange::new(0, 3, 1, 4));
 
-    // Mount the full spreadsheet shell into the #zedsheet container.
-    let _sheet = ZedSheet::new("#zedsheet", Options::default(), data);
-    std::mem::forget(_sheet);
+    data
 }

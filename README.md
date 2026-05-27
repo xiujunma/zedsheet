@@ -67,6 +67,23 @@ cd dist && python3 -m http.server 8099
 Then open the printed URL. The app mounts into the `#zedsheet` element in
 [`index.html`](./index.html).
 
+### Using it in your own app (React, etc.)
+
+Build an importable package with `wasm-pack` and call the exported `mount`:
+
+```sh
+wasm-pack build --target web --out-dir pkg --out-name zedsheet
+```
+
+```js
+import init, { mount } from "zedsheet";
+await init();
+mount("#my-grid");   // mounts an interactive spreadsheet into that element
+```
+
+See **[docs/REACT.md](./docs/REACT.md)** for the full React walkthrough
+(component, styles, sprite asset, bundler notes).
+
 > **Tip:** when verifying behavior, prefer building once and serving the static
 > `dist/` over `trunk serve` — Trunk's auto-reload re-initializes the WASM
 > module and can re-run the mount during a session.
