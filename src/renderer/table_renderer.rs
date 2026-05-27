@@ -364,6 +364,9 @@ pub struct TableRenderer {
     /// Fixed corner of a drag/shift selection (the original mousedown cell).
     pub selection_anchor: (usize, usize),
     pub clipboard: Option<ClipboardData>,
+    /// Undo/redo snapshots of the active sheet's data.
+    undo_stack: Vec<DataProxy>,
+    redo_stack: Vec<DataProxy>,
 }
 
 impl TableRenderer {
@@ -434,6 +437,8 @@ impl TableRenderer {
             selector: SelectorRect::default(),
             selection_anchor: (0, 0),
             clipboard: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -748,11 +753,12 @@ impl TableRenderer {
     }
 
     pub fn set_cell_text_at(&mut self, ri: usize, ci: usize, text: &str) {
+        self.snapshot();
         self.data.set_cell_text(ri, ci, text);
     }
 
     /// Replace the active sheet data (used when switching sheet tabs), resetting
-    /// the view state to the top-left.
+    /// the view state and undo history.
     pub fn set_data(&mut self, data: DataProxy) {
         self.freeze = data.freeze;
         self.data = data;
@@ -761,6 +767,41 @@ impl TableRenderer {
         self.scroll_rows = 0;
         self.scroll_cols = 0;
         self.selector = SelectorRect::default();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
+    /// Record the current data on the undo stack before a mutation, dropping
+    /// the redo history. Call at the start of every user-initiated edit.
+    fn snapshot(&mut self) {
+        const MAX_UNDO: usize = 100;
+        self.undo_stack.push(self.data.clone());
+        if self.undo_stack.len() > MAX_UNDO {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(self.data.clone());
+            self.data = prev;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.data.clone());
+            self.data = next;
+        }
     }
 
     pub fn data_clone(&self) -> DataProxy {
@@ -780,6 +821,7 @@ impl TableRenderer {
 
     /// Apply a style mutation to every cell in the current selection.
     pub fn update_selection_style<F: Fn(&mut CellStyle)>(&mut self, f: F) {
+        self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
         for ri in r0..=r1 {
             for ci in c0..=c1 {
@@ -852,6 +894,7 @@ impl TableRenderer {
 
     /// Remove styling from every cell in the selection.
     pub fn clear_format(&mut self) {
+        self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
         for ri in r0..=r1 {
             for ci in c0..=c1 {
@@ -864,6 +907,7 @@ impl TableRenderer {
 
     /// Merge the selection (or unmerge when a single merged cell is selected).
     pub fn merge_selection(&mut self) {
+        self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
         if r0 == r1 && c0 == c1 {
             if let Some(m) = self.data.cell_merge(r0, c0) {
@@ -898,6 +942,10 @@ impl TableRenderer {
     /// Paste the clipboard at the current selection's top-left. A cut clears
     /// the source cells afterwards.
     pub fn paste(&mut self) {
+        if self.clipboard.is_none() {
+            return;
+        }
+        self.snapshot();
         let Some(cb) = self.clipboard.take() else { return };
         let (dr0, dc0, _, _) = self.selection_bounds();
         for (i, row) in cb.cells.iter().enumerate() {
@@ -917,6 +965,7 @@ impl TableRenderer {
     }
 
     pub fn clear_selection_content(&mut self) {
+        self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
         for ri in r0..=r1 {
             for ci in c0..=c1 {
@@ -926,11 +975,13 @@ impl TableRenderer {
     }
 
     pub fn insert_row_at_selection(&mut self) {
+        self.snapshot();
         let (r0, _, _, _) = self.selection_bounds();
         self.data.insert_row(r0, 1);
     }
 
     pub fn delete_rows_at_selection(&mut self) {
+        self.snapshot();
         let (r0, _, r1, _) = self.selection_bounds();
         for _ in r0..=r1 {
             self.data.delete_row(r0);
@@ -938,11 +989,13 @@ impl TableRenderer {
     }
 
     pub fn insert_col_at_selection(&mut self) {
+        self.snapshot();
         let (_, c0, _, _) = self.selection_bounds();
         self.data.insert_col(c0, 1);
     }
 
     pub fn delete_cols_at_selection(&mut self) {
+        self.snapshot();
         let (_, c0, _, c1) = self.selection_bounds();
         for _ in c0..=c1 {
             self.data.delete_col(c0);

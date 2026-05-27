@@ -271,6 +271,8 @@ impl ZedSheet {
                 }
                 let style = r.data.get_cell_style(ri, ci);
                 if let Some(tb) = &toolbar_node {
+                    toggle_disabled(tb, "undo", !r.can_undo());
+                    toggle_disabled(tb, "redo", !r.can_redo());
                     toggle_active(tb, "font-bold", style.bold);
                     toggle_active(tb, "font-italic", style.italic);
                     toggle_active(tb, "underline", style.underline);
@@ -346,6 +348,18 @@ fn toggle_active(toolbar: &web_sys::Element, action: &str, on: bool) {
             let _ = cl.add_1("active");
         } else {
             let _ = cl.remove_1("active");
+        }
+    }
+}
+
+/// Toggle the `disabled` class on a toolbar button identified by its data-action.
+fn toggle_disabled(toolbar: &web_sys::Element, action: &str, on: bool) {
+    if let Ok(Some(btn)) = toolbar.query_selector(&format!("[data-action=\"{}\"]", action)) {
+        let cl = btn.class_list();
+        if on {
+            let _ = cl.add_1("disabled");
+        } else {
+            let _ = cl.remove_1("disabled");
         }
     }
 }
@@ -1086,6 +1100,8 @@ fn wire_toolbar(
 
         let mut r = renderer.borrow_mut();
         match action.as_str() {
+            "undo" => r.undo(),
+            "redo" => r.redo(),
             "font-bold" => r.toggle_bold(),
             "font-italic" => r.toggle_italic(),
             "underline" => r.toggle_underline(),
@@ -1406,6 +1422,10 @@ fn wire_events(
                         "b" => r.toggle_bold(),
                         "i" => r.toggle_italic(),
                         "u" => r.toggle_underline(),
+                        // Ctrl/Cmd+Z undo; Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redo.
+                        "z" if ke.shift_key() => r.redo(),
+                        "z" => r.undo(),
+                        "y" => r.redo(),
                         _ => handled = false,
                     }
                     if handled {
