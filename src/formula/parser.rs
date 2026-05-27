@@ -12,6 +12,8 @@ pub enum Token {
     Comma,
     Colon,
     String(String),
+    /// A literal error value like `#DIV/0!` or `#N/A`.
+    Error(String),
 }
 
 pub struct FormulaParser {
@@ -294,6 +296,21 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             }
             i += 1; // Skip closing quote
             tokens.push(Token::String(str_content));
+            continue;
+        }
+
+        // Error literal, e.g. #DIV/0!, #N/A, #NAME?, #REF!
+        if c == '#' {
+            let mut lit = String::from('#');
+            i += 1;
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric()
+                    || matches!(chars[i], '/' | '?' | '!' | '.'))
+            {
+                lit.push(chars[i]);
+                i += 1;
+            }
+            tokens.push(Token::Error(lit));
             continue;
         }
 

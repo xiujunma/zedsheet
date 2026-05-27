@@ -145,12 +145,16 @@ impl DataProxy {
     /// evaluated; everything else is returned verbatim.
     pub fn cell_display_value(&self, ri: usize, ci: usize) -> String {
         let text = self.get_cell_text(ri, ci);
+        // A cell that literally holds an error value displays it verbatim.
+        if EvalErr::from_literal(&text).is_some() {
+            return text;
+        }
         let raw = if let Some(expr) = text.strip_prefix('=') {
             let mut visited = HashSet::new();
             visited.insert((ri, ci));
             match self.eval_expr(expr, &mut visited) {
                 Ok(v) => format_number(v),
-                Err(_) => return "#ERROR".to_string(),
+                Err(e) => return e.code().to_string(),
             }
         } else {
             text
@@ -160,24 +164,28 @@ impl DataProxy {
         crate::core::format::format_value(&raw, &fmt)
     }
 
-    /// Resolve a cell to a numeric value for use inside a formula. Non-numeric
-    /// text resolves to 0; nested formulas recurse with a circular-ref guard.
-    fn resolve_numeric(&self, ri: usize, ci: usize, visited: &mut HashSet<(usize, usize)>) -> f64 {
+    /// Resolve a cell to a numeric value for use inside a formula. Error values
+    /// propagate; non-numeric text resolves to 0; nested formulas recurse with
+    /// a circular-ref guard.
+    fn resolve_numeric(&self, ri: usize, ci: usize, visited: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
         if visited.contains(&(ri, ci)) {
-            return 0.0;
+            return Ok(0.0);
         }
         let text = self.get_cell_text(ri, ci);
+        if let Some(e) = EvalErr::from_literal(&text) {
+            return Err(e);
+        }
         if let Some(expr) = text.strip_prefix('=') {
             visited.insert((ri, ci));
-            let v = self.eval_expr(expr, visited).unwrap_or(0.0);
+            let v = self.eval_expr(expr, visited);
             visited.remove(&(ri, ci));
             v
         } else {
-            text.trim().parse::<f64>().unwrap_or(0.0)
+            Ok(text.trim().parse::<f64>().unwrap_or(0.0))
         }
     }
 
-    fn eval_expr(&self, expr: &str, visited: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
+    fn eval_expr(&self, expr: &str, visited: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
         let tokens = tokenize(expr);
         let mut pos = 0usize;
         let v = self.parse_cmp(&tokens, &mut pos, visited)?;
@@ -185,7 +193,7 @@ impl DataProxy {
     }
 
     // expr := add ((= | == | > | < | >= | <=) add)*  — comparisons yield 1.0/0.0
-    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
+    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
         let mut v = self.parse_add(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
@@ -211,7 +219,7 @@ impl DataProxy {
     }
 
     // expr := term (('+' | '-') term)*
-    fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
+    fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
         let mut v = self.parse_mul(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
@@ -228,7 +236,7 @@ impl DataProxy {
     }
 
     // term := factor (('*' | '/') factor)*
-    fn parse_mul(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
+    fn parse_mul(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
         let mut v = self.parse_factor(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
@@ -239,7 +247,7 @@ impl DataProxy {
                         v *= r;
                     } else {
                         if r == 0.0 {
-                            return Err("div by zero".to_string());
+                            return Err(EvalErr::Div0);
                         }
                         v /= r;
                     }
@@ -252,12 +260,16 @@ impl DataProxy {
     }
 
     // factor := Number | '-' factor | '(' expr ')' | Function '(' args ')' | CellRef
-    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, String> {
-        let tok = t.get(*pos).ok_or("unexpected end")?.clone();
+    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
+        let tok = t.get(*pos).ok_or(EvalErr::Value)?.clone();
         match tok {
             Token::Number(n) => {
                 *pos += 1;
                 Ok(n)
+            }
+            Token::Error(code) => {
+                *pos += 1;
+                Err(EvalErr::from_literal(&code).unwrap_or(EvalErr::Value))
             }
             Token::Operator(op) if op == "-" => {
                 *pos += 1;
@@ -281,24 +293,24 @@ impl DataProxy {
                     *pos += 1;
                 }
                 let args = self.parse_args(t, pos, vis)?;
-                Ok(apply_function(&name, &args))
+                apply_function(&name, &args)
             }
             Token::CellRef(r) => {
                 *pos += 1;
                 let (c, row) = exp2xy(&r);
-                Ok(self.resolve_numeric(row, c, vis))
+                self.resolve_numeric(row, c, vis)
             }
             Token::String(s) => {
                 *pos += 1;
                 Ok(s.trim().parse::<f64>().unwrap_or(0.0))
             }
-            other => Err(format!("unexpected token {:?}", other)),
+            _ => Err(EvalErr::Value),
         }
     }
 
     // Parse a comma-separated argument list (until RightParen), flattening
     // any `A1:B3` ranges into the individual cell values they cover.
-    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<Vec<f64>, String> {
+    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<Vec<f64>, EvalErr> {
         let mut args = Vec::new();
         if matches!(t.get(*pos), Some(Token::RightParen)) {
             *pos += 1;
@@ -315,7 +327,7 @@ impl DataProxy {
                 let (c0, c1) = (c0.min(c1), c0.max(c1));
                 for r in r0..=r1 {
                     for c in c0..=c1 {
-                        args.push(self.resolve_numeric(r, c, vis));
+                        args.push(self.resolve_numeric(r, c, vis)?);
                     }
                 }
                 *pos += 3;
@@ -420,7 +432,7 @@ impl DataProxy {
         self.rows = new_rows;
         self.row_count += n;
         self.merges.shift("row", at, n as isize, |_, _, _, _| {});
-        self.adjust_all_formulas(true, at, n as isize);
+        self.adjust_all_formulas(true, at, n as isize, None);
     }
 
     /// Delete the row at `at`, shifting later rows up.
@@ -436,7 +448,7 @@ impl DataProxy {
         self.rows = new_rows;
         self.row_count = self.row_count.saturating_sub(1);
         self.merges.shift("row", at, -1, |_, _, _, _| {});
-        self.adjust_all_formulas(true, at + 1, -1);
+        self.adjust_all_formulas(true, at + 1, -1, Some(at));
     }
 
     /// Insert `n` blank columns at `at`, shifting existing cells/cols right.
@@ -457,7 +469,7 @@ impl DataProxy {
         self.cols.data = new_cols;
         self.cols.len += n;
         self.merges.shift("column", at, n as isize, |_, _, _, _| {});
-        self.adjust_all_formulas(false, at, n as isize);
+        self.adjust_all_formulas(false, at, n as isize, None);
     }
 
     /// Delete the column at `at`, shifting later cells/cols left.
@@ -484,17 +496,17 @@ impl DataProxy {
         self.cols.data = new_cols;
         self.cols.len = self.cols.len.saturating_sub(1);
         self.merges.shift("column", at, -1, |_, _, _, _| {});
-        self.adjust_all_formulas(false, at + 1, -1);
+        self.adjust_all_formulas(false, at + 1, -1, Some(at));
     }
 
     /// Rewrite cell references in every formula after a structural edit. Any
     /// reference whose row (or column, when `is_row` is false) index is
     /// `>= shift_from` is offset by `delta`.
-    fn adjust_all_formulas(&mut self, is_row: bool, shift_from: usize, delta: isize) {
+    fn adjust_all_formulas(&mut self, is_row: bool, shift_from: usize, delta: isize, deleted: Option<usize>) {
         for row in self.rows.values_mut() {
             for cell in row.cells.values_mut() {
                 if cell.text.starts_with('=') {
-                    cell.text = adjust_formula_refs(&cell.text, is_row, shift_from, delta);
+                    cell.text = adjust_formula_refs(&cell.text, is_row, shift_from, delta, deleted);
                 }
             }
         }
@@ -731,16 +743,30 @@ impl DataProxy {
 
 /// Rewrite the cell references inside a formula string after a row/column
 /// insert or delete. A reference is `$?col$?row` (e.g. `A1`, `$A$1`, `$A1`,
-/// `A$1`); a `$`-locked component is never shifted, and `$` markers are
-/// preserved. The remaining (relative) component shifts by `delta` when its
-/// index is `>= shift_from`.
-fn adjust_formula_refs(text: &str, is_row: bool, shift_from: usize, delta: isize) -> String {
+/// `A$1`); `$` markers are preserved. The relative component shifts by `delta`
+/// when its index is `>= shift_from`. On a delete, `deleted` carries the
+/// removed index — references that point at it become `#REF!`.
+fn adjust_formula_refs(
+    text: &str,
+    is_row: bool,
+    shift_from: usize,
+    delta: isize,
+    deleted: Option<usize>,
+) -> String {
     let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
     re.replace_all(text, |caps: &regex::Captures| {
         let col_lock = &caps[1];
         let row_lock = &caps[3];
         let col = index_at(&caps[2]);
         let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
+
+        // A reference to the deleted row/column is invalidated.
+        if let Some(d) = deleted {
+            let idx = if is_row { row } else { col };
+            if idx == d {
+                return "#REF!".to_string();
+            }
+        }
 
         let mut new_col = col;
         let mut new_row = row;
@@ -771,10 +797,47 @@ fn format_number(v: f64) -> String {
     s.to_string()
 }
 
-fn apply_function(name: &str, args: &[f64]) -> f64 {
+/// A spreadsheet error value (`#DIV/0!`, etc.) produced during evaluation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EvalErr {
+    Div0,
+    Name,
+    Value,
+    Ref,
+    Na,
+    Num,
+}
+
+impl EvalErr {
+    pub fn code(self) -> &'static str {
+        match self {
+            EvalErr::Div0 => "#DIV/0!",
+            EvalErr::Name => "#NAME?",
+            EvalErr::Value => "#VALUE!",
+            EvalErr::Ref => "#REF!",
+            EvalErr::Na => "#N/A",
+            EvalErr::Num => "#NUM!",
+        }
+    }
+
+    pub fn from_literal(s: &str) -> Option<EvalErr> {
+        match s.trim() {
+            "#DIV/0!" => Some(EvalErr::Div0),
+            "#NAME?" => Some(EvalErr::Name),
+            "#VALUE!" => Some(EvalErr::Value),
+            "#REF!" => Some(EvalErr::Ref),
+            "#N/A" => Some(EvalErr::Na),
+            "#NUM!" => Some(EvalErr::Num),
+            _ => None,
+        }
+    }
+}
+
+fn apply_function(name: &str, args: &[f64]) -> Result<f64, EvalErr> {
     let first = args.first().copied().unwrap_or(0.0);
     let second = args.get(1).copied().unwrap_or(0.0);
-    match name.to_uppercase().as_str() {
+    let upper = name.to_uppercase();
+    let v = match upper.as_str() {
         // Aggregation
         "SUM" => args.iter().sum(),
         "PRODUCT" => args.iter().product(),
@@ -807,13 +870,15 @@ fn apply_function(name: &str, args: &[f64]) -> f64 {
         // IFS(cond1, val1, cond2, val2, …): first truthy condition's value.
         "IFS" => {
             let mut i = 0;
+            let mut out = 0.0;
             while i + 1 < args.len() {
                 if args[i] != 0.0 {
-                    return args[i + 1];
+                    out = args[i + 1];
+                    break;
                 }
                 i += 2;
             }
-            0.0
+            out
         }
 
         // Math
@@ -822,7 +887,8 @@ fn apply_function(name: &str, args: &[f64]) -> f64 {
             if first > 0.0 { 1.0 } else if first < 0.0 { -1.0 } else { 0.0 }
         }
         "MOD" => {
-            if second == 0.0 { 0.0 } else { first - second * (first / second).floor() }
+            if second == 0.0 { return Err(EvalErr::Div0); }
+            first - second * (first / second).floor()
         }
         "POWER" => first.powf(second),
         "SQRT" => first.sqrt(),
@@ -845,8 +911,16 @@ fn apply_function(name: &str, args: &[f64]) -> f64 {
             if sig == 0.0 { 0.0 } else { (first / sig).floor() * sig }
         }
 
-        _ => 0.0,
+        // Unknown function name.
+        _ => return Err(EvalErr::Name),
+    };
+
+    // A finite-domain math function that produced NaN/∞ is a #NUM! error
+    // (e.g. SQRT(-1), LN(0)).
+    if matches!(upper.as_str(), "SQRT" | "LN" | "LOG" | "LOG10") && !v.is_finite() {
+        return Err(EvalErr::Num);
     }
+    Ok(v)
 }
 
 fn bool_f64(b: bool) -> f64 {
@@ -1014,5 +1088,52 @@ mod tests {
         assert_eq!(eval("=MEDIAN(5,1,3)", &[]), "3");
         assert_eq!(eval("=MAX()", &[]), "0"); // empty is safe
         assert_eq!(eval("=VAR(2,4,6)", &[]), "4"); // sample variance
+    }
+
+    // --- Error values & propagation (issue #5) ---
+
+    #[test]
+    fn error_values() {
+        assert_eq!(eval("=1/0", &[]), "#DIV/0!");
+        assert_eq!(eval("=5/(2-2)", &[]), "#DIV/0!");
+        assert_eq!(eval("=NOPE(1,2)", &[]), "#NAME?");
+        assert_eq!(eval("=SQRT(-1)", &[]), "#NUM!");
+        assert_eq!(eval("=MOD(5,0)", &[]), "#DIV/0!");
+    }
+
+    #[test]
+    fn errors_propagate_through_refs() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=1/0"); // A1 -> #DIV/0!
+        d.set_cell_text(1, 0, "=A1+1"); // A2 references the error
+        assert_eq!(d.cell_display_value(0, 0), "#DIV/0!");
+        assert_eq!(d.cell_display_value(1, 0), "#DIV/0!");
+    }
+
+    #[test]
+    fn error_literal_displayed_and_propagated() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "#N/A"); // literal error value
+        d.set_cell_text(1, 0, "=A1*2");
+        assert_eq!(d.cell_display_value(0, 0), "#N/A");
+        assert_eq!(d.cell_display_value(1, 0), "#N/A");
+    }
+
+    #[test]
+    fn delete_row_makes_ref_error() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=A3+B1"); // A1 references A3 (row index 2)
+        d.delete_row(2); // remove the row A3 lives in
+        assert_eq!(d.get_cell_text(0, 0), "=#REF!+B1");
+        assert_eq!(d.cell_display_value(0, 0), "#REF!");
+    }
+
+    #[test]
+    fn delete_col_makes_ref_error() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=C1+1"); // references column C (index 2)
+        d.delete_col(2);
+        assert_eq!(d.get_cell_text(0, 0), "=#REF!+1");
+        assert_eq!(d.cell_display_value(0, 0), "#REF!");
     }
 }
