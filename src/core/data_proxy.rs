@@ -772,31 +772,127 @@ fn format_number(v: f64) -> String {
 }
 
 fn apply_function(name: &str, args: &[f64]) -> f64 {
+    let first = args.first().copied().unwrap_or(0.0);
+    let second = args.get(1).copied().unwrap_or(0.0);
     match name.to_uppercase().as_str() {
+        // Aggregation
         "SUM" => args.iter().sum(),
         "PRODUCT" => args.iter().product(),
         "AVERAGE" | "AVG" => {
             if args.is_empty() { 0.0 } else { args.iter().sum::<f64>() / args.len() as f64 }
         }
-        "MAX" => args.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-        "MIN" => args.iter().cloned().fold(f64::INFINITY, f64::min),
+        "MAX" => finite_or(args.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
+        "MIN" => finite_or(args.iter().cloned().fold(f64::INFINITY, f64::min)),
         "COUNT" => args.len() as f64,
-        "ABS" => args.first().map(|v| v.abs()).unwrap_or(0.0),
-        "ROUND" => {
-            let v = args.first().copied().unwrap_or(0.0);
-            let digits = args.get(1).copied().unwrap_or(0.0);
-            let factor = 10f64.powf(digits);
-            (v * factor).round() / factor
-        }
+        "SUMSQ" => args.iter().map(|v| v * v).sum(),
+        "MEDIAN" => median(args),
+        "VAR" => variance(args),
+        "STDEV" => variance(args).sqrt(),
+
+        // Logical (non-zero is truthy; returns 1.0/0.0)
+        "AND" => bool_f64(!args.is_empty() && args.iter().all(|&v| v != 0.0)),
+        "OR" => bool_f64(args.iter().any(|&v| v != 0.0)),
+        "NOT" => bool_f64(first == 0.0),
+        "TRUE" => 1.0,
+        "FALSE" => 0.0,
         "IF" => {
             if args.len() >= 3 {
-                if args[0] != 0.0 { args[1] } else { args[2] }
+                if first != 0.0 { args[1] } else { args[2] }
+            } else if args.len() == 2 {
+                if first != 0.0 { args[1] } else { 0.0 }
             } else {
                 0.0
             }
         }
+        // IFS(cond1, val1, cond2, val2, …): first truthy condition's value.
+        "IFS" => {
+            let mut i = 0;
+            while i + 1 < args.len() {
+                if args[i] != 0.0 {
+                    return args[i + 1];
+                }
+                i += 2;
+            }
+            0.0
+        }
+
+        // Math
+        "ABS" => first.abs(),
+        "SIGN" => {
+            if first > 0.0 { 1.0 } else if first < 0.0 { -1.0 } else { 0.0 }
+        }
+        "MOD" => {
+            if second == 0.0 { 0.0 } else { first - second * (first / second).floor() }
+        }
+        "POWER" => first.powf(second),
+        "SQRT" => first.sqrt(),
+        "EXP" => first.exp(),
+        "LN" => first.ln(),
+        "LOG10" => first.log10(),
+        "LOG" => {
+            if args.len() >= 2 { first.log(second) } else { first.log10() }
+        }
+        "INT" => first.floor(),
+        "ROUND" => round_to(first, second),
+        "ROUNDUP" => round_dir(first, second, true),
+        "ROUNDDOWN" => round_dir(first, second, false),
+        "CEILING" => {
+            let sig = if args.len() >= 2 { second } else { 1.0 };
+            if sig == 0.0 { 0.0 } else { (first / sig).ceil() * sig }
+        }
+        "FLOOR" => {
+            let sig = if args.len() >= 2 { second } else { 1.0 };
+            if sig == 0.0 { 0.0 } else { (first / sig).floor() * sig }
+        }
+
         _ => 0.0,
     }
+}
+
+fn bool_f64(b: bool) -> f64 {
+    if b { 1.0 } else { 0.0 }
+}
+
+fn round_to(v: f64, digits: f64) -> f64 {
+    let factor = 10f64.powf(digits);
+    (v * factor).round() / factor
+}
+
+/// ROUNDUP/ROUNDDOWN round away from / toward zero at `digits` places.
+fn round_dir(v: f64, digits: f64, up: bool) -> f64 {
+    let factor = 10f64.powf(digits);
+    let scaled = v.abs() * factor;
+    let r = if up { scaled.ceil() } else { scaled.floor() };
+    (r / factor) * v.signum()
+}
+
+fn median(args: &[f64]) -> f64 {
+    if args.is_empty() {
+        return 0.0;
+    }
+    let mut v: Vec<f64> = args.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// Sample variance (n-1 denominator), matching Excel's VAR.
+fn variance(args: &[f64]) -> f64 {
+    let n = args.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let mean = args.iter().sum::<f64>() / n as f64;
+    args.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64
+}
+
+/// Keep MAX/MIN sane on empty input (the fold seed is ±∞).
+fn finite_or(v: f64) -> f64 {
+    if v.is_finite() { v } else { 0.0 }
 }
 #[cfg(test)]
 mod tests {
@@ -884,5 +980,39 @@ mod tests {
         d.set_cell_text(5, 0, "=SUM(B2:B3)");
         d.insert_row(0, 1);
         assert_eq!(d.get_cell_text(6, 0), "=SUM(B3:B4)");
+    }
+
+    // --- Expanded function library (issue #2) ---
+
+    #[test]
+    fn math_functions() {
+        assert_eq!(eval("=POWER(2,10)", &[]), "1024");
+        assert_eq!(eval("=SQRT(144)", &[]), "12");
+        assert_eq!(eval("=MOD(10,3)", &[]), "1");
+        assert_eq!(eval("=INT(7.9)", &[]), "7");
+        assert_eq!(eval("=SIGN(-5)", &[]), "-1");
+        assert_eq!(eval("=ROUNDUP(2.1,0)", &[]), "3");
+        assert_eq!(eval("=ROUNDDOWN(2.9,0)", &[]), "2");
+        assert_eq!(eval("=CEILING(12,5)", &[]), "15");
+        assert_eq!(eval("=FLOOR(12,5)", &[]), "10");
+        assert_eq!(eval("=SUMSQ(3,4)", &[]), "25");
+    }
+
+    #[test]
+    fn logical_functions() {
+        assert_eq!(eval("=AND(1,1,1)", &[]), "1");
+        assert_eq!(eval("=AND(1,0)", &[]), "0");
+        assert_eq!(eval("=OR(0,0,1)", &[]), "1");
+        assert_eq!(eval("=NOT(0)", &[]), "1");
+        assert_eq!(eval("=IF(AND(2>1, 3>2), 10, 20)", &[]), "10");
+        assert_eq!(eval("=IFS(0, 1, 1, 42, 1, 99)", &[]), "42");
+    }
+
+    #[test]
+    fn stats_functions() {
+        assert_eq!(eval("=MEDIAN(1,2,3,4)", &[]), "2.5");
+        assert_eq!(eval("=MEDIAN(5,1,3)", &[]), "3");
+        assert_eq!(eval("=MAX()", &[]), "0"); // empty is safe
+        assert_eq!(eval("=VAR(2,4,6)", &[]), "4"); // sample variance
     }
 }
