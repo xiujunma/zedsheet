@@ -4,7 +4,8 @@
 //! formats prepend a symbol; percent appends `%`. String/date formats pass the
 //! value through unchanged (x-spreadsheet does no real date parsing here).
 
-/// Format a raw cell value according to a format key.
+/// Format a raw cell value according to a format key, or a custom format
+/// string like `#,##0.00`, `0.0%`, or `$#,##0.00;(#,##0.00)`.
 pub fn format_value(text: &str, format: &str) -> String {
     match format {
         "number" => format_number_str(text),
@@ -12,9 +13,97 @@ pub fn format_value(text: &str, format: &str) -> String {
         "rmb" => with_prefix("￥", text),
         "usd" => with_prefix("$", text),
         "eur" => with_prefix("€", text),
-        // normal | text | date | time | datetime | duration | unknown
-        _ => text.to_string(),
+        "normal" | "text" | "date" | "time" | "datetime" | "duration" | "general" => {
+            text.to_string()
+        }
+        // Anything else is treated as a custom number-format pattern.
+        pattern => match text.trim().parse::<f64>() {
+            Ok(n) => format_custom(n, pattern),
+            Err(_) => text.to_string(),
+        },
     }
+}
+
+/// Render a number with a custom format pattern. Supports digit placeholders
+/// (`0`, `#`), decimal point, thousands grouping (`,`), percent (`%`), literal
+/// prefix/suffix text, and `;`-separated positive/negative/zero sections.
+pub fn format_custom(value: f64, pattern: &str) -> String {
+    let sections: Vec<&str> = pattern.split(';').collect();
+    // Pick the section by sign; a single section also formats negatives (with a
+    // leading minus we add ourselves).
+    let (section, add_minus) = if value < 0.0 {
+        if sections.len() >= 2 {
+            (sections[1], false)
+        } else {
+            (sections[0], true)
+        }
+    } else if value == 0.0 && sections.len() >= 3 {
+        (sections[2], false)
+    } else {
+        (sections.first().copied().unwrap_or(""), false)
+    };
+
+    let is_ph = |c: char| matches!(c, '0' | '#' | ',' | '.');
+    let chars: Vec<char> = section.chars().collect();
+    let (start, end) = match (
+        chars.iter().position(|&c| is_ph(c)),
+        chars.iter().rposition(|&c| is_ph(c)),
+    ) {
+        (Some(s), Some(e)) => (s, e),
+        // No numeric placeholders: a literal-only section.
+        _ => return section.to_string(),
+    };
+
+    let prefix: String = chars[..start].iter().collect();
+    let numpat: String = chars[start..=end].iter().collect();
+    let suffix: String = chars[end + 1..].iter().collect();
+
+    let percent = section.contains('%');
+    let scaled = if percent { value.abs() * 100.0 } else { value.abs() };
+
+    let (int_pat, frac_pat) = match numpat.split_once('.') {
+        Some((i, f)) => (i.to_string(), Some(f.to_string())),
+        None => (numpat.clone(), None),
+    };
+    let decimals = frac_pat
+        .as_ref()
+        .map(|f| f.chars().filter(|&c| c == '0' || c == '#').count())
+        .unwrap_or(0);
+    let grouping = int_pat.contains(',');
+    let min_int = int_pat.chars().filter(|&c| c == '0').count();
+
+    // Round half away from zero (Excel-style), then format to the digit count.
+    let factor = 10f64.powi(decimals as i32);
+    let rounded_val = (scaled * factor).round() / factor;
+    let rounded = format!("{:.*}", decimals, rounded_val);
+    let (int_part, frac_part) = match rounded.split_once('.') {
+        Some((i, f)) => (i.to_string(), f.to_string()),
+        None => (rounded.clone(), String::new()),
+    };
+
+    let mut int_str: String = int_part.trim_start_matches('0').to_string();
+    while int_str.len() < min_int {
+        int_str.insert(0, '0');
+    }
+    if int_str.is_empty() {
+        int_str.push('0');
+    }
+    if grouping {
+        int_str = group_thousands(&int_str);
+    }
+
+    let mut out = String::new();
+    out.push_str(&prefix);
+    if add_minus {
+        out.push('-');
+    }
+    out.push_str(&int_str);
+    if decimals > 0 {
+        out.push('.');
+        out.push_str(&frac_part);
+    }
+    out.push_str(&suffix);
+    out
 }
 
 fn with_prefix(prefix: &str, text: &str) -> String {
@@ -87,5 +176,30 @@ mod tests {
         assert_eq!(format_value("hello", "normal"), "hello");
         assert_eq!(format_value("hello", "number"), "hello");
         assert_eq!(format_value("2008-09-26", "date"), "2008-09-26");
+    }
+
+    #[test]
+    fn custom_patterns() {
+        assert_eq!(format_value("1234.5", "#,##0.00"), "1,234.50");
+        assert_eq!(format_value("1234.5", "0"), "1235"); // rounds, no decimals
+        assert_eq!(format_value("0.1234", "0.0%"), "12.3%");
+        assert_eq!(format_value("1234.5", "$#,##0.00"), "$1,234.50");
+        assert_eq!(format_value("5", "00000"), "00005"); // zero-padding
+        assert_eq!(format_value("-5", "0.00"), "-5.00"); // single section, minus
+        assert_eq!(format_value("1234.567", "#,##0.0 \"kg\""), "1,234.6 \"kg\"");
+    }
+
+    #[test]
+    fn custom_sections() {
+        // positive;negative;zero
+        let p = "#,##0;(#,##0);-";
+        assert_eq!(format_value("1234", p), "1,234");
+        assert_eq!(format_value("-1234", p), "(1,234)");
+        assert_eq!(format_value("0", p), "-");
+    }
+
+    #[test]
+    fn custom_non_numeric_passthrough() {
+        assert_eq!(format_value("abc", "#,##0.00"), "abc");
     }
 }

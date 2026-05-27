@@ -134,6 +134,7 @@ impl ZedSheet {
                     ("usd", "USD $10.00"),
                     ("eur", "EUR €10.00"),
                     ("date", "Date"),
+                    ("__custom__", "Custom…"),
                 ],
             ),
             (
@@ -1447,7 +1448,26 @@ fn wire_dropdown(menu: web_sys::Element, kind: DdKind, title_id: &'static str, r
                 .map(|_| el.clone())
                 .or_else(|| el.closest("[data-ddval]").ok().flatten());
             let Some(item) = item else { return };
-            let Some(val) = item.get_attribute("data-ddval") else { return };
+            let Some(mut val) = item.get_attribute("data-ddval") else { return };
+
+            // "Custom…" in the format dropdown prompts for a format string.
+            let mut title_text = item.text_content();
+            if matches!(kind, DdKind::Format) && val == "__custom__" {
+                match window().prompt_with_message_and_default(
+                    "Custom number format (e.g. #,##0.00, 0.0%, $#,##0.00):",
+                    "#,##0.00",
+                ) {
+                    Ok(Some(pattern)) if !pattern.trim().is_empty() => {
+                        val = pattern.trim().to_string();
+                        title_text = Some(val.clone());
+                    }
+                    _ => {
+                        hide_palette(&menu_for_hide);
+                        return;
+                    }
+                }
+            }
+
             {
                 let mut r = renderer.borrow_mut();
                 match kind {
@@ -1463,7 +1483,7 @@ fn wire_dropdown(menu: web_sys::Element, kind: DdKind, title_id: &'static str, r
             }
             // Reflect the choice in the button's title.
             if let Some(title) = document().get_element_by_id(title_id) {
-                title.set_text_content(item.text_content().as_deref());
+                title.set_text_content(title_text.as_deref());
             }
             hide_palette(&menu_for_hide);
         });
