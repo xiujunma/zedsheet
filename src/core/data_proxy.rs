@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet};
 use crate::core::cell_range::CellRange;
 use crate::formula::parser::{tokenize, Token};
-use crate::renderer::alphabets::{exp2xy, xy2expr};
+use crate::renderer::alphabets::{exp2xy, index_at, string_at};
 use regex::Regex;
 use crate::core::cell::Cell;
 use crate::core::row::Row;
@@ -730,23 +730,29 @@ impl DataProxy {
 }
 
 /// Rewrite the cell references inside a formula string after a row/column
-/// insert or delete. A reference is `[A-Za-z]+[0-9]+`; we shift its row (or
-/// column when `is_row` is false) by `delta` when the index is `>= shift_from`.
+/// insert or delete. A reference is `$?col$?row` (e.g. `A1`, `$A$1`, `$A1`,
+/// `A$1`); a `$`-locked component is never shifted, and `$` markers are
+/// preserved. The remaining (relative) component shifts by `delta` when its
+/// index is `>= shift_from`.
 fn adjust_formula_refs(text: &str, is_row: bool, shift_from: usize, delta: isize) -> String {
-    let re = Regex::new(r"[A-Za-z]+[0-9]+").unwrap();
+    let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
     re.replace_all(text, |caps: &regex::Captures| {
-        let r = &caps[0];
-        let (col, row) = exp2xy(r);
+        let col_lock = &caps[1];
+        let row_lock = &caps[3];
+        let col = index_at(&caps[2]);
+        let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
+
+        let mut new_col = col;
+        let mut new_row = row;
         if is_row {
-            if row >= shift_from {
-                let nr = (row as isize + delta).max(0) as usize;
-                return xy2expr(col, nr);
+            if row_lock.is_empty() && row >= shift_from {
+                new_row = (row as isize + delta).max(0) as usize;
             }
-        } else if col >= shift_from {
-            let nc = (col as isize + delta).max(0) as usize;
-            return xy2expr(nc, row);
+        } else if col_lock.is_empty() && col >= shift_from {
+            new_col = (col as isize + delta).max(0) as usize;
         }
-        r.to_string()
+
+        format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
     })
     .to_string()
 }
@@ -840,5 +846,43 @@ mod tests {
         assert_eq!(eval("=1+2*3+(4*5+6)*7", &[]), "189");
         assert_eq!(eval("=10-5-20", &[]), "-15");
         assert_eq!(eval("=10-5*20", &[]), "-90");
+    }
+
+    // --- Absolute & mixed references (issue #3) ---
+
+    #[test]
+    fn absolute_refs_evaluate() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "7"); // A1
+        d.set_cell_text(2, 0, "=$A$1"); // A3
+        d.set_cell_text(3, 0, "=A$1 + $A1"); // A4
+        assert_eq!(d.cell_display_value(2, 0), "7");
+        assert_eq!(d.cell_display_value(3, 0), "14");
+    }
+
+    #[test]
+    fn insert_row_keeps_absolute_row() {
+        let mut d = DataProxy::new("t");
+        // =$A$1 + A2 : the absolute row stays, the relative one shifts down.
+        d.set_cell_text(5, 0, "=$A$1 + A2");
+        d.insert_row(0, 1);
+        assert_eq!(d.get_cell_text(6, 0), "=$A$1 + A3");
+    }
+
+    #[test]
+    fn insert_col_keeps_absolute_col() {
+        let mut d = DataProxy::new("t");
+        // =$A1 + B1 : the absolute column stays, the relative one shifts right.
+        d.set_cell_text(0, 5, "=$A1 + B1");
+        d.insert_col(0, 1);
+        assert_eq!(d.get_cell_text(0, 6), "=$A1 + C1");
+    }
+
+    #[test]
+    fn relative_refs_still_shift() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(5, 0, "=SUM(B2:B3)");
+        d.insert_row(0, 1);
+        assert_eq!(d.get_cell_text(6, 0), "=SUM(B3:B4)");
     }
 }
