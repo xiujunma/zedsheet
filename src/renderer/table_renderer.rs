@@ -707,6 +707,71 @@ impl TableRenderer {
         self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
     }
 
+    /// Select a cell and scroll it into view.
+    pub fn select_and_reveal(&mut self, ri: usize, ci: usize) {
+        self.select_cell(ri, ci);
+        self.ensure_visible(ri, ci);
+    }
+
+    /// Cells whose raw text contains `query` (case-insensitive), in row-major
+    /// order. Empty query yields no matches.
+    pub fn find_matches(&self, query: &str) -> Vec<(usize, usize)> {
+        let q = query.to_lowercase();
+        if q.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for ri in 0..self.data.row_count() {
+            for ci in 0..self.data.col_count() {
+                let text = self.data.get_cell_text(ri, ci);
+                if !text.is_empty() && text.to_lowercase().contains(&q) {
+                    out.push((ri, ci));
+                }
+            }
+        }
+        out
+    }
+
+    /// Replace occurrences of `find` with `replace` in a single cell's text.
+    /// Returns true if the cell changed.
+    pub fn replace_in_cell(&mut self, ri: usize, ci: usize, find: &str, replace: &str) -> bool {
+        if find.is_empty() {
+            return false;
+        }
+        let text = self.data.get_cell_text(ri, ci);
+        let new_text = replace_ci(&text, find, replace);
+        if new_text != text {
+            self.snapshot();
+            self.data.set_cell_text(ri, ci, &new_text);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace across every matching cell in one undo step. Returns the number
+    /// of cells changed.
+    pub fn replace_all(&mut self, find: &str, replace: &str) -> usize {
+        if find.is_empty() {
+            return 0;
+        }
+        let matches = self.find_matches(find);
+        if matches.is_empty() {
+            return 0;
+        }
+        self.snapshot();
+        let mut n = 0;
+        for (ri, ci) in matches {
+            let text = self.data.get_cell_text(ri, ci);
+            let new_text = replace_ci(&text, find, replace);
+            if new_text != text {
+                self.data.set_cell_text(ri, ci, &new_text);
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Extend the selection to (ri, ci) for drag/shift-select, growing the
     /// rectangle to fully cover any merges it touches. Anchored on the fixed
     /// mousedown cell so dragging in any direction works.
@@ -1104,5 +1169,45 @@ impl TableRenderer {
 
     pub fn set_col_width_at(&mut self, col_index: usize, width: f64) {
         self.data.set_col_width(col_index, width);
+    }
+}
+
+/// Lowercase a single char (first mapping; fine for find/replace use).
+fn lc(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// Case-insensitive replace of all (non-overlapping) occurrences of `find`.
+fn replace_ci(haystack: &str, find: &str, replace: &str) -> String {
+    let hs: Vec<char> = haystack.chars().collect();
+    let fs: Vec<char> = find.chars().collect();
+    let flen = fs.len();
+    if flen == 0 {
+        return haystack.to_string();
+    }
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < hs.len() {
+        if i + flen <= hs.len() && (0..flen).all(|k| lc(hs[i + k]) == lc(fs[k])) {
+            out.push_str(replace);
+            i += flen;
+        } else {
+            out.push(hs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_ci;
+
+    #[test]
+    fn case_insensitive_replace() {
+        assert_eq!(replace_ci("Hello hello HELLO", "hello", "hi"), "hi hi hi");
+        assert_eq!(replace_ci("abcabc", "bc", "X"), "aXaX");
+        assert_eq!(replace_ci("nothing", "zzz", "Y"), "nothing");
+        assert_eq!(replace_ci("keep", "", "x"), "keep");
     }
 }
