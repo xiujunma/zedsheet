@@ -13,8 +13,12 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 - Per-cell styling: background, text color, bold/italic/underline/strike,
   font family & size, horizontal & vertical alignment, text wrap
 - Merged cells (merge-aware selection, navigation, and rendering)
-- Number / currency (¥ $ €) / percent formatting with thousands separators
-- Formula engine: `SUM, AVERAGE, MAX, MIN, COUNT, PRODUCT, ABS, ROUND, IF`,
+- Number / currency (¥ $ €) / percent formatting with thousands separators,
+  plus custom format strings and **date / time / datetime** formats
+- **Dates as serial numbers**: date/time parsing, serial arithmetic
+  (`=A1+30`), and rendering per the cell's date format
+- Formula engine: aggregation, logical, math/stats, and date functions
+  (`SUM, AVERAGE, IF, AND, POWER, MEDIAN, ROUND, DATE, YEAR, TODAY, NOW`, …),
   cell refs and ranges (`A1`, `B2:C4`), with a circular-reference guard
 - Formula references auto-adjust when rows/columns are inserted or deleted
 

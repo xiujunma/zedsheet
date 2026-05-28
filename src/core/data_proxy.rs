@@ -181,7 +181,11 @@ impl DataProxy {
             visited.remove(&(ri, ci));
             v
         } else {
-            Ok(text.trim().parse::<f64>().unwrap_or(0.0))
+            // Plain numbers first; otherwise a date string resolves to its serial
+            // so date arithmetic (e.g. `=A1+1`) and date functions work.
+            let t = text.trim();
+            Ok(t.parse::<f64>()
+                .unwrap_or_else(|_| crate::core::date::parse_date(t).unwrap_or(0.0)))
         }
     }
 
@@ -919,6 +923,19 @@ fn apply_function(name: &str, args: &[f64]) -> Result<f64, EvalErr> {
             if sig == 0.0 { 0.0 } else { (first / sig).floor() * sig }
         }
 
+        // Date & time (serial numbers; see core::date)
+        "DATE" => crate::core::date::to_serial(first as i64, second as i64, args.get(2).copied().unwrap_or(1.0) as i64),
+        "YEAR" => crate::core::date::from_serial(first).0 as f64,
+        "MONTH" => crate::core::date::from_serial(first).1 as f64,
+        "DAY" => crate::core::date::from_serial(first).2 as f64,
+        "HOUR" => crate::core::date::time_parts(first).0 as f64,
+        "MINUTE" => crate::core::date::time_parts(first).1 as f64,
+        "SECOND" => crate::core::date::time_parts(first).2 as f64,
+        // Excel default WEEKDAY: 1 = Sunday … 7 = Saturday.
+        "WEEKDAY" => ((first.floor() as i64 - 1).rem_euclid(7) + 1) as f64,
+        "TODAY" => today_serial(),
+        "NOW" => now_serial(),
+
         // Unknown function name.
         _ => return Err(EvalErr::Name),
     };
@@ -975,6 +992,40 @@ fn variance(args: &[f64]) -> f64 {
 /// Keep MAX/MIN sane on empty input (the fold seed is ±∞).
 fn finite_or(v: f64) -> f64 {
     if v.is_finite() { v } else { 0.0 }
+}
+
+/// Today's date as a serial number (local time). `TODAY()` in Excel.
+#[cfg(target_arch = "wasm32")]
+fn today_serial() -> f64 {
+    let d = js_sys::Date::new_0();
+    crate::core::date::to_serial(
+        d.get_full_year() as i64,
+        d.get_month() as i64 + 1, // JS months are 0-based
+        d.get_date() as i64,
+    )
+}
+
+/// The current date and time as a serial number (local time). `NOW()` in Excel.
+#[cfg(target_arch = "wasm32")]
+fn now_serial() -> f64 {
+    let d = js_sys::Date::new_0();
+    let day = crate::core::date::to_serial(
+        d.get_full_year() as i64,
+        d.get_month() as i64 + 1,
+        d.get_date() as i64,
+    );
+    let secs = d.get_hours() as f64 * 3600.0 + d.get_minutes() as f64 * 60.0 + d.get_seconds() as f64;
+    day + secs / 86_400.0
+}
+
+// Native (test) builds have no JS clock; these are never exercised by tests.
+#[cfg(not(target_arch = "wasm32"))]
+fn today_serial() -> f64 {
+    0.0
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn now_serial() -> f64 {
+    0.0
 }
 #[cfg(test)]
 mod tests {
@@ -1143,5 +1194,35 @@ mod tests {
         d.delete_col(2);
         assert_eq!(d.get_cell_text(0, 0), "=#REF!+1");
         assert_eq!(d.cell_display_value(0, 0), "#REF!");
+    }
+
+    // --- Date & time values (issue #6) ---
+
+    #[test]
+    fn date_functions() {
+        assert_eq!(eval("=DATE(2024,1,15)", &[]), "45306"); // serial number
+        assert_eq!(eval("=YEAR(DATE(2024,1,15))", &[]), "2024");
+        assert_eq!(eval("=MONTH(DATE(2024,3,1))", &[]), "3");
+        assert_eq!(eval("=DAY(DATE(2024,3,15))", &[]), "15");
+        // Out-of-range month rolls into the next year, like Excel's DATE().
+        assert_eq!(eval("=YEAR(DATE(2024,13,1))", &[]), "2025");
+    }
+
+    #[test]
+    fn date_time_component_functions() {
+        assert_eq!(eval("=HOUR(0.5)", &[]), "12"); // noon
+        assert_eq!(eval("=MINUTE(0.25)", &[]), "0"); // 06:00:00
+        assert_eq!(eval("=SECOND(0.5)", &[]), "0");
+        assert_eq!(eval("=WEEKDAY(DATE(2024,1,15))", &[]), "2"); // a Monday -> 2
+    }
+
+    #[test]
+    fn date_arithmetic_through_refs() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "2024-01-15"); // A1 holds a date string
+        d.set_cell_text(1, 0, "=DAY(A1+1)"); // the day-of-month of the next day
+        assert_eq!(d.cell_display_value(1, 0), "16");
+        d.set_cell_text(2, 0, "=YEAR(A1)");
+        assert_eq!(d.cell_display_value(2, 0), "2024");
     }
 }

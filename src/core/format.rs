@@ -7,21 +7,43 @@
 /// Format a raw cell value according to a format key, or a custom format
 /// string like `#,##0.00`, `0.0%`, or `$#,##0.00;(#,##0.00)`.
 pub fn format_value(text: &str, format: &str) -> String {
+    use crate::core::date::DateKind;
     match format {
         "number" => format_number_str(text),
         "percent" => format!("{}%", text),
         "rmb" => with_prefix("￥", text),
         "usd" => with_prefix("$", text),
         "eur" => with_prefix("€", text),
-        "normal" | "text" | "date" | "time" | "datetime" | "duration" | "general" => {
-            text.to_string()
-        }
+        "date" => format_temporal(text, DateKind::Date),
+        "time" => format_temporal(text, DateKind::Time),
+        "datetime" => format_temporal(text, DateKind::DateTime),
+        "duration" => format_temporal(text, DateKind::Duration),
+        "normal" | "text" | "general" => text.to_string(),
         // Anything else is treated as a custom number-format pattern.
         pattern => match text.trim().parse::<f64>() {
             Ok(n) => format_custom(n, pattern),
             Err(_) => text.to_string(),
         },
     }
+}
+
+/// Render a date/time-formatted cell. The cell value is interpreted as a serial
+/// number (e.g. a formula result like `=TODAY()`) or as a date string; either
+/// way it is normalized to the format's canonical rendering. Anything that is
+/// not a recognizable date or number passes through unchanged.
+fn format_temporal(text: &str, kind: crate::core::date::DateKind) -> String {
+    let t = text.trim();
+    if t.is_empty() {
+        return text.to_string();
+    }
+    let serial = match t.parse::<f64>() {
+        Ok(n) => n,
+        Err(_) => match crate::core::date::parse_date(t) {
+            Some(s) => s,
+            None => return text.to_string(),
+        },
+    };
+    crate::core::date::format_serial(serial, kind)
 }
 
 /// Render a number with a custom format pattern. Supports digit placeholders
@@ -176,6 +198,22 @@ mod tests {
         assert_eq!(format_value("hello", "normal"), "hello");
         assert_eq!(format_value("hello", "number"), "hello");
         assert_eq!(format_value("2008-09-26", "date"), "2008-09-26");
+    }
+
+    #[test]
+    fn date_and_time_rendering() {
+        // A serial number (e.g. a formula result) renders as a date.
+        assert_eq!(format_value("45306", "date"), "2024-01-15");
+        // Date strings are normalized to ISO.
+        assert_eq!(format_value("2024/01/15", "date"), "2024-01-15");
+        assert_eq!(format_value("1/15/2024", "date"), "2024-01-15");
+        // Time and datetime from fractional serials.
+        assert_eq!(format_value("0.5", "time"), "12:00:00");
+        assert_eq!(format_value("45306.5", "datetime"), "2024-01-15 12:00:00");
+        assert_eq!(format_value("1.5", "duration"), "36:00:00");
+        // Non-date text falls through unchanged.
+        assert_eq!(format_value("hello", "date"), "hello");
+        assert_eq!(format_value("", "date"), "");
     }
 
     #[test]

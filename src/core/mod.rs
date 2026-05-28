@@ -1,5 +1,6 @@
 pub mod cell;
 pub mod cell_range;
+pub mod date;
 pub mod format;
 pub mod col;
 pub mod data_proxy;
