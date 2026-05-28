@@ -358,6 +358,20 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             draw_border_side(canvas, &b.left, x0, y0, x0, y1);
             draw_border_side(canvas, &b.right, x1, y0, x1, y1);
         }
+
+        // Note marker: a small red triangle in the cell's top-right corner.
+        if renderer.data.get_note(row, col).is_some() {
+            let x1 = draw_rect.x + draw_rect.width;
+            let y0 = draw_rect.y;
+            canvas
+                .set_fill_style("#e53935")
+                .begin_path()
+                .move_to(x1 - 6f64, y0)
+                .line_to(x1, y0)
+                .line_to(x1, y0 + 6f64)
+                .close_path()
+                .fill(None);
+        }
     });
 }
 

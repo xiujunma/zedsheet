@@ -1153,6 +1153,9 @@ fn context_menu_html() -> String {
         item("insert-col", "Insert column"),
         item("delete-row", "Delete row"),
         item("delete-col", "Delete column"),
+        divider.clone(),
+        item("note", "Insert / edit note"),
+        item("delete-note", "Delete note"),
         divider,
         item("clear", "Clear contents"),
     ]
@@ -1202,6 +1205,21 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
                 .get_attribute("data-cmenu")
                 .or_else(|| el.closest("[data-cmenu]").ok().flatten().and_then(|e| e.get_attribute("data-cmenu")));
             let Some(cmd) = cmd else { return };
+
+            // Editing a note needs a prompt outside the renderer borrow.
+            if cmd == "note" {
+                let current = renderer.borrow().selection_note().unwrap_or_default();
+                if let Ok(Some(text)) =
+                    window().prompt_with_message_and_default("Cell note:", &current)
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.set_selection_note(if text.trim().is_empty() { None } else { Some(text) });
+                    r.render();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
             {
                 let mut r = renderer.borrow_mut();
                 match cmd.as_str() {
@@ -1212,6 +1230,7 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
                     "insert-col" => r.insert_col_at_selection(),
                     "delete-row" => r.delete_rows_at_selection(),
                     "delete-col" => r.delete_cols_at_selection(),
+                    "delete-note" => r.set_selection_note(None),
                     "clear" => r.clear_selection_content(),
                     _ => {}
                 }
@@ -1585,6 +1604,17 @@ fn wire_events(
     let dragging = Rc::new(RefCell::new(false));
     let drag: Rc<RefCell<Option<DragState>>> = Rc::new(RefCell::new(None));
 
+    // A floating popup that shows a cell's note on hover.
+    let note_popup: web_sys::Element = {
+        let el = document().create_element("div").unwrap();
+        let _ = el.set_attribute(
+            "style",
+            "display:none;position:fixed;z-index:400;max-width:240px;background:#fffbe6;border:1px solid #d9c97a;box-shadow:1px 2px 6px rgba(0,0,0,0.2);padding:6px 8px;font-size:12px;white-space:pre-wrap;pointer-events:none;color:#333;",
+        );
+        document().body().unwrap().append_child(&el).unwrap();
+        el
+    };
+
     // mousedown: start a header-resize / scrollbar drag, or select a cell.
     {
         let renderer = renderer.clone();
@@ -1635,12 +1665,14 @@ fn wire_events(
         let renderer = renderer.clone();
         let dragging = dragging.clone();
         let drag = drag.clone();
+        let note_popup = note_popup.clone();
         canvas_el.add_event_listener("mousemove", move |event: web_sys::Event| {
             let me: MouseEvent = event.dyn_into().unwrap();
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
 
             // Active header-resize / scrollbar drag.
             if let Some(ds) = *drag.borrow() {
+                hide_tooltip(&note_popup);
                 let mut r = renderer.borrow_mut();
                 match ds.kind {
                     DragKind::ColResize(ci) => {
@@ -1661,6 +1693,7 @@ fn wire_events(
 
             // Drag-select.
             if *dragging.borrow() {
+                hide_tooltip(&note_popup);
                 let hit = renderer.borrow().cell_at(x, y);
                 if let Some((ri, ci)) = hit {
                     let mut r = renderer.borrow_mut();
@@ -1671,11 +1704,29 @@ fn wire_events(
             }
 
             // Hover feedback: resize cursor near header boundaries.
-            let r = renderer.borrow();
-            match r.resize_target(x, y) {
-                Some(DragKind::ColResize(_)) => r.set_cursor("col-resize"),
-                Some(DragKind::RowResize(_)) => r.set_cursor("row-resize"),
-                _ => r.set_cursor("default"),
+            {
+                let r = renderer.borrow();
+                match r.resize_target(x, y) {
+                    Some(DragKind::ColResize(_)) => r.set_cursor("col-resize"),
+                    Some(DragKind::RowResize(_)) => r.set_cursor("row-resize"),
+                    _ => r.set_cursor("default"),
+                }
+            }
+
+            // Note popup: show the hovered cell's note (if any).
+            let note = renderer
+                .borrow()
+                .cell_at(x, y)
+                .and_then(|(ri, ci)| renderer.borrow().note_at(ri, ci));
+            match note {
+                Some(text) => {
+                    note_popup.set_text_content(Some(&text));
+                    let style = note_popup.unchecked_ref::<web_sys::HtmlElement>().style();
+                    let _ = style.set_property("left", &format!("{}px", me.client_x() + 12));
+                    let _ = style.set_property("top", &format!("{}px", me.client_y() + 12));
+                    let _ = style.set_property("display", "block");
+                }
+                None => hide_tooltip(&note_popup),
             }
         });
     }

@@ -1116,6 +1116,23 @@ impl TableRenderer {
         self.data.get_cell_text(ri, ci)
     }
 
+    pub fn note_at(&self, ri: usize, ci: usize) -> Option<String> {
+        self.data.get_note(ri, ci)
+    }
+
+    /// Set or clear the note on the active cell (selection top-left), with undo.
+    pub fn set_selection_note(&mut self, note: Option<String>) {
+        self.snapshot();
+        let (r0, c0, _, _) = self.selection_bounds();
+        self.data.set_note(r0, c0, note);
+    }
+
+    /// The note for the active cell (selection top-left), if any.
+    pub fn selection_note(&self) -> Option<String> {
+        let (r0, c0, _, _) = self.selection_bounds();
+        self.data.get_note(r0, c0)
+    }
+
     pub fn get_selector(&self) -> SelectorRect {
         self.selector
     }

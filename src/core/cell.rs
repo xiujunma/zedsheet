@@ -10,6 +10,9 @@ pub struct Cell {
     pub merge: Option<(usize, usize)>, // (row_span, col_span)
     pub editable: bool,
     pub cell_type: String,
+    /// An attached comment/note, if any.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 impl Default for Cell {
@@ -21,6 +24,7 @@ impl Default for Cell {
             merge: None,
             editable: true,
             cell_type: String::from("text"),
+            note: None,
         }
     }
 }

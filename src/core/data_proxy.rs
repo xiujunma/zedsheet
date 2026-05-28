@@ -416,6 +416,14 @@ impl DataProxy {
         self.rows.entry(ri).or_insert_with(Row::default).set_cell(ci, cell);
     }
 
+    pub fn get_note(&self, ri: usize, ci: usize) -> Option<String> {
+        self.get_cell(ri, ci).and_then(|c| c.note.clone())
+    }
+
+    pub fn set_note(&mut self, ri: usize, ci: usize, note: Option<String>) {
+        self.get_cell_or_new(ri, ci).note = note;
+    }
+
     pub fn delete_cell(&mut self, ri: usize, ci: usize) {
         if let Some(row) = self.rows.get_mut(&ri) {
             row.delete_cell(ci);
