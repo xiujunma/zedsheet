@@ -428,6 +428,14 @@ impl DataProxy {
         self.get_cell_or_new(ri, ci).note = note;
     }
 
+    pub fn get_link(&self, ri: usize, ci: usize) -> Option<String> {
+        self.get_cell(ri, ci).and_then(|c| c.link.clone())
+    }
+
+    pub fn set_link(&mut self, ri: usize, ci: usize, link: Option<String>) {
+        self.get_cell_or_new(ri, ci).link = link;
+    }
+
     pub fn delete_cell(&mut self, ri: usize, ci: usize) {
         if let Some(row) = self.rows.get_mut(&ri) {
             row.delete_cell(ci);
@@ -1224,5 +1232,23 @@ mod tests {
         assert_eq!(d.cell_display_value(1, 0), "16");
         d.set_cell_text(2, 0, "=YEAR(A1)");
         assert_eq!(d.cell_display_value(2, 0), "2024");
+    }
+
+    // --- Hyperlinks (issue #23) ---
+
+    #[test]
+    fn link_get_set_round_trip() {
+        let mut d = DataProxy::new("t");
+        assert_eq!(d.get_link(0, 0), None);
+        d.set_cell_text(0, 0, "Docs");
+        d.set_link(0, 0, Some("https://example.com".to_string()));
+        assert_eq!(d.get_link(0, 0), Some("https://example.com".to_string()));
+        // Editing the cell text preserves the link.
+        d.set_cell_text(0, 0, "Documentation");
+        assert_eq!(d.get_cell_text(0, 0), "Documentation");
+        assert_eq!(d.get_link(0, 0), Some("https://example.com".to_string()));
+        // Clearing.
+        d.set_link(0, 0, None);
+        assert_eq!(d.get_link(0, 0), None);
     }
 }

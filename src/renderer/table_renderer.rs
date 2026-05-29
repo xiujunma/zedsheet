@@ -1133,6 +1133,25 @@ impl TableRenderer {
         self.data.get_note(r0, c0)
     }
 
+    pub fn link_at(&self, ri: usize, ci: usize) -> Option<String> {
+        self.data.get_link(ri, ci)
+    }
+
+    /// Set or clear the hyperlink on the active cell, with undo. A raw target is
+    /// normalized via [`crate::core::link::normalize_link`] (blank clears it).
+    pub fn set_selection_link(&mut self, link: Option<String>) {
+        self.snapshot();
+        let (r0, c0, _, _) = self.selection_bounds();
+        let normalized = link.and_then(|s| crate::core::link::normalize_link(&s));
+        self.data.set_link(r0, c0, normalized);
+    }
+
+    /// The hyperlink for the active cell (selection top-left), if any.
+    pub fn selection_link(&self) -> Option<String> {
+        let (r0, c0, _, _) = self.selection_bounds();
+        self.data.get_link(r0, c0)
+    }
+
     pub fn get_selector(&self) -> SelectorRect {
         self.selector
     }

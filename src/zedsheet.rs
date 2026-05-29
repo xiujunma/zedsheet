@@ -1160,6 +1160,9 @@ fn context_menu_html() -> String {
         divider.clone(),
         item("note", "Insert / edit note"),
         item("delete-note", "Delete note"),
+        divider.clone(),
+        item("link", "Insert / edit link"),
+        item("remove-link", "Remove link"),
         divider,
         item("clear", "Clear contents"),
     ]
@@ -1224,6 +1227,21 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
                 return;
             }
 
+            // Editing a hyperlink also needs a prompt outside the renderer borrow.
+            if cmd == "link" {
+                let current = renderer.borrow().selection_link().unwrap_or_default();
+                if let Ok(Some(text)) =
+                    window().prompt_with_message_and_default("Link URL:", &current)
+                {
+                    let mut r = renderer.borrow_mut();
+                    // set_selection_link normalizes the URL; blank input clears it.
+                    r.set_selection_link(if text.trim().is_empty() { None } else { Some(text) });
+                    r.render();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
             {
                 let mut r = renderer.borrow_mut();
                 match cmd.as_str() {
@@ -1235,6 +1253,7 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
                     "delete-row" => r.delete_rows_at_selection(),
                     "delete-col" => r.delete_cols_at_selection(),
                     "delete-note" => r.set_selection_note(None),
+                    "remove-link" => r.set_selection_link(None),
                     "clear" => r.clear_selection_content(),
                     _ => {}
                 }
@@ -1654,6 +1673,13 @@ fn wire_events(
             commit_edit(&renderer, &textarea, &editing);
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
+                // Ctrl/Cmd-click on a hyperlink cell follows the link.
+                if me.ctrl_key() || me.meta_key() {
+                    if let Some(url) = renderer.borrow().link_at(ri, ci) {
+                        let _ = window().open_with_url_and_target(&url, "_blank");
+                        return;
+                    }
+                }
                 let mut r = renderer.borrow_mut();
                 r.select_cell(ri, ci);
                 r.render();

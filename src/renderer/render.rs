@@ -285,13 +285,18 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                 _ => (draw_rect.x + pad, "left"),
             };
 
+            // Hyperlink cells render in link blue and underlined.
+            let is_link = renderer.data.get_link(row, col).is_some();
+            let text_color: &str = if is_link { "#1a73e8" } else { style.color.as_str() };
+            let underline_on = style.underline || is_link;
+
             canvas.save();
             canvas.begin_path();
             canvas.rect(draw_rect.x, draw_rect.y, draw_rect.width, draw_rect.height);
             canvas.clip(None);
             canvas
                 .set_font(&font)
-                .set_fill_style(style.color.as_str())
+                .set_fill_style(text_color)
                 .set_text_align(talign);
 
             if style.text_wrap {
@@ -320,16 +325,16 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                 canvas.fill_text(&text, tx, ty, None);
 
                 // Underline / strike-through across the text width.
-                if style.underline || style.strike {
+                if underline_on || style.strike {
                     let tw = canvas.measure_text_width(&text);
                     let (lx0, lx1) = match talign {
                         "center" => (tx - tw / 2f64, tx + tw / 2f64),
                         "right" => (tx - tw, tx),
                         _ => (tx, tx + tw),
                     };
-                    canvas.set_stroke_style(style.color.as_str());
+                    canvas.set_stroke_style(text_color);
                     canvas.set_line_width(1.0);
-                    if style.underline {
+                    if underline_on {
                         let ly = ty + style.font_size as f64 * 0.4;
                         canvas.line(lx0, ly, lx1, ly);
                     }

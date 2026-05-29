@@ -13,6 +13,8 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 - Per-cell styling: background, text color, bold/italic/underline/strike,
   font family & size, horizontal & vertical alignment, text wrap
 - Merged cells (merge-aware selection, navigation, and rendering)
+- Cell **notes** (hover to view) and **hyperlinks** — Ctrl/Cmd-click to open;
+  link cells render in blue + underline, bare hosts/emails auto-normalize
 - Number / currency (¥ $ €) / percent formatting with thousands separators,
   plus custom format strings and **date / time / datetime** formats
 - **Dates as serial numbers**: date/time parsing, serial arithmetic
@@ -38,7 +40,7 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   cancel/confirm, an `fx` function picker, and a formula input bound to the
   active cell
 - Right-click **context menu**: copy/cut/paste, insert/delete row & column,
-  clear contents
+  notes, hyperlinks, clear contents
 - **Multi-sheet** tabs: add, switch, double-click to rename, right-click to delete
 
 ## Prerequisites
