@@ -266,7 +266,7 @@ impl AreaRenderer for RowHeader {
         self.merges.clone()
     }
 
-    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
+    fn cell_render(&self, _canvas: &Canvas, _rect: &Rect, _cell: &Cell, _style: &str) -> bool {
         return true;
     }
 }
@@ -292,7 +292,7 @@ impl AreaRenderer for ColHeader {
         self.merges.clone()
     }
 
-    fn cell_render(&self, canvas: &Canvas, rect: &Rect, cell: &Cell, style: &str) -> bool {
+    fn cell_render(&self, canvas: &Canvas, rect: &Rect, _cell: &Cell, _style: &str) -> bool {
         canvas.set_fill_style("#0069c2")
             .begin_path()
             .move_to(rect.width - 12f64, 2f64)

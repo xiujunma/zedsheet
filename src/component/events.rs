@@ -87,8 +87,8 @@ impl EventManager {
 
 fn get_bounding_rect(canvas: &HtmlCanvasElement) -> (f64, f64, f64, f64) {
     // Fallback values - use element attributes
-    let mut left = 0.0;
-    let mut top = 0.0;
+    let left = 0.0;
+    let top = 0.0;
     let mut width = 800.0;
     let mut height = 600.0;
 

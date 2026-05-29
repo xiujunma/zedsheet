@@ -162,7 +162,7 @@ impl History {
     where
         F: Fn() -> String,
     {
-        if let Some(state) = self.undo_stack.pop() {
+        if let Some(_state) = self.undo_stack.pop() {
             self.redo_stack.push(get_data());
         }
     }
@@ -171,7 +171,7 @@ impl History {
     where
         F: Fn() -> String,
     {
-        if let Some(state) = self.redo_stack.pop() {
+        if let Some(_state) = self.redo_stack.pop() {
             self.undo_stack.push(get_data());
         }
     }

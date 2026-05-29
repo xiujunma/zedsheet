@@ -1,5 +1,4 @@
 use crate::core::cell_range::CellRange;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct Merges {

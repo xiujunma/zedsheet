@@ -175,10 +175,7 @@ impl Range {
             end_row: n_other.end_row,
             end_col: self.end_col,
         });
-        return ranges
-            .into_iter()
-            .filter(|r| r.get_rows() >= 0 && r.get_cols() >= 0)
-            .collect();
+        return ranges;
     }
     fn touches(&self, other: &Range) -> bool {
         return (other.start_row == self.start_row

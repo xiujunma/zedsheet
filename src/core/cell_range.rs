@@ -109,7 +109,7 @@ impl CellRange {
         CellRange::new(sri, sci, eri, eci)
     }
 
-    pub fn difference(&self, range: &Self) -> Vec<Self> {
+    pub fn difference(&self, _range: &Self) -> Vec<Self> {
         vec![]
     }
 }

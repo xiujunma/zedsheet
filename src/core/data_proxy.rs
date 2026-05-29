@@ -718,9 +718,8 @@ impl DataProxy {
             self.name = name.to_string();
         }
         if let Some(freeze) = data.get("freeze").and_then(|v| v.as_str()) {
-            if let ((x, y), _) = (crate::renderer::alphabets::exp2xy(freeze), true) {
-                self.freeze = (y, x);
-            }
+            let (x, y) = crate::renderer::alphabets::exp2xy(freeze);
+            self.freeze = (y, x);
         }
         if let Some(styles) = data.get("styles").and_then(|v| serde_json::from_value(v.clone()).ok()) {
             self.styles = styles;

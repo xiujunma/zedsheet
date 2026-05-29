@@ -133,7 +133,7 @@ pub fn infix_expr_to_suffix_expr(src: &str) -> Vec<String> {
     let mut oldc = ' ';
     let mut sub_strs: Vec<char> = Vec::new();
     let mut chars = src.chars().peekable();
-    let mut result: Vec<String> = Vec::new();
+    let result: Vec<String> = Vec::new();
 
     while let Some(c) = chars.next() {
         if c == ' ' {
@@ -205,7 +205,7 @@ pub fn infix_expr_to_suffix_expr(src: &str) -> Vec<String> {
 
                 fn_arg_type = 0;
             } else if c == '=' || c == '>' || c == '<' {
-                let mut nc = chars.peek().cloned();
+                let nc = chars.peek().cloned();
                 fn_arg_operator = c.to_string();
                 if let Some('=') = nc {
                     fn_arg_operator.push('=');

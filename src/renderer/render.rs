@@ -1,10 +1,8 @@
-use wasm_bindgen::JsValue;
-
 use BorderType::{Bottom, Horizontal, Left, Outside, Right, Top};
 
 use crate::renderer::area::Area;
 use crate::renderer::canvas::Canvas;
-use crate::renderer::cell_render::{cell_border_render, cell_render, font_string};
+use crate::renderer::cell_render::cell_border_render;
 use crate::renderer::range::{each_range, Range};
 use crate::renderer::table_renderer::{Border, BorderLine, BorderLineStyle, BorderType, Cell, Gridline, Rect, SelectorRect, Style, TableRenderer};
 use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
@@ -26,14 +24,14 @@ pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
             .begin_path();
 
         canvas.ctx.set_line_width(gridline.width - 0.5);
-        canvas.ctx.set_stroke_style(&JsValue::from_str(&gridline.color));
+        canvas.ctx.set_stroke_style_str(&gridline.color);
 
         cb();
         canvas.restore();
     }
 }
 
-pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, renderer: &TableRenderer) {
+pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, _renderer: &TableRenderer) {
     // Find the area containing the selector cells
     for area in &viewport.areas {
         // Skip empty areas (exclusive end bound => start >= end means no cells).
@@ -523,7 +521,7 @@ pub fn render_corner(canvas: &Canvas, renderer: &TableRenderer) {
 }
 
 pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
-    let style = renderer.style.clone();
+    let _style = renderer.style.clone();
     match placement {
         Placement::RowHeader => {
             if renderer.row_header.width <= 0f64 {
@@ -593,7 +591,7 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
         .clip(None);
 
     let mut area_merges: Vec<Range> = vec![];
-    let area_merge_render_params: Vec<(Cell, Rect, Style)> = vec![];
+    let _area_merge_render_params: Vec<(Cell, Rect, Style)> = vec![];
     if renderer.merges.len() > 0 {
         each_range(renderer.merges.clone(), |range| {
             if range.intersects(&area.range) {

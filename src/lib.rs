@@ -1,3 +1,10 @@
+// This crate is a from-scratch port of x-spreadsheet: many structs, helpers,
+// and whole modules were ported ahead of being wired into the active UI/engine
+// and are filled in feature-by-feature. Allow dead code crate-wide so that
+// not-yet-wired scaffolding doesn't drown out real warnings; individual modules
+// are removed once confirmed to be superseded rather than pending.
+#![allow(dead_code)]
+
 extern crate console_error_panic_hook;
 use std::panic;
 

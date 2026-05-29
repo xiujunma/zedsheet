@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use wasm_bindgen::JsValue;
 use web_sys::HtmlCanvasElement;
 use web_sys::CanvasRenderingContext2d;
 use wasm_bindgen::JsCast;
@@ -354,7 +353,7 @@ impl Canvas {
 
     // properties
     pub fn set_fill_style(&self, style: &str) -> &Self {
-        self.ctx.set_fill_style(&JsValue::from_str(style));
+        self.ctx.set_fill_style_str(style);
         self
     }
 
@@ -379,7 +378,7 @@ impl Canvas {
     }
 
     pub fn set_stroke_style(&self, style: &str) -> &Self {
-        self.ctx.set_stroke_style(&JsValue::from_str(style));
+        self.ctx.set_stroke_style_str(style);
         self
     }
 }
