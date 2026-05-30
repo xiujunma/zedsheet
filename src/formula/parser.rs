@@ -4,6 +4,8 @@ use regex::Regex;
 pub enum Token {
     Number(f64),
     CellRef(String),
+    /// A named-range reference (an identifier that isn't a cell ref or function).
+    Name(String),
     Range(String),
     Operator(String),
     Function(String),
@@ -262,6 +264,22 @@ fn is_arg_start(c: char) -> bool {
 }
 
 // Tokenize a formula string for evaluation
+/// True if `s` looks like a cell reference (`A1`, `$B$2`, `AA100`): one or more
+/// letters followed by one or more digits, with optional `$` anchors. Used to
+/// tell a cell reference apart from a named-range reference while tokenizing.
+pub fn looks_like_cell_ref(s: &str) -> bool {
+    let bytes: Vec<u8> = s.bytes().filter(|&b| b != b'$').collect();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    let letters = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    letters > 0 && i > letters && i == bytes.len()
+}
+
 pub fn tokenize(formula: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = formula.chars().collect();
@@ -322,8 +340,12 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             }
             if i < chars.len() && chars[i] == '(' {
                 tokens.push(Token::Function(ident));
-            } else {
+            } else if looks_like_cell_ref(&ident) {
                 tokens.push(Token::CellRef(ident));
+            } else {
+                // An identifier that isn't a cell ref or function call is a
+                // named-range reference (resolved by the evaluator).
+                tokens.push(Token::Name(ident));
             }
             continue;
         }
@@ -369,5 +391,22 @@ mod tests {
         let parser = FormulaParser::new();
         let result = parser.parse("SUM(A1,A2)");
         println!("{:?}", result);
+    }
+
+    #[test]
+    fn names_vs_cell_refs() {
+        use Token::*;
+        // A cell reference (letters then digits) tokenizes as CellRef.
+        assert_eq!(tokenize("A1"), vec![CellRef("A1".into())]);
+        assert_eq!(tokenize("$AA$100"), vec![CellRef("$AA$100".into())]);
+        // A bare identifier (no trailing digits) is a named-range reference.
+        assert_eq!(tokenize("Revenue"), vec![Name("REVENUE".into())]);
+        // Inside a function call, names still resolve as names.
+        assert_eq!(
+            tokenize("SUM(Rev)"),
+            vec![Function("SUM".into()), LeftParen, Name("REV".into()), RightParen]
+        );
+        // An identifier followed by '(' is a function, not a name.
+        assert!(matches!(tokenize("MAX(1)")[0], Function(_)));
     }
 }

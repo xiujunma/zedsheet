@@ -73,6 +73,9 @@ pub struct DataProxy {
     pub history: History,
     pub clipboard: Clipboard,
     pub auto_filter: AutoFilter,
+    /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
+    /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
+    pub named_ranges: HashMap<String, String>,
 }
 
 impl Default for DataProxy {
@@ -92,6 +95,7 @@ impl Default for DataProxy {
             history: History::new(),
             clipboard: Clipboard::new(),
             auto_filter: AutoFilter::new(),
+            named_ranges: HashMap::new(),
         }
     }
 }
@@ -304,6 +308,15 @@ impl DataProxy {
                 let (c, row) = exp2xy(&r);
                 self.resolve_numeric(row, c, vis)
             }
+            Token::Name(n) => {
+                *pos += 1;
+                // Scalar context: a named range resolves to its top-left cell;
+                // an undefined name is a #NAME? error.
+                match self.resolve_name(&n) {
+                    Some((r0, c0, _, _)) => self.resolve_numeric(r0, c0, vis),
+                    None => Err(EvalErr::Name),
+                }
+            }
             Token::String(s) => {
                 *pos += 1;
                 Ok(s.trim().parse::<f64>().unwrap_or(0.0))
@@ -335,6 +348,29 @@ impl DataProxy {
                     }
                 }
                 *pos += 3;
+            } else if let Some(Token::Name(n)) = t.get(*pos).cloned() {
+                // A bare named range as an argument expands to its cells; a name
+                // inside a larger expression (e.g. `Rev*2`) falls through to the
+                // scalar handling in parse_cmp/parse_factor.
+                let bare = matches!(
+                    t.get(*pos + 1),
+                    Some(Token::Comma) | Some(Token::RightParen) | None
+                );
+                if bare {
+                    match self.resolve_name(&n) {
+                        Some((r0, c0, r1, c1)) => {
+                            for r in r0..=r1 {
+                                for c in c0..=c1 {
+                                    args.push(self.resolve_numeric(r, c, vis)?);
+                                }
+                            }
+                            *pos += 1;
+                        }
+                        None => return Err(EvalErr::Name),
+                    }
+                } else {
+                    args.push(self.parse_cmp(t, pos, vis)?);
+                }
             } else {
                 args.push(self.parse_cmp(t, pos, vis)?);
             }
@@ -434,6 +470,36 @@ impl DataProxy {
 
     pub fn set_link(&mut self, ri: usize, ci: usize, link: Option<String>) {
         self.get_cell_or_new(ri, ci).link = link;
+    }
+
+    // --- Named ranges (issue #21) ---
+
+    /// Define (or replace) a sheet-scoped named range. Names are case-insensitive.
+    pub fn set_named_range(&mut self, name: &str, range_expr: &str) {
+        self.named_ranges.insert(name.to_uppercase(), range_expr.to_string());
+    }
+
+    /// The range expression for a name (e.g. `"B2:B3"`), if defined.
+    pub fn get_named_range(&self, name: &str) -> Option<String> {
+        self.named_ranges.get(&name.to_uppercase()).cloned()
+    }
+
+    /// Remove a named range; returns whether it existed.
+    pub fn remove_named_range(&mut self, name: &str) -> bool {
+        self.named_ranges.remove(&name.to_uppercase()).is_some()
+    }
+
+    /// Inclusive cell bounds `(r0, c0, r1, c1)` for a defined name (for the name
+    /// box to select it), or `None` if undefined.
+    pub fn named_range_bounds(&self, name: &str) -> Option<(usize, usize, usize, usize)> {
+        self.resolve_name(name)
+    }
+
+    /// Resolve a name to inclusive cell bounds `(r0, c0, r1, c1)`, or `None` if
+    /// the name is undefined.
+    fn resolve_name(&self, name: &str) -> Option<(usize, usize, usize, usize)> {
+        let expr = self.named_ranges.get(&name.to_uppercase())?;
+        Some(parse_range_expr(expr))
     }
 
     pub fn delete_cell(&mut self, ri: usize, ci: usize) {
@@ -710,6 +776,7 @@ impl DataProxy {
             },
             "validations": self.validations.get_data(),
             "autofilter": self.auto_filter.get_data(),
+            "namedRanges": serde_json::to_value(&self.named_ranges).unwrap_or_default(),
         })
     }
 
@@ -746,6 +813,12 @@ impl DataProxy {
         }
         if let Some(filter_data) = data.get("autofilter") {
             self.auto_filter.set_data(filter_data);
+        }
+        if let Some(nr) = data
+            .get("namedRanges")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.named_ranges = nr;
         }
     }
 
@@ -804,6 +877,20 @@ fn adjust_formula_refs(
 
 /// Format a formula result for display: drop the fractional part for integers,
 /// otherwise trim trailing zeros.
+/// Parse a range expression like `"B2:B3"` or `"B2"` into inclusive cell bounds
+/// `(r0, c0, r1, c1)`.
+fn parse_range_expr(expr: &str) -> (usize, usize, usize, usize) {
+    let expr = expr.trim();
+    if let Some((a, b)) = expr.split_once(':') {
+        let (c0, r0) = exp2xy(a.trim());
+        let (c1, r1) = exp2xy(b.trim());
+        (r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1))
+    } else {
+        let (c, r) = exp2xy(expr);
+        (r, c, r, c)
+    }
+}
+
 fn format_number(v: f64) -> String {
     if !v.is_finite() {
         return "#ERROR".to_string();
@@ -1249,5 +1336,55 @@ mod tests {
         // Clearing.
         d.set_link(0, 0, None);
         assert_eq!(d.get_link(0, 0), None);
+    }
+
+    // --- Named ranges (issue #21) ---
+
+    #[test]
+    fn named_range_in_function() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 1, "10"); // B2
+        d.set_cell_text(2, 1, "20"); // B3
+        d.set_named_range("Revenue", "B2:B3");
+        d.set_cell_text(0, 0, "=SUM(Revenue)");
+        assert_eq!(d.cell_display_value(0, 0), "30");
+    }
+
+    #[test]
+    fn named_single_cell_as_value() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 1, "10"); // B2
+        d.set_named_range("Price", "B2");
+        d.set_cell_text(0, 0, "=Price*2");
+        assert_eq!(d.cell_display_value(0, 0), "20");
+    }
+
+    #[test]
+    fn named_range_mixed_with_literal_arg() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 1, "10"); // B2
+        d.set_cell_text(2, 1, "20"); // B3
+        d.set_named_range("Rev", "B2:B3");
+        d.set_cell_text(0, 0, "=SUM(Rev, 5)");
+        assert_eq!(d.cell_display_value(0, 0), "35");
+    }
+
+    #[test]
+    fn names_are_case_insensitive() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 1, "7"); // B2
+        d.set_named_range("Foo", "B2");
+        d.set_cell_text(0, 0, "=foo+1");
+        assert_eq!(d.cell_display_value(0, 0), "8");
+    }
+
+    #[test]
+    fn undefined_name_is_name_error() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=Nope+1");
+        assert_eq!(d.cell_display_value(0, 0), "#NAME?");
+        // …also when used as a function argument.
+        d.set_cell_text(1, 0, "=SUM(Nope)");
+        assert_eq!(d.cell_display_value(1, 0), "#NAME?");
     }
 }

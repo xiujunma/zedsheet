@@ -1156,6 +1156,42 @@ impl TableRenderer {
         self.selector
     }
 
+    // --- Named ranges (issue #21) ---
+
+    /// The range expression (e.g. `"B2:B3"`) for a defined name, if any.
+    pub fn named_range_expr(&self, name: &str) -> Option<String> {
+        self.data.get_named_range(name)
+    }
+
+    /// Define a named range covering the current selection (undoable). The range
+    /// expression is the selection's bounds in `A1` / `A1:B3` form.
+    pub fn define_selection_name(&mut self, name: &str) {
+        self.snapshot();
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        let expr = if r0 == r1 && c0 == c1 {
+            crate::renderer::alphabets::xy2expr(c0, r0)
+        } else {
+            format!(
+                "{}:{}",
+                crate::renderer::alphabets::xy2expr(c0, r0),
+                crate::renderer::alphabets::xy2expr(c1, r1)
+            )
+        };
+        self.data.set_named_range(name, &expr);
+    }
+
+    /// Select the cells of a defined name; returns whether the name existed.
+    pub fn select_named(&mut self, name: &str) -> bool {
+        match self.data.named_range_bounds(name) {
+            Some((r0, c0, r1, c1)) => {
+                self.select_cell(r0, c0);
+                self.select_to(r1, c1);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Set the canvas cursor (e.g. "col-resize", "row-resize", "default").
     pub fn set_cursor(&self, cursor: &str) {
         let _ = self.target.style().set_property("cursor", cursor);

@@ -449,6 +449,19 @@ fn parse_ref(s: &str) -> Option<(usize, usize)> {
     }
 }
 
+/// True if `s` is acceptable as a named-range name: it starts with a letter and
+/// is otherwise letters / digits / underscore. (Strings that parse as a cell
+/// reference are handled as references before this is reached.)
+fn is_valid_name(s: &str) -> bool {
+    let s = s.trim();
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Markup for the formula bar: name box, cancel/confirm, fx, formula input.
 fn formula_bar_html() -> String {
     "<input class=\"zs-name-box\" style=\"width:80px;height:100%;box-sizing:border-box;border:none;border-right:1px solid #e0e2e4;padding:0 6px;outline:none;font-size:13px;\" />\
@@ -599,7 +612,19 @@ fn wire_formula_bar(
                 r.render();
                 true
             } else {
-                false
+                // Not a cell ref/range: navigate to an existing named range, or
+                // define a new name over the current selection.
+                let mut r = renderer.borrow_mut();
+                if r.select_named(&val) {
+                    r.render();
+                    true
+                } else if is_valid_name(&val) {
+                    r.define_selection_name(&val);
+                    r.render();
+                    true
+                } else {
+                    false
+                }
             };
             if moved {
                 sync();

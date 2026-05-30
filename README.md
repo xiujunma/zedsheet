@@ -22,6 +22,8 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 - Formula engine: aggregation, logical, math/stats, and date functions
   (`SUM, AVERAGE, IF, AND, POWER, MEDIAN, ROUND, DATE, YEAR, TODAY, NOW`, …),
   cell refs and ranges (`A1`, `B2:C4`), with a circular-reference guard
+- **Named ranges**: name a cell/range from the name box and use it in formulas
+  (`=SUM(Revenue)`) or type the name to jump to it
 - Formula references auto-adjust when rows/columns are inserted or deleted
 
 **Interaction**
@@ -36,9 +38,9 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 - Icon toolbar (sprite-based) with live active-state that reflects the
   selected cell — format / font / font-size dropdowns, text & fill color
   pickers, bold/italic/underline/strike, merge, align, wrap, freeze
-- Excel-style **formula bar**: name box (navigate to a cell or `A1:B3` range),
-  cancel/confirm, an `fx` function picker, and a formula input bound to the
-  active cell
+- Excel-style **formula bar**: name box (navigate to a cell or `A1:B3` range,
+  or define/jump to a named range), cancel/confirm, an `fx` function picker,
+  and a formula input bound to the active cell
 - Right-click **context menu**: copy/cut/paste, insert/delete row & column,
   notes, hyperlinks, clear contents
 - **Multi-sheet** tabs: add, switch, double-click to rename, right-click to delete
