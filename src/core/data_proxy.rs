@@ -875,6 +875,63 @@ fn adjust_formula_refs(
     .to_string()
 }
 
+/// Shift every *relative* component of a formula's cell references by
+/// (`drow`, `dcol`) — the copy/fill transform. `$`-anchored components stay put.
+fn shift_formula_refs(text: &str, drow: isize, dcol: isize) -> String {
+    let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
+    re.replace_all(text, |caps: &regex::Captures| {
+        let col_lock = &caps[1];
+        let row_lock = &caps[3];
+        let col = index_at(&caps[2]);
+        let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
+        let new_col = if col_lock.is_empty() { (col as isize + dcol).max(0) as usize } else { col };
+        let new_row = if row_lock.is_empty() { (row as isize + drow).max(0) as usize } else { row };
+        format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
+    })
+    .to_string()
+}
+
+/// Compute the filled text for one line of a fill-handle drag. `source` is the
+/// source cells' text in fill order; `n` target cells follow them.
+///
+/// - All-numeric source of length ≥2 → continue the arithmetic series.
+/// - Otherwise tile the source cyclically; formula cells have their relative
+///   references shifted along the fill axis (`axis_is_row` ⇒ shift rows).
+pub fn fill_line(source: &[String], n: usize, axis_is_row: bool) -> Vec<String> {
+    let len = source.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    // Numeric series when every source cell is a plain number and there are ≥2.
+    if len >= 2 {
+        let nums: Option<Vec<f64>> =
+            source.iter().map(|s| s.trim().parse::<f64>().ok()).collect();
+        if let Some(nums) = nums {
+            let step = (nums[len - 1] - nums[0]) / (len as f64 - 1.0);
+            let last = nums[len - 1];
+            return (0..n)
+                .map(|i| format_number(last + step * (i as f64 + 1.0)))
+                .collect();
+        }
+    }
+    // Tile/copy, shifting formula references for each step past the source.
+    (0..n)
+        .map(|i| {
+            let src = &source[i % len];
+            if src.starts_with('=') {
+                let shift = (len * (i / len + 1)) as isize;
+                if axis_is_row {
+                    shift_formula_refs(src, shift, 0)
+                } else {
+                    shift_formula_refs(src, 0, shift)
+                }
+            } else {
+                src.clone()
+            }
+        })
+        .collect()
+}
+
 /// Format a formula result for display: drop the fractional part for integers,
 /// otherwise trim trailing zeros.
 /// Parse a range expression like `"B2:B3"` or `"B2"` into inclusive cell bounds
@@ -1386,5 +1443,40 @@ mod tests {
         // …also when used as a function argument.
         d.set_cell_text(1, 0, "=SUM(Nope)");
         assert_eq!(d.cell_display_value(1, 0), "#NAME?");
+    }
+
+    // --- Fill handle (issue #12) ---
+
+    #[test]
+    fn shift_formula_refs_relative_and_anchored() {
+        assert_eq!(shift_formula_refs("=A1+B1", 1, 0), "=A2+B2"); // down one row
+        assert_eq!(shift_formula_refs("=A1+B1", 0, 1), "=B1+C1"); // right one col
+        assert_eq!(shift_formula_refs("=$A$1+A1", 1, 0), "=$A$1+A2"); // anchored stays
+        assert_eq!(shift_formula_refs("=A$1+$A1", 1, 1), "=B$1+$A2"); // mixed locks
+    }
+
+    #[test]
+    fn fill_line_numeric_series() {
+        assert_eq!(fill_line(&["1".into(), "2".into()], 3, true), vec!["3", "4", "5"]);
+        assert_eq!(fill_line(&["2".into(), "4".into()], 2, true), vec!["6", "8"]);
+        assert_eq!(fill_line(&["10".into(), "8".into()], 2, true), vec!["6", "4"]); // descending
+    }
+
+    #[test]
+    fn fill_line_single_number_copies() {
+        assert_eq!(fill_line(&["5".into()], 3, true), vec!["5", "5", "5"]);
+    }
+
+    #[test]
+    fn fill_line_text_copies_cyclically() {
+        assert_eq!(fill_line(&["a".into(), "b".into()], 3, true), vec!["a", "b", "a"]);
+    }
+
+    #[test]
+    fn fill_line_formula_shifts() {
+        // A single formula filled down shifts one extra row per step.
+        assert_eq!(fill_line(&["=B1".into()], 3, true), vec!["=B2", "=B3", "=B4"]);
+        // Filled right shifts columns instead.
+        assert_eq!(fill_line(&["=A1".into()], 2, false), vec!["=B1", "=C1"]);
     }
 }

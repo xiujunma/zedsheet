@@ -1695,6 +1695,14 @@ fn wire_events(
                 return;
             }
 
+            // Fill handle → start a fill drag from the current selection.
+            if renderer.borrow().is_on_fill_handle(x, y) {
+                renderer.borrow_mut().start_fill();
+                *drag.borrow_mut() =
+                    Some(DragState { kind: DragKind::Fill, start_x: x, start_y: y, start_size: 0f64 });
+                return;
+            }
+
             commit_edit(&renderer, &textarea, &editing);
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
@@ -1741,6 +1749,13 @@ fn wire_events(
                     DragKind::VScroll | DragKind::HScroll => {
                         drop(r);
                         apply_scroll_drag(&renderer, ds.kind, x, y);
+                    }
+                    DragKind::Fill => {
+                        // Extend the selection toward the cursor as a fill preview.
+                        if let Some((ri, ci)) = r.cell_at(x, y) {
+                            r.select_to(ri, ci);
+                            r.render();
+                        }
                     }
                 }
                 return;
@@ -1961,11 +1976,23 @@ fn wire_events(
         cb.forget();
     }
 
-    // window mouseup: end drag-select and any header/scrollbar drag.
+    // window mouseup: end drag-select and any header/scrollbar/fill drag.
     {
         let dragging = dragging.clone();
         let drag = drag.clone();
+        let renderer = renderer.clone();
+        let sync = sync.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            // A fill-handle drag applies the fill on release.
+            let was_fill = matches!(*drag.borrow(), Some(ds) if ds.kind == DragKind::Fill);
+            if was_fill {
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.apply_fill();
+                    r.render();
+                }
+                sync();
+            }
             *dragging.borrow_mut() = false;
             *drag.borrow_mut() = None;
         });

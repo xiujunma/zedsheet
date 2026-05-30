@@ -31,7 +31,9 @@ pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
     }
 }
 
-pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, _renderer: &TableRenderer) {
+pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, renderer: &TableRenderer) {
+    // Cleared unless the selection (and thus its fill handle) is visible below.
+    renderer.set_fill_handle_rect(None);
     // Find the area containing the selector cells
     for area in &viewport.areas {
         // Skip empty areas (exclusive end bound => start >= end means no cells).
@@ -90,17 +92,13 @@ pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crat
         canvas.rect(sel_x + 0.5, sel_y + 0.5, sel_width - 1.0, sel_height - 1.0);
         canvas.stroke();
 
-        // Draw corner handle for resize (only on single cell selection)
-        if selector.ri == selector.eri && selector.ci == selector.eci {
-            let handle_size = 6f64;
-            canvas.set_fill_style("#0078d7");
-            canvas.fill_rect(
-                sel_x + sel_width - handle_size,
-                sel_y + sel_height - handle_size,
-                handle_size,
-                handle_size
-            );
-        }
+        // Fill handle: a small square at the selection's bottom-right corner.
+        let handle_size = 6f64;
+        let hx = sel_x + sel_width - handle_size;
+        let hy = sel_y + sel_height - handle_size;
+        canvas.set_fill_style("#0078d7");
+        canvas.fill_rect(hx, hy, handle_size, handle_size);
+        renderer.set_fill_handle_rect(Some((hx, hy, handle_size, handle_size)));
 
         canvas.restore();
         break;

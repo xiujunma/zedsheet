@@ -30,6 +30,9 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 - Click to select, drag to range-select (works in every direction), keyboard
   navigation, mouse-wheel scroll
 - In-cell editor (double-click or Enter); commit on Enter/Tab, cancel on Esc
+- **Fill handle**: drag the selection's bottom-right handle to copy values &
+  formats, extend a numeric series (1, 2 → 3, 4…), or fill formulas with
+  relative references adjusted
 - Row/column resize by dragging header borders; draggable scrollbar thumbs
 - Clipboard: copy / cut / paste, plus `Ctrl/Cmd + C/X/V`, `Ctrl/Cmd + B/I/U`,
   and `Delete` to clear

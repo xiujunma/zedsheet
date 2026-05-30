@@ -31,6 +31,8 @@ pub enum DragKind {
     RowResize(usize),
     VScroll,
     HScroll,
+    /// Dragging the selection's bottom-right fill handle.
+    Fill,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -364,6 +366,10 @@ pub struct TableRenderer {
     /// Fixed corner of a drag/shift selection (the original mousedown cell).
     pub selection_anchor: (usize, usize),
     pub clipboard: Option<ClipboardData>,
+    /// Source selection bounds (r0,c0,r1,c1) while a fill-handle drag is active.
+    fill_source: Option<(usize, usize, usize, usize)>,
+    /// Screen rect (x,y,w,h) of the fill handle from the last render, for hit-testing.
+    last_fill_handle: std::cell::Cell<Option<(f64, f64, f64, f64)>>,
     /// Undo/redo snapshots of the active sheet's data.
     undo_stack: Vec<DataProxy>,
     redo_stack: Vec<DataProxy>,
@@ -437,6 +443,8 @@ impl TableRenderer {
             selector: SelectorRect::default(),
             selection_anchor: (0, 0),
             clipboard: None,
+            fill_source: None,
+            last_fill_handle: std::cell::Cell::new(None),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -1189,6 +1197,80 @@ impl TableRenderer {
                 true
             }
             None => false,
+        }
+    }
+
+    // --- Fill handle (issue #12) ---
+
+    /// Record the fill handle's screen rect during rendering (for hit-testing).
+    pub fn set_fill_handle_rect(&self, rect: Option<(f64, f64, f64, f64)>) {
+        self.last_fill_handle.set(rect);
+    }
+
+    /// Whether the point `(x, y)` is on the selection's fill handle.
+    pub fn is_on_fill_handle(&self, x: f64, y: f64) -> bool {
+        match self.last_fill_handle.get() {
+            // A small tolerance makes the 6px handle easier to grab.
+            Some((hx, hy, hw, hh)) => {
+                let t = 2.0;
+                x >= hx - t && x <= hx + hw + t && y >= hy - t && y <= hy + hh + t
+            }
+            None => false,
+        }
+    }
+
+    /// Begin a fill-handle drag, recording the current selection as the source.
+    pub fn start_fill(&mut self) {
+        self.fill_source = Some(self.selection_bounds());
+    }
+
+    /// Apply the fill from the recorded source into the (drag-extended) selection,
+    /// copying values/formats and continuing numeric series. Undoable.
+    pub fn apply_fill(&mut self) {
+        let Some((sr0, sc0, sr1, sc1)) = self.fill_source.take() else {
+            return;
+        };
+        let (_, _, tr1, tc1) = self.selection_bounds();
+        let down = tr1 as isize - sr1 as isize;
+        let right = tc1 as isize - sc1 as isize;
+        if down <= 0 && right <= 0 {
+            return; // dragged back inside the source — nothing to fill
+        }
+        self.snapshot();
+        if down >= right {
+            let n = down as usize;
+            for c in sc0..=sc1 {
+                let source: Vec<String> =
+                    (sr0..=sr1).map(|r| self.data.get_cell_text(r, c)).collect();
+                let styles: Vec<Option<usize>> = (sr0..=sr1)
+                    .map(|r| self.data.get_cell(r, c).and_then(|cell| cell.style))
+                    .collect();
+                let filled = crate::core::data_proxy::fill_line(&source, n, true);
+                let slen = source.len();
+                for (i, text) in filled.iter().enumerate() {
+                    let tr = sr1 + 1 + i;
+                    self.data.set_cell_text(tr, c, text);
+                    // Fill replaces the target's format with the source cell's.
+                    self.data.get_cell_or_new(tr, c).style = styles[i % slen];
+                }
+            }
+        } else {
+            let n = right as usize;
+            for r in sr0..=sr1 {
+                let source: Vec<String> =
+                    (sc0..=sc1).map(|c| self.data.get_cell_text(r, c)).collect();
+                let styles: Vec<Option<usize>> = (sc0..=sc1)
+                    .map(|c| self.data.get_cell(r, c).and_then(|cell| cell.style))
+                    .collect();
+                let filled = crate::core::data_proxy::fill_line(&source, n, false);
+                let slen = source.len();
+                for (i, text) in filled.iter().enumerate() {
+                    let tc = sc1 + 1 + i;
+                    self.data.set_cell_text(r, tc, text);
+                    // Fill replaces the target's format with the source cell's.
+                    self.data.get_cell_or_new(r, tc).style = styles[i % slen];
+                }
+            }
         }
     }
 
