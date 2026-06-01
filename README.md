@@ -24,6 +24,8 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   cell refs and ranges (`A1`, `B2:C4`), with a circular-reference guard
 - **Named ranges**: name a cell/range from the name box and use it in formulas
   (`=SUM(Revenue)`) or type the name to jump to it
+- **Cross-sheet references**: `=Sheet2!A1` and `=SUM(Sheet2!A1:B3)` resolve
+  against the named sheet; an unknown sheet surfaces as `#REF!`
 - Formula references auto-adjust when rows/columns are inserted or deleted
 
 **Interaction**

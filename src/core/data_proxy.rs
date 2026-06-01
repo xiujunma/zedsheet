@@ -1,5 +1,7 @@
 use serde::{Serialize, Deserialize};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use crate::core::cell_range::CellRange;
 use crate::formula::parser::{tokenize, Token};
 use crate::renderer::alphabets::{exp2xy, index_at, string_at};
@@ -11,6 +13,11 @@ use crate::core::merges::Merges;
 use crate::core::state::{Selector, Scroll, Clipboard, History};
 use crate::core::validation::Validations;
 use crate::core::auto_filter::AutoFilter;
+
+/// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
+/// referenced by every `DataProxy` so cross-sheet formulas can resolve
+/// `Sheet2!A1` against the right sheet (issue #4).
+pub type SheetsRegistry = Rc<RefCell<Vec<DataProxy>>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Style {
@@ -76,6 +83,10 @@ pub struct DataProxy {
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
     /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
     pub named_ranges: HashMap<String, String>,
+    /// All sheets in the workbook, used to resolve `Sheet2!A1` references
+    /// (issue #4). `None` for tests / standalone use that don't need
+    /// cross-sheet refs; `ZedSheet` wires this up at construction time.
+    pub sheets: Option<SheetsRegistry>,
 }
 
 impl Default for DataProxy {
@@ -96,6 +107,7 @@ impl Default for DataProxy {
             clipboard: Clipboard::new(),
             auto_filter: AutoFilter::new(),
             named_ranges: HashMap::new(),
+            sheets: None,
         }
     }
 }
@@ -105,6 +117,28 @@ impl DataProxy {
         let mut dp = DataProxy::default();
         dp.name = name.to_string();
         dp
+    }
+
+    /// Wire the workbook-wide sheets registry used to resolve `Sheet2!A1`
+    /// cross-sheet references (issue #4). Call once per `DataProxy` after the
+    /// workbook's `Vec<DataProxy>` is built; the registry is shared via `Rc`
+    /// so a single `set_sheets` on one `DataProxy` doesn't propagate to
+    /// siblings — wire them all explicitly.
+    pub fn set_sheets(&mut self, sheets: SheetsRegistry) {
+        self.sheets = Some(sheets);
+    }
+
+    /// Look up a sheet by name (case-insensitive) in the workbook registry.
+    /// Returns `None` if no registry is wired or no sheet with that name
+    /// exists, which the evaluator surfaces as `#REF!`.
+    fn find_sheet(&self, name: &str) -> Option<DataProxy> {
+        let sheets = self.sheets.as_ref()?;
+        let upper = name.to_uppercase();
+        sheets
+            .borrow()
+            .iter()
+            .find(|d| d.name.to_uppercase() == upper)
+            .cloned()
     }
 
     pub fn get_cell(&self, ri: usize, ci: usize) -> Option<&Cell> {
@@ -308,6 +342,22 @@ impl DataProxy {
                 let (c, row) = exp2xy(&r);
                 self.resolve_numeric(row, c, vis)
             }
+            Token::SheetCellRef { sheet, ref_ } => {
+                *pos += 1;
+                let (c, row) = exp2xy(&ref_);
+                // Cross-sheet ref: resolve on the named sheet. An unknown
+                // sheet is a #REF! error (issue #4).
+                if let Some(target) = self.find_sheet(&sheet) {
+                    // Start a fresh visited set — the active sheet's circular-
+                    // ref guard shouldn't shadow a (ri, ci) on a *different*
+                    // sheet, and within-target loops are caught by the
+                    // target's own resolve_numeric adding to the set.
+                    let mut sub_vis = HashSet::new();
+                    target.resolve_numeric(row, c, &mut sub_vis)
+                } else {
+                    Err(EvalErr::Ref)
+                }
+            }
             Token::Name(n) => {
                 *pos += 1;
                 // Scalar context: a named range resolves to its top-left cell;
@@ -334,8 +384,24 @@ impl DataProxy {
             return Ok(args);
         }
         loop {
+            // Sheet-qualified range: `Sheet2!A1:B3` (issue #4).
+            if let Some(Token::SheetRange { sheet, from, to }) = t.get(*pos).cloned() {
+                let target = self.find_sheet(&sheet).ok_or(EvalErr::Ref)?;
+                let (c0, r0) = exp2xy(&from);
+                let (c1, r1) = exp2xy(&to);
+                let (r0, r1) = (r0.min(r1), r0.max(r1));
+                let (c0, c1) = (c0.min(c1), c0.max(c1));
+                // Fresh visited set per cross-sheet expansion — see the same
+                // note in parse_factor's SheetCellRef arm.
+                let mut sub_vis = HashSet::new();
+                for r in r0..=r1 {
+                    for c in c0..=c1 {
+                        args.push(target.resolve_numeric(r, c, &mut sub_vis)?);
+                    }
+                }
+                *pos += 1;
             // Range: CellRef ':' CellRef
-            if let (Some(Token::CellRef(a)), Some(Token::Colon), Some(Token::CellRef(b))) =
+            } else if let (Some(Token::CellRef(a)), Some(Token::Colon), Some(Token::CellRef(b))) =
                 (t.get(*pos), t.get(*pos + 1), t.get(*pos + 2))
             {
                 let (c0, r0) = exp2xy(a);
@@ -838,6 +904,10 @@ impl DataProxy {
 /// `A$1`); `$` markers are preserved. The relative component shifts by `delta`
 /// when its index is `>= shift_from`. On a delete, `deleted` carries the
 /// removed index — references that point at it become `#REF!`.
+///
+/// Cross-sheet prefixes (`Sheet2!A1`, issue #4) are masked out before the
+/// cell-ref substitution so the regex doesn't mistake the sheet name for a
+/// cell ref, and restored afterwards.
 fn adjust_formula_refs(
     text: &str,
     is_row: bool,
@@ -845,50 +915,100 @@ fn adjust_formula_refs(
     delta: isize,
     deleted: Option<usize>,
 ) -> String {
+    let (masked, placeholders) = mask_sheet_prefixes(text);
     let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
-    re.replace_all(text, |caps: &regex::Captures| {
-        let col_lock = &caps[1];
-        let row_lock = &caps[3];
-        let col = index_at(&caps[2]);
-        let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
+    let shifted = re
+        .replace_all(&masked, |caps: &regex::Captures| {
+            let col_lock = &caps[1];
+            let row_lock = &caps[3];
+            let col = index_at(&caps[2]);
+            let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
 
-        // A reference to the deleted row/column is invalidated.
-        if let Some(d) = deleted {
-            let idx = if is_row { row } else { col };
-            if idx == d {
-                return "#REF!".to_string();
+            // A reference to the deleted row/column is invalidated.
+            if let Some(d) = deleted {
+                let idx = if is_row { row } else { col };
+                if idx == d {
+                    return "#REF!".to_string();
+                }
             }
-        }
 
-        let mut new_col = col;
-        let mut new_row = row;
-        if is_row {
-            if row_lock.is_empty() && row >= shift_from {
-                new_row = (row as isize + delta).max(0) as usize;
+            let mut new_col = col;
+            let mut new_row = row;
+            if is_row {
+                if row_lock.is_empty() && row >= shift_from {
+                    new_row = (row as isize + delta).max(0) as usize;
+                }
+            } else if col_lock.is_empty() && col >= shift_from {
+                new_col = (col as isize + delta).max(0) as usize;
             }
-        } else if col_lock.is_empty() && col >= shift_from {
-            new_col = (col as isize + delta).max(0) as usize;
-        }
 
-        format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
-    })
-    .to_string()
+            format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
+        })
+        .to_string();
+    restore_placeholders(&shifted, &placeholders)
 }
 
 /// Shift every *relative* component of a formula's cell references by
-/// (`drow`, `dcol`) — the copy/fill transform. `$`-anchored components stay put.
+/// (`drow`, `dcol`) — the copy/fill transform. `$`-anchored components stay
+/// put. Sheet prefixes are masked out so the regex only touches refs
+/// (issue #4).
 fn shift_formula_refs(text: &str, drow: isize, dcol: isize) -> String {
+    let (masked, placeholders) = mask_sheet_prefixes(text);
     let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
-    re.replace_all(text, |caps: &regex::Captures| {
-        let col_lock = &caps[1];
-        let row_lock = &caps[3];
-        let col = index_at(&caps[2]);
-        let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
-        let new_col = if col_lock.is_empty() { (col as isize + dcol).max(0) as usize } else { col };
-        let new_row = if row_lock.is_empty() { (row as isize + drow).max(0) as usize } else { row };
-        format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
-    })
-    .to_string()
+    let shifted = re
+        .replace_all(&masked, |caps: &regex::Captures| {
+            let col_lock = &caps[1];
+            let row_lock = &caps[3];
+            let col = index_at(&caps[2]);
+            let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
+            let new_col = if col_lock.is_empty() {
+                (col as isize + dcol).max(0) as usize
+            } else {
+                col
+            };
+            let new_row = if row_lock.is_empty() {
+                (row as isize + drow).max(0) as usize
+            } else {
+                row
+            };
+            format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
+        })
+        .to_string();
+    restore_placeholders(&shifted, &placeholders)
+}
+
+/// Replace every `SheetName!` prefix in `text` with a unique ASCII-private-use
+/// placeholder, returning the masked text plus the (placeholder → original)
+/// table used by `restore_placeholders`. The placeholder is shaped so the
+/// cell-ref regex (`\$?[A-Za-z]+\$?[0-9]+`) cannot match any of its
+/// characters: it's bracketed by SOH control bytes and `#`s, with a pure-digit
+/// index between them — no `[A-Za-z]+[0-9]+` substring ever appears.
+fn mask_sheet_prefixes(text: &str) -> (String, Vec<(String, String)>) {
+    let re = Regex::new(r"[A-Za-z_][A-Za-z0-9_]*!").unwrap();
+    let mut placeholders: Vec<(String, String)> = Vec::new();
+    let masked = re
+        .replace_all(text, |caps: &regex::Captures| {
+            // \x01#<idx>#\x01 — neither the control bytes nor `#` are
+            // `[A-Za-z]` or `[0-9]`, so the cell-ref regex's character
+            // classes reject every char of the placeholder.
+            let key = format!("\u{0001}#{}#\u{0001}", placeholders.len());
+            placeholders.push((caps[0].to_string(), key.clone()));
+            key
+        })
+        .to_string();
+    (masked, placeholders)
+}
+
+/// Inverse of `mask_sheet_prefixes`: substitute each placeholder back with
+/// the original sheet prefix. Iterating in reverse keeps earlier
+/// placeholders from being clobbered if a later one happened to embed an
+/// earlier one's text (they don't, but reverse is the safe order).
+fn restore_placeholders(text: &str, placeholders: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (orig, key) in placeholders.iter().rev() {
+        out = out.replace(key, orig);
+    }
+    out
 }
 
 /// Compute the filled text for one line of a fill-handle drag. `source` is the
@@ -1478,5 +1598,100 @@ mod tests {
         assert_eq!(fill_line(&["=B1".into()], 3, true), vec!["=B2", "=B3", "=B4"]);
         // Filled right shifts columns instead.
         assert_eq!(fill_line(&["=A1".into()], 2, false), vec!["=B1", "=C1"]);
+    }
+
+    // --- Cross-sheet references (issue #4) ---
+
+    /// Build a two-sheet workbook. `setup_other` populates the second sheet's
+    /// cells with the given (row, col, value) triples. Returns the active
+    /// (first) sheet, already wired to the registry.
+    fn two_sheet_workbook(other: &[(usize, usize, &str)]) -> DataProxy {
+        let mut a = DataProxy::new("Sheet1");
+        let mut b = DataProxy::new("Sheet2");
+        for &(r, c, v) in other {
+            b.set_cell_text(r, c, v);
+        }
+        let sheets: SheetsRegistry = Rc::new(RefCell::new(vec![a.clone(), b.clone()]));
+        // Wire the registry on every DataProxy so the evaluator can find peers.
+        for d in sheets.borrow_mut().iter_mut() {
+            d.set_sheets(sheets.clone());
+        }
+        a.set_sheets(sheets);
+        a
+    }
+
+    #[test]
+    fn cross_sheet_cell_ref() {
+        let mut a = two_sheet_workbook(&[(0, 0, "42")]); // Sheet2!A1
+        a.set_cell_text(0, 0, "=Sheet2!A1");
+        assert_eq!(a.cell_display_value(0, 0), "42");
+    }
+
+    #[test]
+    fn cross_sheet_with_arithmetic() {
+        let mut a = two_sheet_workbook(&[(0, 0, "10"), (1, 0, "20")]);
+        a.set_cell_text(0, 0, "=Sheet2!A1+Sheet2!A2");
+        assert_eq!(a.cell_display_value(0, 0), "30");
+    }
+
+    #[test]
+    fn cross_sheet_range_in_function() {
+        let mut a = two_sheet_workbook(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3"), (3, 0, "4")]);
+        a.set_cell_text(0, 0, "=SUM(Sheet2!A1:A4)");
+        assert_eq!(a.cell_display_value(0, 0), "10");
+    }
+
+    #[test]
+    fn cross_sheet_unknown_sheet_is_ref_error() {
+        let a = two_sheet_workbook(&[]);
+        let mut a = a;
+        a.set_cell_text(0, 0, "=Missing!A1");
+        assert_eq!(a.cell_display_value(0, 0), "#REF!");
+        // And in a function arg position.
+        a.set_cell_text(1, 0, "=SUM(Missing!A1:A2, 7)");
+        assert_eq!(a.cell_display_value(1, 0), "#REF!");
+    }
+
+    #[test]
+    fn cross_sheet_uses_target_sheet_value() {
+        // A2 in Sheet2 is itself a formula; the cross-sheet ref sees the result.
+        let mut a = two_sheet_workbook(&[(0, 0, "5"), (1, 0, "=Sheet2!A1*2")]);
+        a.set_cell_text(0, 0, "=Sheet2!A2+1");
+        assert_eq!(a.cell_display_value(0, 0), "11"); // 5*2 + 1
+    }
+
+    #[test]
+    fn cross_sheet_name_is_case_insensitive() {
+        let mut a = two_sheet_workbook(&[(0, 0, "7")]);
+        a.set_cell_text(0, 0, "=sheet2!A1");
+        assert_eq!(a.cell_display_value(0, 0), "7");
+    }
+
+    #[test]
+    fn no_registry_means_cross_sheet_is_ref_error() {
+        // A DataProxy with no sheets registry should surface a #REF! rather
+        // than panicking.
+        let mut d = DataProxy::new("alone");
+        d.set_cell_text(0, 0, "=Other!A1");
+        assert_eq!(d.cell_display_value(0, 0), "#REF!");
+    }
+
+    #[test]
+    fn adjust_formula_refs_preserves_sheet_prefix() {
+        // The cell-ref substitution must not touch the `Sheet2!` prefix; the
+        // *relative* cell ref still shifts like any other (issue #4).
+        assert_eq!(adjust_formula_refs("=Sheet2!A1+B1", true, 0, 1, None), "=Sheet2!A2+B2");
+        // Absolute row on the cross-sheet ref stays put.
+        assert_eq!(adjust_formula_refs("=Sheet2!$A$1+A1", true, 0, 1, None), "=Sheet2!$A$1+A2");
+        // Both ends of a cross-sheet range shift.
+        assert_eq!(adjust_formula_refs("=Sheet2!A1:B3", true, 0, 1, None), "=Sheet2!A2:B4");
+    }
+
+    #[test]
+    fn shift_formula_refs_preserves_sheet_prefix() {
+        // The fill-handle shift must not corrupt cross-sheet refs.
+        assert_eq!(shift_formula_refs("=Sheet2!A1", 1, 0), "=Sheet2!A2");
+        assert_eq!(shift_formula_refs("=Sheet2!$A$1+A1", 0, 1), "=Sheet2!$A$1+B1");
+        assert_eq!(shift_formula_refs("=Sheet2!A1:B3", 1, 0), "=Sheet2!A2:B4");
     }
 }

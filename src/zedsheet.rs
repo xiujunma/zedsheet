@@ -46,7 +46,7 @@ pub struct ZedSheet {
 }
 
 impl ZedSheet {
-    pub fn new(selector: &str, options: Options, data: DataProxy) -> Self {
+    pub fn new(selector: &str, options: Options, mut data: DataProxy) -> Self {
         let target = document()
             .query_selector(selector)
             .expect("query_selector failed")
@@ -250,6 +250,18 @@ impl ZedSheet {
 
         // All sheets live here; the renderer holds a copy of the active one.
         let sheets: Sheets = Rc::new(RefCell::new(vec![data.clone()]));
+        // Wire the workbook-wide sheets registry on every DataProxy so
+        // cross-sheet formulas (`Sheet2!A1`, issue #4) can resolve against
+        // the named sheet. Each DataProxy gets the same `Rc<RefCell<Vec<…>>>`
+        // so the registry is shared across clones and sheet operations.
+        for d in sheets.borrow_mut().iter_mut() {
+            d.set_sheets(sheets.clone());
+        }
+        // The renderer's own DataProxy is the *original* `data`, not the
+        // clone inside the Vec — wire it too so the active-sheet evaluator
+        // can see peers. (Clones of a wired DataProxy copy the Rc, so
+        // subsequent sheet switches stay wired automatically.)
+        data.set_sheets(sheets.clone());
         let active: ActiveSheet = Rc::new(RefCell::new(0));
 
         let mut renderer = TableRenderer::new(canvas, width, height, data);
@@ -909,7 +921,11 @@ fn wire_bottombar(
             let new_idx = {
                 let mut s = sheets.borrow_mut();
                 let n = s.len() + 1;
-                s.push(DataProxy::new(&format!("sheet{}", n)));
+                let mut new_sheet = DataProxy::new(&format!("sheet{}", n));
+                // Wire the registry on the freshly added sheet so its
+                // formulas can resolve cross-sheet refs (issue #4).
+                new_sheet.set_sheets(sheets.clone());
+                s.push(new_sheet);
                 s.len() - 1
             };
             // Persist current sheet, then load the freshly added (empty) one.

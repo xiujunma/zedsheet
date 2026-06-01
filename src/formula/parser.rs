@@ -7,6 +7,10 @@ pub enum Token {
     /// A named-range reference (an identifier that isn't a cell ref or function).
     Name(String),
     Range(String),
+    /// A sheet-qualified single cell ref like `Sheet2!A1` (issue #4).
+    SheetCellRef { sheet: String, ref_: String },
+    /// A sheet-qualified range like `Sheet2!A1:B3` (issue #4).
+    SheetRange { sheet: String, from: String, to: String },
     Operator(String),
     Function(String),
     LeftParen,
@@ -280,6 +284,56 @@ pub fn looks_like_cell_ref(s: &str) -> bool {
     letters > 0 && i > letters && i == bytes.len()
 }
 
+/// True if `s` is a valid bare sheet name for cross-sheet refs (issue #4).
+/// Excel allows quoted names with spaces/specials via `'name'!A1`; this
+/// unquoted form covers identifier-style names like `Sheet`, `Sheet2`, `_q3`.
+/// The presence of digits is fine — `sheet2` is a sheet, while `A1` (matched
+/// first as a cell ref) never reaches the `!` path.
+fn is_sheet_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Read a cell-ref-shaped token (e.g. `A1`, `$B$2`) starting at `*i`, advancing
+/// the cursor past the consumed characters. Returns `None` if the next text
+/// doesn't look like a cell ref.
+fn read_cell_ref(chars: &[char], i: &mut usize) -> Option<String> {
+    let mut s = String::new();
+    // Optional leading '$' for column anchor.
+    if *i < chars.len() && chars[*i] == '$' {
+        s.push('$');
+        *i += 1;
+    }
+    // One or more letters for the column.
+    let start = s.len();
+    while *i < chars.len() && chars[*i].is_ascii_alphabetic() {
+        s.push(chars[*i].to_ascii_uppercase());
+        *i += 1;
+    }
+    if s.len() == start {
+        return None;
+    }
+    // Optional '$' for row anchor.
+    if *i < chars.len() && chars[*i] == '$' {
+        s.push('$');
+        *i += 1;
+    }
+    // One or more digits for the row.
+    let dstart = s.len();
+    while *i < chars.len() && chars[*i].is_ascii_digit() {
+        s.push(chars[*i]);
+        *i += 1;
+    }
+    if s.len() == dstart {
+        return None;
+    }
+    Some(s)
+}
+
 pub fn tokenize(formula: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = formula.chars().collect();
@@ -337,6 +391,38 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '$') {
                 ident.push(chars[i].to_ascii_uppercase());
                 i += 1;
+            }
+            // Sheet-qualified ref like `Sheet2!A1` or `Sheet2!A1:B3` (issue #4).
+            // The sheet-name part is identifier-shaped: `[A-Za-z_][A-Za-z0-9_]*`.
+            // If the next char is `!`, this `ident` is the sheet name and the
+            // remaining text must look like a cell ref (or a range). Otherwise
+            // we fall through to the function / cell-ref / name classification.
+            if i < chars.len() && chars[i] == '!' && is_sheet_name(&ident) {
+                let sheet = ident.clone();
+                i += 1; // consume '!'
+                let first_ref = match read_cell_ref(&chars, &mut i) {
+                    Some(r) => r,
+                    None => {
+                        // Malformed: emit a Name and let the rest fall through.
+                        tokens.push(Token::Name(sheet));
+                        continue;
+                    }
+                };
+                if i < chars.len() && chars[i] == ':' {
+                    i += 1; // consume ':'
+                    match read_cell_ref(&chars, &mut i) {
+                        Some(end) => tokens.push(Token::SheetRange { sheet, from: first_ref, to: end }),
+                        None => {
+                            // No closing ref — treat the whole thing as a
+                            // single-cell ref and let the leftover ':' be
+                            // picked up as a Colon token.
+                            tokens.push(Token::SheetCellRef { sheet, ref_: first_ref });
+                        }
+                    }
+                } else {
+                    tokens.push(Token::SheetCellRef { sheet, ref_: first_ref });
+                }
+                continue;
             }
             if i < chars.len() && chars[i] == '(' {
                 tokens.push(Token::Function(ident));
@@ -408,5 +494,69 @@ mod tests {
         );
         // An identifier followed by '(' is a function, not a name.
         assert!(matches!(tokenize("MAX(1)")[0], Function(_)));
+    }
+
+    // --- Cross-sheet references (issue #4) ---
+
+    #[test]
+    fn sheet_qualified_cell_ref() {
+        use Token::*;
+        assert_eq!(
+            tokenize("Sheet2!A1"),
+            vec![SheetCellRef { sheet: "SHEET2".into(), ref_: "A1".into() }]
+        );
+        assert_eq!(
+            tokenize("Sheet2!$A$1"),
+            vec![SheetCellRef { sheet: "SHEET2".into(), ref_: "$A$1".into() }]
+        );
+        // Mixed-locks across the sheet boundary.
+        assert_eq!(
+            tokenize("Sheet2!A$1"),
+            vec![SheetCellRef { sheet: "SHEET2".into(), ref_: "A$1".into() }]
+        );
+    }
+
+    #[test]
+    fn sheet_qualified_range() {
+        use Token::*;
+        assert_eq!(
+            tokenize("Sheet2!A1:B3"),
+            vec![SheetRange { sheet: "SHEET2".into(), from: "A1".into(), to: "B3".into() }]
+        );
+    }
+
+    #[test]
+    fn sheet_qualified_in_expression() {
+        use Token::*;
+        assert_eq!(
+            tokenize("Sheet2!A1 + 1"),
+            vec![
+                SheetCellRef { sheet: "SHEET2".into(), ref_: "A1".into() },
+                Operator("+".into()),
+                Number(1.0),
+            ]
+        );
+        assert_eq!(
+            tokenize("SUM(Sheet2!A1:A3)"),
+            vec![
+                Function("SUM".into()),
+                LeftParen,
+                SheetRange { sheet: "SHEET2".into(), from: "A1".into(), to: "A3".into() },
+                RightParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn unprefixed_name_still_works() {
+        use Token::*;
+        // A bare identifier (no trailing digits) is still a named-range
+        // reference; the sheet-prefix path is opt-in via `!`.
+        assert_eq!(tokenize("SheetQ"), vec![Name("SHEETQ".into())]);
+        // `Sheet2` matches the cell-ref pattern (letters + digits), so it
+        // tokenizes as a CellRef on its own — it only becomes a sheet name
+        // when followed by `!`. (This matches the pre-issue behavior; the
+        // test guards against accidentally widening the cell-ref rule.)
+        assert_eq!(tokenize("Sheet2"), vec![CellRef("SHEET2".into())]);
     }
 }
