@@ -1251,11 +1251,10 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
                 let mut r = renderer.borrow_mut();
-                // Only collapse the selection if the click is outside it.
-                let s = r.get_selector();
-                let inside = ri >= s.ri.min(s.eri) && ri <= s.ri.max(s.eri)
-                    && ci >= s.ci.min(s.eci) && ci <= s.ci.max(s.eci);
-                if !inside {
+                // Issue #19: only collapse when the right-click is outside
+                // every selected range (Excel behavior).
+                if !r.contains_selected(ri, ci) {
+                    r.clear_multi_range();
                     r.select_cell(ri, ci);
                     r.render();
                 }
@@ -1782,7 +1781,26 @@ fn wire_events(
                     }
                 }
                 let mut r = renderer.borrow_mut();
-                r.select_cell(ri, ci);
+                if me.ctrl_key() || me.meta_key() {
+                    // Issue #19: Ctrl/Cmd-click adds a disjoint range. If the
+                    // click landed inside an existing range, do nothing
+                    // (matches Excel — toggling disjoint selection).
+                    if !r.contains_selected(ri, ci) {
+                        // First Ctrl+click: promote the current single-rect
+                        // selection to a multi-range entry so the user's
+                        // first picked cell stays selected.
+                        if !r.multi_range_is_active() {
+                            r.promote_selector_to_range();
+                        }
+                        let (sr, sc) = r.merge_origin(ri, ci);
+                        r.add_range(sr, sc, sr, sc);
+                    }
+                } else {
+                    // Plain click clears any Ctrl/Cmd-added ranges and
+                    // starts a new single-rect selection.
+                    r.clear_multi_range();
+                    r.select_cell(ri, ci);
+                }
                 r.render();
                 *dragging.borrow_mut() = true;
                 drop(r);
@@ -1835,7 +1853,13 @@ fn wire_events(
                 let hit = renderer.borrow().cell_at(x, y);
                 if let Some((ri, ci)) = hit {
                     let mut r = renderer.borrow_mut();
-                    r.select_to(ri, ci);
+                    if me.ctrl_key() || me.meta_key() {
+                        // Issue #19: extend only the most-recently-added range
+                        // when Ctrl/Cmd is held during drag.
+                        r.select_to_last(ri, ci);
+                    } else {
+                        r.select_to(ri, ci);
+                    }
                     r.render();
                 }
                 return;

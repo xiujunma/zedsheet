@@ -37,6 +37,12 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   items style the active cell's text. Rotation pivots around the cell
   center; shrink-to-fit scales the font down to fit; indent adds to the
   left padding (ignored for right/center alignment, matching Excel)
+- **Non-contiguous (Ctrl/Cmd+click) multi-range selection**: Ctrl/Cmd-click
+  adds a disjoint range; Ctrl/Cmd-drag extends the most-recently-added range.
+  Style / border / clear / paste operations apply to every selected range.
+  A plain click clears all Ctrl-added ranges and starts a new single-rect
+  selection; the formula bar / name box / toggle-reads always reflect the
+  *active cell* (anchor of the last range), matching Excel.
 - Formula references auto-adjust when rows/columns are inserted or deleted
 
 **Interaction**

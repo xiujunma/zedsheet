@@ -6,5 +6,6 @@ pub mod cell_render;
 pub mod table_renderer;
 pub mod viewport;
 pub mod border;
+pub mod multi_range;
 
 pub mod render;

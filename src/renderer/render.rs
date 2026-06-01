@@ -31,77 +31,92 @@ pub fn render_lines(canvas: &Canvas, gridline: &Gridline, cb: impl Fn()) {
     }
 }
 
-pub fn render_selector(canvas: &Canvas, selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, renderer: &TableRenderer) {
-    // Cleared unless the selection (and thus its fill handle) is visible below.
+pub fn render_selector(canvas: &Canvas, _selector: &SelectorRect, viewport: &crate::renderer::viewport::Viewport, renderer: &TableRenderer) {
+    // Issue #19: draw every range in `multi_range`, with the fill handle on the
+    // last one. Falls back to the single-rect `selector` when there are no
+    // Ctrl/Cmd-added ranges.
     renderer.set_fill_handle_rect(None);
-    // Find the area containing the selector cells
-    for area in &viewport.areas {
-        // Skip empty areas (exclusive end bound => start >= end means no cells).
-        if area.range.start_row >= area.range.end_row || area.range.start_col >= area.range.end_col {
-            continue;
-        }
 
-        // The area's last visible row/col (end bound is exclusive).
-        let area_last_row = area.range.end_row - 1;
-        let area_last_col = area.range.end_col - 1;
+    let ranges = renderer.selection_ranges();
+    if ranges.is_empty() {
+        return;
+    }
+    let last_idx = ranges.len() - 1;
 
-        let min_r = selector.ri.min(selector.eri);
-        let max_r = selector.ri.max(selector.eri);
-        let min_c = selector.ci.min(selector.eci);
-        let max_c = selector.ci.max(selector.eci);
-
-        if max_r < area.range.start_row || min_r > area_last_row ||
-           max_c < area.range.start_col || min_c > area_last_col {
-            continue;
-        }
-
-        // Clamp the selection to the cells actually present in this area.
-        let sel_min_r = min_r.max(area.range.start_row);
-        let sel_max_r = max_r.min(area_last_row);
-        let sel_min_c = min_c.max(area.range.start_col);
-        let sel_max_c = max_c.min(area_last_col);
-
-        // Get positions (accounting for area offset)
-        let mut sel_x = area.x;
-        let mut sel_y = area.y;
-        let mut sel_width = 0f64;
-        let mut sel_height = 0f64;
-
-        // Calculate Y position and height
-        for row in sel_min_r..=sel_max_r {
-            if row == sel_min_r {
-                sel_y += area.row_map.get(&row).map_or(0f64, |(y, _)| *y);
+    for (i, (r0, c0, r1, c1)) in ranges.iter().enumerate() {
+        let is_last = i == last_idx;
+        for area in &viewport.areas {
+            // Skip empty areas (exclusive end bound => start >= end means no cells).
+            if area.range.start_row >= area.range.end_row || area.range.start_col >= area.range.end_col {
+                continue;
             }
-            sel_height += area.row_map.get(&row).map_or(0f64, |(_, h)| *h);
-        }
 
-        // Calculate X position and width
-        for col in sel_min_c..=sel_max_c {
-            if col == sel_min_c {
-                sel_x += area.col_map.get(&col).map_or(0f64, |(x, _)| *x);
+            // The area's last visible row/col (end bound is exclusive).
+            let area_last_row = area.range.end_row - 1;
+            let area_last_col = area.range.end_col - 1;
+
+            let min_r = *r0;
+            let max_r = *r1;
+            let min_c = *c0;
+            let max_c = *c1;
+
+            if max_r < area.range.start_row || min_r > area_last_row ||
+               max_c < area.range.start_col || min_c > area_last_col {
+                continue;
             }
-            sel_width += area.col_map.get(&col).map_or(0f64, |(_, w)| *w);
+
+            // Clamp the selection to the cells actually present in this area.
+            let sel_min_r = min_r.max(area.range.start_row);
+            let sel_max_r = max_r.min(area_last_row);
+            let sel_min_c = min_c.max(area.range.start_col);
+            let sel_max_c = max_c.min(area_last_col);
+
+            // Get positions (accounting for area offset)
+            let mut sel_x = area.x;
+            let mut sel_y = area.y;
+            let mut sel_width = 0f64;
+            let mut sel_height = 0f64;
+
+            // Calculate Y position and height
+            for row in sel_min_r..=sel_max_r {
+                if row == sel_min_r {
+                    sel_y += area.row_map.get(&row).map_or(0f64, |(y, _)| *y);
+                }
+                sel_height += area.row_map.get(&row).map_or(0f64, |(_, h)| *h);
+            }
+
+            // Calculate X position and width
+            for col in sel_min_c..=sel_max_c {
+                if col == sel_min_c {
+                    sel_x += area.col_map.get(&col).map_or(0f64, |(x, _)| *x);
+                }
+                sel_width += area.col_map.get(&col).map_or(0f64, |(_, w)| *w);
+            }
+
+            // Draw selection border
+            canvas.save();
+            canvas.set_stroke_style("#0078d7");
+            canvas.set_line_width(1.5);
+
+            canvas.begin_path();
+            canvas.rect(sel_x + 0.5, sel_y + 0.5, sel_width - 1.0, sel_height - 1.0);
+            canvas.stroke();
+
+            // Fill handle: a small square at the selection's bottom-right corner.
+            // Only the last range gets the handle; otherwise the first range's
+            // handle would persist and confuse the user.
+            if is_last {
+                let handle_size = 6f64;
+                let hx = sel_x + sel_width - handle_size;
+                let hy = sel_y + sel_height - handle_size;
+                canvas.set_fill_style("#0078d7");
+                canvas.fill_rect(hx, hy, handle_size, handle_size);
+                renderer.set_fill_handle_rect(Some((hx, hy, handle_size, handle_size)));
+            }
+
+            canvas.restore();
+            break;
         }
-
-        // Draw selection border
-        canvas.save();
-        canvas.set_stroke_style("#0078d7");
-        canvas.set_line_width(1.5);
-
-        canvas.begin_path();
-        canvas.rect(sel_x + 0.5, sel_y + 0.5, sel_width - 1.0, sel_height - 1.0);
-        canvas.stroke();
-
-        // Fill handle: a small square at the selection's bottom-right corner.
-        let handle_size = 6f64;
-        let hx = sel_x + sel_width - handle_size;
-        let hy = sel_y + sel_height - handle_size;
-        canvas.set_fill_style("#0078d7");
-        canvas.fill_rect(hx, hy, handle_size, handle_size);
-        renderer.set_fill_handle_rect(Some((hx, hy, handle_size, handle_size)));
-
-        canvas.restore();
-        break;
     }
 }
 

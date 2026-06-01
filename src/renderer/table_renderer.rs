@@ -4,6 +4,7 @@ use std::fmt::Display;
 
 use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
+use crate::renderer::multi_range::MultiRangeState;
 use crate::renderer::render::{AreaRenderer, render};
 use web_sys::HtmlCanvasElement;
 
@@ -365,6 +366,9 @@ pub struct TableRenderer {
     pub selector: SelectorRect,
     /// Fixed corner of a drag/shift selection (the original mousedown cell).
     pub selection_anchor: (usize, usize),
+    /// Ctrl/Cmd multi-range selection (issue #19). Empty = single-rect mode.
+    /// The last range's anchor is the active cell mirrored by `selector`.
+    pub multi_range: MultiRangeState,
     pub clipboard: Option<ClipboardData>,
     /// Source selection bounds (r0,c0,r1,c1) while a fill-handle drag is active.
     fill_source: Option<(usize, usize, usize, usize)>,
@@ -442,6 +446,7 @@ impl TableRenderer {
             viewport: None,
             selector: SelectorRect::default(),
             selection_anchor: (0, 0),
+            multi_range: MultiRangeState::new(),
             clipboard: None,
             fill_source: None,
             last_fill_handle: std::cell::Cell::new(None),
@@ -794,6 +799,109 @@ impl TableRenderer {
         self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
     }
 
+    // --- Multi-range selection (issue #19) ---
+
+    /// All selected ranges, normalized to `(r0, c0, r1, c1)` tuples. Empty
+    /// when single-rect mode; the consumer should then fall back to
+    /// `selection_bounds()`. This is the iteration source for every fan-out
+    /// mutator.
+    pub fn selection_ranges(&self) -> Vec<(usize, usize, usize, usize)> {
+        if self.multi_range.is_active() {
+            self.multi_range.normalized()
+        } else {
+            let (r0, c0, r1, c1) = self.selection_bounds();
+            vec![(r0, c0, r1, c1)]
+        }
+    }
+
+    /// Bounding box of all selected ranges; falls back to `selection_bounds()`
+    /// in single-rect mode. Used by `set_borders` "outer" mode.
+    pub fn union_bounds(&self) -> (usize, usize, usize, usize) {
+        if self.multi_range.is_active() {
+            self.multi_range.union().unwrap_or_else(|| self.selection_bounds())
+        } else {
+            self.selection_bounds()
+        }
+    }
+
+    /// True if `(ri, ci)` lies inside any selected range (or inside the single
+    /// `selector` rect in single-rect mode).
+    pub fn contains_selected(&self, ri: usize, ci: usize) -> bool {
+        if self.multi_range.is_active() {
+            self.multi_range.contains(ri, ci)
+        } else {
+            let (r0, c0, r1, c1) = self.selection_bounds();
+            ri >= r0 && ri <= r1 && ci >= c0 && ci <= c1
+        }
+    }
+
+    /// Walk every cell in every selected range. In single-rect mode this
+    /// visits every cell of `selection_bounds()`.
+    pub fn for_each_selected_cell<F: FnMut(usize, usize)>(&self, mut f: F) {
+        if self.multi_range.is_active() {
+            self.multi_range.for_each_cell(f);
+        } else {
+            let (r0, c0, r1, c1) = self.selection_bounds();
+            for ri in r0..=r1 {
+                for ci in c0..=c1 {
+                    f(ri, ci);
+                }
+            }
+        }
+    }
+
+    /// Ctrl/Cmd-click equivalent: push a new range (anchor = the click cell,
+    /// size = 1×1 for now). Bounds are merge-expanded so a click inside a
+    /// merged region doesn't shrink to a single cell. Mirror the new anchor
+    /// into `selector` so the formula bar / name box reflect the active cell.
+    pub fn add_range(&mut self, r0: usize, c0: usize, r1: usize, c1: usize) {
+        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(r0, c0, r1, c1);
+        self.multi_range.add(r0, c0, r1, c1);
+        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+        self.selection_anchor = (r0, c0);
+    }
+
+    /// Reset the multi-range. `selection_anchor` returns to the active rect's
+    /// top-left so a subsequent plain drag extends from the right place.
+    pub fn clear_multi_range(&mut self) {
+        self.multi_range.clear();
+        self.selection_anchor = (self.selector.ri, self.selector.ci);
+    }
+
+    /// Whether the multi-range has at least one Ctrl/Cmd-added entry.
+    pub fn multi_range_is_active(&self) -> bool {
+        self.multi_range.is_active()
+    }
+
+    /// Promote the current single-rect `selector` into the multi-range. Used
+    /// by the first Ctrl/Cmd-click so the user's prior click isn't lost.
+    /// `selection_anchor` is set to the selector's top-left so a subsequent
+    /// Ctrl+drag extends the new range from there.
+    pub fn promote_selector_to_range(&mut self) {
+        let s = self.selector;
+        self.multi_range.add(s.ri, s.ci, s.eri, s.eci);
+        self.selection_anchor = (s.ri, s.ci);
+    }
+
+    /// Ctrl/Cmd-drag equivalent: grow the most-recently-added range from
+    /// `selection_anchor` to `(ri, ci)`, mirror the new top-left into
+    /// `selector`, and update the anchor. No-op in single-rect mode.
+    pub fn select_to_last(&mut self, ri: usize, ci: usize) {
+        if !self.multi_range.is_active() {
+            self.select_to(ri, ci);
+            return;
+        }
+        let (ar, ac) = self.selection_anchor;
+        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(
+            ar.min(ri),
+            ac.min(ci),
+            ar.max(ri),
+            ac.max(ci),
+        );
+        self.multi_range.extend_last(r1, c1);
+        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+    }
+
     /// The origin (top-left) of the merge covering (ri, ci), else (ri, ci).
     pub fn merge_origin(&self, ri: usize, ci: usize) -> (usize, usize) {
         match self.data.cell_merge(ri, ci) {
@@ -846,6 +954,8 @@ impl TableRenderer {
         self.scroll_rows = 0;
         self.scroll_cols = 0;
         self.selector = SelectorRect::default();
+        self.selection_anchor = (0, 0);
+        self.multi_range.clear();
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -898,17 +1008,20 @@ impl TableRenderer {
         )
     }
 
-    /// Apply a style mutation to every cell in the current selection.
+    /// Apply a style mutation to every cell in the current selection. With
+    /// multi-range selection (issue #19), iterates over every range.
     pub fn update_selection_style<F: Fn(&mut CellStyle)>(&mut self, f: F) {
         self.snapshot();
-        let (r0, c0, r1, c1) = self.selection_bounds();
-        for ri in r0..=r1 {
-            for ci in c0..=c1 {
-                let mut style = self.data.get_cell_style(ri, ci);
-                f(&mut style);
-                let idx = self.data.add_style(style);
-                self.data.set_cell_style(ri, ci, idx);
-            }
+        let cells: Vec<(usize, usize)> = {
+            let mut v = Vec::new();
+            self.for_each_selected_cell(|ri, ci| v.push((ri, ci)));
+            v
+        };
+        for (ri, ci) in cells {
+            let mut style = self.data.get_cell_style(ri, ci);
+            f(&mut style);
+            let idx = self.data.add_style(style);
+            self.data.set_cell_style(ri, ci, idx);
         }
     }
 
@@ -986,36 +1099,42 @@ impl TableRenderer {
 
     /// Apply borders to the selection. `mode` is one of:
     /// all | outer | none | top | bottom | left | right.
+    /// With multi-range selection (issue #19), iterates every range; the
+    /// `outer` mode uses the union bounding box so cells on the edge of any
+    /// range pick up the outer side.
     pub fn set_borders(&mut self, mode: &str) {
         self.snapshot();
-        let (r0, c0, r1, c1) = self.selection_bounds();
+        let (ur0, uc0, ur1, uc1) = self.union_bounds();
         let line = Some(("thin".to_string(), "#000000".to_string()));
-        for ri in r0..=r1 {
-            for ci in c0..=c1 {
-                let mut style = self.data.get_cell_style(ri, ci);
-                if mode == "none" {
-                    style.border = None;
-                } else {
-                    let mut b = style.border.clone().unwrap_or(CellBorder {
-                        left: None,
-                        right: None,
-                        top: None,
-                        bottom: None,
-                    });
-                    let want_top = mode == "all" || mode == "top" || (mode == "outer" && ri == r0);
-                    let want_bottom = mode == "all" || mode == "bottom" || (mode == "outer" && ri == r1);
-                    let want_left = mode == "all" || mode == "left" || (mode == "outer" && ci == c0);
-                    let want_right = mode == "all" || mode == "right" || (mode == "outer" && ci == c1);
-                    if want_top { b.top = line.clone(); }
-                    if want_bottom { b.bottom = line.clone(); }
-                    if want_left { b.left = line.clone(); }
-                    if want_right { b.right = line.clone(); }
-                    let empty = b.top.is_none() && b.bottom.is_none() && b.left.is_none() && b.right.is_none();
-                    style.border = if empty { None } else { Some(b) };
-                }
-                let idx = self.data.add_style(style);
-                self.data.set_cell_style(ri, ci, idx);
+        let cells: Vec<(usize, usize)> = {
+            let mut v = Vec::new();
+            self.for_each_selected_cell(|ri, ci| v.push((ri, ci)));
+            v
+        };
+        for (ri, ci) in cells {
+            let mut style = self.data.get_cell_style(ri, ci);
+            if mode == "none" {
+                style.border = None;
+            } else {
+                let mut b = style.border.clone().unwrap_or(CellBorder {
+                    left: None,
+                    right: None,
+                    top: None,
+                    bottom: None,
+                });
+                let want_top = mode == "all" || mode == "top" || (mode == "outer" && ri == ur0);
+                let want_bottom = mode == "all" || mode == "bottom" || (mode == "outer" && ri == ur1);
+                let want_left = mode == "all" || mode == "left" || (mode == "outer" && ci == uc0);
+                let want_right = mode == "all" || mode == "right" || (mode == "outer" && ci == uc1);
+                if want_top { b.top = line.clone(); }
+                if want_bottom { b.bottom = line.clone(); }
+                if want_left { b.left = line.clone(); }
+                if want_right { b.right = line.clone(); }
+                let empty = b.top.is_none() && b.bottom.is_none() && b.left.is_none() && b.right.is_none();
+                style.border = if empty { None } else { Some(b) };
             }
+            let idx = self.data.add_style(style);
+            self.data.set_cell_style(ri, ci, idx);
         }
     }
 
@@ -1028,15 +1147,18 @@ impl TableRenderer {
         self.update_selection_style(move |s| s.font_size = px);
     }
 
-    /// Remove styling from every cell in the selection.
+    /// Remove styling from every cell in the selection. Fans out across all
+    /// ranges in multi-range mode (issue #19).
     pub fn clear_format(&mut self) {
         self.snapshot();
-        let (r0, c0, r1, c1) = self.selection_bounds();
-        for ri in r0..=r1 {
-            for ci in c0..=c1 {
-                if let Some(cell) = self.data.get_cell_mut(ri, ci) {
-                    cell.style = None;
-                }
+        let cells: Vec<(usize, usize)> = {
+            let mut v = Vec::new();
+            self.for_each_selected_cell(|ri, ci| v.push((ri, ci)));
+            v
+        };
+        for (ri, ci) in cells {
+            if let Some(cell) = self.data.get_cell_mut(ri, ci) {
+                cell.style = None;
             }
         }
     }
@@ -1075,8 +1197,9 @@ impl TableRenderer {
         self.snapshot_clipboard(true);
     }
 
-    /// Paste the clipboard at the current selection's top-left. A cut clears
-    /// the source cells afterwards.
+    /// Paste the clipboard at the current selection's top-left. With multi-range
+    /// selection (issue #19), the clipboard lands at the top-left of every
+    /// range. A cut clears the source cells afterwards.
     pub fn paste(&mut self) {
         if self.clipboard.is_none() {
             return;
@@ -1087,12 +1210,17 @@ impl TableRenderer {
         }
         self.snapshot();
         let Some(cb) = self.clipboard.take() else { return };
-        let (dr0, dc0, _, _) = self.selection_bounds();
-        for (i, row) in cb.cells.iter().enumerate() {
-            for (j, cell) in row.iter().enumerate() {
-                let (r, c) = (dr0 + i, dc0 + j);
-                if self.data.is_cell_editable(r, c) {
-                    self.data.set_cell(r, c, cell.clone());
+        let destinations: Vec<(usize, usize)> = self.selection_ranges()
+            .into_iter()
+            .map(|(r0, c0, _, _)| (r0, c0))
+            .collect();
+        for (dr0, dc0) in destinations {
+            for (i, row) in cb.cells.iter().enumerate() {
+                for (j, cell) in row.iter().enumerate() {
+                    let (r, c) = (dr0 + i, dc0 + j);
+                    if self.data.is_cell_editable(r, c) {
+                        self.data.set_cell(r, c, cell.clone());
+                    }
                 }
             }
         }
@@ -1112,12 +1240,14 @@ impl TableRenderer {
             return;
         }
         self.snapshot();
-        let (r0, c0, r1, c1) = self.selection_bounds();
-        for ri in r0..=r1 {
-            for ci in c0..=c1 {
-                if self.data.is_cell_editable(ri, ci) {
-                    self.data.delete_cell(ri, ci);
-                }
+        let cells: Vec<(usize, usize)> = {
+            let mut v = Vec::new();
+            self.for_each_selected_cell(|ri, ci| v.push((ri, ci)));
+            v
+        };
+        for (ri, ci) in cells {
+            if self.data.is_cell_editable(ri, ci) {
+                self.data.delete_cell(ri, ci);
             }
         }
     }
