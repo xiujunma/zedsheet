@@ -87,6 +87,13 @@ pub struct DataProxy {
     /// (issue #4). `None` for tests / standalone use that don't need
     /// cross-sheet refs; `ZedSheet` wires this up at construction time.
     pub sheets: Option<SheetsRegistry>,
+    /// When `true`, every cell in this sheet is read-only — editor, paste,
+    /// and clear are all blocked. Toggleable at runtime via
+    /// `set_read_only` (issue #24). Wrapped in `Rc<RefCell>` so every
+    /// `DataProxy` clone (the registry entry *and* the renderer's active
+    /// copy) shares a single source of truth — toggling on either side
+    /// is immediately visible to the other.
+    pub read_only: Rc<RefCell<bool>>,
 }
 
 impl Default for DataProxy {
@@ -108,6 +115,7 @@ impl Default for DataProxy {
             auto_filter: AutoFilter::new(),
             named_ranges: HashMap::new(),
             sheets: None,
+            read_only: Rc::new(RefCell::new(false)),
         }
     }
 }
@@ -126,6 +134,38 @@ impl DataProxy {
     /// siblings — wire them all explicitly.
     pub fn set_sheets(&mut self, sheets: SheetsRegistry) {
         self.sheets = Some(sheets);
+    }
+
+    /// Put the sheet in read-only mode. While `true`, the editor refuses to
+    /// open, paste/clear are blocked, and `is_cell_editable` returns false
+    /// for every cell (issue #24). Read the current value with `is_read_only`.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        *self.read_only.borrow_mut() = read_only;
+    }
+
+    /// `true` when the sheet is in read-only mode. Per-cell locking is
+    /// separate — see `is_cell_editable` for the combined check.
+    pub fn is_read_only(&self) -> bool {
+        *self.read_only.borrow()
+    }
+
+    /// `true` when a write to `(ri, ci)` is allowed. Combines the sheet-wide
+    /// read-only flag with the cell's own `editable` flag (issue #24): a
+    /// cell with no explicit value defaults to editable, matching `Cell`'s
+    /// `Default` impl.
+    pub fn is_cell_editable(&self, ri: usize, ci: usize) -> bool {
+        if *self.read_only.borrow() {
+            return false;
+        }
+        self.get_cell(ri, ci).map(|c| c.editable).unwrap_or(true)
+    }
+
+    /// Toggle the per-cell `editable` flag (issue #24). Setting `false`
+    /// locks the cell even when the sheet is editable; setting `true`
+    /// re-allows edits to it.
+    pub fn set_cell_editable(&mut self, ri: usize, ci: usize, editable: bool) {
+        let cell = self.get_cell_or_new(ri, ci);
+        cell.editable = editable;
     }
 
     /// Look up a sheet by name (case-insensitive) in the workbook registry.
@@ -171,6 +211,12 @@ impl DataProxy {
     }
 
     pub fn set_cell_text(&mut self, ri: usize, ci: usize, text: &str) {
+        // Defense-in-depth: refuse writes to a locked cell or a read-only
+        // sheet (issue #24). Callers that have already checked may still
+        // pass through; this is a safety net.
+        if !self.is_cell_editable(ri, ci) {
+            return;
+        }
         let cell = self.get_cell_or_new(ri, ci);
         cell.set_text(text);
     }
@@ -1693,5 +1739,73 @@ mod tests {
         assert_eq!(shift_formula_refs("=Sheet2!A1", 1, 0), "=Sheet2!A2");
         assert_eq!(shift_formula_refs("=Sheet2!$A$1+A1", 0, 1), "=Sheet2!$A$1+B1");
         assert_eq!(shift_formula_refs("=Sheet2!A1:B3", 1, 0), "=Sheet2!A2:B4");
+    }
+
+    // --- Read-only mode & per-cell locking (issue #24) ---
+
+    #[test]
+    fn cells_default_to_editable() {
+        // An unset cell uses Cell::default (editable=true), so the sheet
+        // behaves like before the feature for callers that never opt in.
+        let d = DataProxy::new("t");
+        assert!(!d.is_read_only());
+        assert!(d.is_cell_editable(0, 0));
+    }
+
+    #[test]
+    fn read_only_blocks_every_cell() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "hello");
+        assert!(d.is_cell_editable(0, 0));
+        d.set_read_only(true);
+        assert!(d.is_read_only());
+        // The previously-writable cell is now locked.
+        assert!(!d.is_cell_editable(0, 0));
+        // A brand-new cell is locked too.
+        assert!(!d.is_cell_editable(5, 5));
+    }
+
+    #[test]
+    fn read_only_set_cell_text_is_noop() {
+        // Defense-in-depth: even if a caller forgets to check, the data
+        // layer refuses the write (issue #24).
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "before");
+        d.set_read_only(true);
+        d.set_cell_text(0, 0, "after");
+        assert_eq!(d.get_cell_text(0, 0), "before");
+    }
+
+    #[test]
+    fn locked_cell_blocks_set_cell_text() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "before");
+        d.set_cell_editable(0, 0, false);
+        assert!(!d.is_cell_editable(0, 0));
+        d.set_cell_text(0, 0, "after");
+        assert_eq!(d.get_cell_text(0, 0), "before");
+    }
+
+    #[test]
+    fn unlock_restores_editability() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "before");
+        d.set_cell_editable(0, 0, false);
+        d.set_cell_text(0, 0, "blocked");
+        assert_eq!(d.get_cell_text(0, 0), "before");
+        d.set_cell_editable(0, 0, true);
+        assert!(d.is_cell_editable(0, 0));
+        d.set_cell_text(0, 0, "after");
+        assert_eq!(d.get_cell_text(0, 0), "after");
+    }
+
+    #[test]
+    fn read_only_takes_precedence_over_unlocked_cell() {
+        // Even an explicitly-unlocked cell is locked while the sheet is
+        // read-only.
+        let mut d = DataProxy::new("t");
+        d.set_cell_editable(0, 0, true);
+        d.set_read_only(true);
+        assert!(!d.is_cell_editable(0, 0));
     }
 }

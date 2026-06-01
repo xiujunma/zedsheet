@@ -26,6 +26,12 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   (`=SUM(Revenue)`) or type the name to jump to it
 - **Cross-sheet references**: `=Sheet2!A1` and `=SUM(Sheet2!A1:B3)` resolve
   against the named sheet; an unknown sheet surfaces as `#REF!`
+- **Read-only / per-cell locking**: `setSheetReadOnly("sheet1", true)` blocks
+  every write to that sheet (editor, paste, clear, insert/delete row/col);
+  the per-cell `editable` flag (toggled via the **Cell Editable** context
+  menu item) locks individual cells. Toggling on either side is
+  immediately visible to the other (the registry and the renderer's copy
+  share state)
 - Formula references auto-adjust when rows/columns are inserted or deleted
 
 **Interaction**

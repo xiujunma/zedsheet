@@ -12,7 +12,7 @@ use crate::component::element::{h, Element};
 use crate::component::options::Options;
 use crate::component::toolbar::Toolbar;
 use crate::config::CSS_PREFIX;
-use crate::core::data_proxy::DataProxy;
+use crate::core::data_proxy::{DataProxy, SheetsRegistry};
 use crate::renderer::table_renderer::{DragKind, TableRenderer};
 
 /// Which attribute a toolbar dropdown applies.
@@ -376,6 +376,12 @@ impl ZedSheet {
     pub fn renderer(&self) -> SharedRenderer {
         self.renderer.clone()
     }
+
+    /// The workbook-wide sheets registry, so the host can toggle per-sheet
+    /// options like read-only mode from outside the renderer (issue #24).
+    pub(crate) fn sheets_registry(&self) -> Option<SheetsRegistry> {
+        self.renderer.borrow().data.sheets.clone()
+    }
 }
 
 fn client_box(el: &Element) -> (f64, f64) {
@@ -711,6 +717,16 @@ fn start_edit(
     ri: usize,
     ci: usize,
 ) {
+    // Refuse to open the editor on a locked cell or a read-only sheet
+    // (issue #24). Without this the user could still type into a
+    // hidden/disabled textarea, and the commit would either silently
+    // no-op or bypass the gate.
+    {
+        let r = renderer.borrow();
+        if !r.data.is_cell_editable(ri, ci) {
+            return;
+        }
+    }
     let (rect, text) = {
         let mut r = renderer.borrow_mut();
         r.select_cell(ri, ci);
@@ -1285,17 +1301,29 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
 
             {
                 let mut r = renderer.borrow_mut();
+                // Read-only mode blocks every *write* menu action. Copy is
+                // read-only on the data, so it stays available (issue #24).
+                let read_only = r.data.is_read_only();
                 match cmd.as_str() {
                     "copy" => r.copy_selection(),
-                    "cut" => r.cut_selection(),
-                    "paste" => r.paste(),
-                    "insert-row" => r.insert_row_at_selection(),
-                    "insert-col" => r.insert_col_at_selection(),
-                    "delete-row" => r.delete_rows_at_selection(),
-                    "delete-col" => r.delete_cols_at_selection(),
-                    "delete-note" => r.set_selection_note(None),
-                    "remove-link" => r.set_selection_link(None),
-                    "clear" => r.clear_selection_content(),
+                    "cut" if !read_only => r.cut_selection(),
+                    "paste" if !read_only => r.paste(),
+                    "insert-row" if !read_only => r.insert_row_at_selection(),
+                    "insert-col" if !read_only => r.insert_col_at_selection(),
+                    "delete-row" if !read_only => r.delete_rows_at_selection(),
+                    "delete-col" if !read_only => r.delete_cols_at_selection(),
+                    "delete-note" if !read_only => r.set_selection_note(None),
+                    "remove-link" if !read_only => r.set_selection_link(None),
+                    "clear" if !read_only => r.clear_selection_content(),
+                    // Toggle the per-cell `editable` flag on the active cell.
+                    // Works regardless of the sheet-wide read-only mode so
+                    // a user can mark cells for later protection, but the
+                    // toggle itself is a no-op in read-only mode.
+                    "editable" if !read_only => {
+                        let (sri, sci) = (r.selector.ri, r.selector.ci);
+                        let was_editable = r.data.get_cell(sri, sci).map(|c| c.editable).unwrap_or(true);
+                        r.data.set_cell_editable(sri, sci, !was_editable);
+                    }
                     _ => {}
                 }
                 r.render();

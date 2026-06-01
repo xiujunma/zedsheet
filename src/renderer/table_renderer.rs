@@ -826,6 +826,12 @@ impl TableRenderer {
     }
 
     pub fn set_cell_text_at(&mut self, ri: usize, ci: usize, text: &str) {
+        // Honor read-only mode and per-cell locking (issue #24). The data
+        // layer also gates this as a safety net, but checking here lets us
+        // avoid recording a no-op on the undo stack.
+        if !self.data.is_cell_editable(ri, ci) {
+            return;
+        }
         self.snapshot();
         self.data.set_cell_text(ri, ci, text);
     }
@@ -1053,12 +1059,19 @@ impl TableRenderer {
         if self.clipboard.is_none() {
             return;
         }
+        // Read-only sheets can't accept a paste (issue #24).
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let Some(cb) = self.clipboard.take() else { return };
         let (dr0, dc0, _, _) = self.selection_bounds();
         for (i, row) in cb.cells.iter().enumerate() {
             for (j, cell) in row.iter().enumerate() {
-                self.data.set_cell(dr0 + i, dc0 + j, cell.clone());
+                let (r, c) = (dr0 + i, dc0 + j);
+                if self.data.is_cell_editable(r, c) {
+                    self.data.set_cell(r, c, cell.clone());
+                }
             }
         }
         if cb.is_cut {
@@ -1073,11 +1086,16 @@ impl TableRenderer {
     }
 
     pub fn clear_selection_content(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
         for ri in r0..=r1 {
             for ci in c0..=c1 {
-                self.data.delete_cell(ri, ci);
+                if self.data.is_cell_editable(ri, ci) {
+                    self.data.delete_cell(ri, ci);
+                }
             }
         }
     }

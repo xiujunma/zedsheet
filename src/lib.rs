@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 extern crate console_error_panic_hook;
+use std::cell::RefCell;
 use std::panic;
 
 use wasm_bindgen::prelude::*;
@@ -18,10 +19,18 @@ mod config;
 mod core;
 mod formula;
 
-use core::data_proxy::{DataProxy, Style};
+use core::data_proxy::{DataProxy, Style, SheetsRegistry};
 use core::cell_range::CellRange;
 use component::options::Options;
 use zedsheet::ZedSheet;
+
+// The most-recently-mounted workbook's sheet registry, exposed so JS can
+// toggle read-only on a named sheet (`setSheetReadOnly`, issue #24). Set
+// by `start` and `mount`; cleared on panic-free shutdowns (no explicit
+// teardown).
+thread_local! {
+    static ACTIVE_SHEETS: RefCell<Option<SheetsRegistry>> = const { RefCell::new(None) };
+}
 
 /// Module init. Installs the panic hook. For the standalone Trunk demo it also
 /// auto-mounts sample data into `#zedsheet` if that element is present; in a
@@ -32,8 +41,7 @@ pub fn start() {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
 
     if document().query_selector("#zedsheet").ok().flatten().is_some() {
-        let sheet = ZedSheet::new("#zedsheet", Options::default(), demo_data());
-        std::mem::forget(sheet);
+        mount_into("#zedsheet", demo_data());
     }
 }
 
@@ -53,8 +61,54 @@ pub fn mount(selector: &str, data_json: Option<String>) {
             data.set_data_json(&json);
         }
     }
+    mount_into(selector, data);
+}
+
+fn mount_into(selector: &str, data: DataProxy) {
     let sheet = ZedSheet::new(selector, Options::default(), data);
+    // Stash the registry built inside `ZedSheet::new` so JS callers can
+    // toggle read-only by name (issue #24).
+    if let Some(sheets) = sheet.sheets_registry() {
+        ACTIVE_SHEETS.with(|a| *a.borrow_mut() = Some(sheets));
+    }
     std::mem::forget(sheet);
+}
+
+/// Put the sheet named `name` into read-only mode (`true`) or unlock it
+/// (`false`). Unknown sheet names are silently ignored — the call is
+/// idempotent and side-effect free for the caller (issue #24).
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn setSheetReadOnly(name: &str, read_only: bool) {
+    ACTIVE_SHEETS.with(|a| {
+        if let Some(sheets) = a.borrow().as_ref() {
+            let upper = name.to_uppercase();
+            let mut s = sheets.borrow_mut();
+            if let Some(d) = s.iter_mut().find(|d| d.name.to_uppercase() == upper) {
+                d.set_read_only(read_only);
+            }
+        }
+    });
+}
+
+/// Read whether the sheet named `name` is in read-only mode. Returns `false`
+/// for unknown names (issue #24).
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn isSheetReadOnly(name: &str) -> bool {
+    ACTIVE_SHEETS.with(|a| {
+        a.borrow()
+            .as_ref()
+            .and_then(|sheets| {
+                let upper = name.to_uppercase();
+                sheets
+                    .borrow()
+                    .iter()
+                    .find(|d| d.name.to_uppercase() == upper)
+                    .map(|d| d.is_read_only())
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// Sample data for the standalone demo.
