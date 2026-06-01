@@ -11,7 +11,7 @@ use crate::core::row::Row;
 use crate::core::col::{Col, Cols};
 use crate::core::merges::Merges;
 use crate::core::state::{Selector, Scroll, Clipboard, History};
-use crate::core::validation::Validations;
+use crate::core::validation::{Validation, Validations};
 use crate::core::auto_filter::AutoFilter;
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
@@ -948,6 +948,11 @@ impl DataProxy {
         if let Some(filter_data) = data.get("autofilter") {
             self.auto_filter.set_data(filter_data);
         }
+        if let Some(v) = data.get("validations").cloned() {
+            if let Ok(list) = serde_json::from_value::<Vec<Validation>>(v) {
+                self.validations.set_data(list);
+            }
+        }
         if let Some(nr) = data
             .get("namedRanges")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -1871,5 +1876,72 @@ mod tests {
         assert_eq!(s.rotation, None);
         assert!(!s.shrink_to_fit);
         assert_eq!(s.indent, 0);
+    }
+
+    // --- Issue #9: data validation wiring ---
+
+    use crate::core::validation::Validator;
+
+    #[test]
+    fn set_data_round_trips_validations() {
+        // Bug: prior to #9, DataProxy::set_data did not read the
+        // "validations" key, so any rule set on one sheet was lost on
+        // reload. This test would have caught it.
+        let mut d = DataProxy::new("t");
+        d.validations
+            .add("cell", "A1", Validator::new("list", false, "a,b,c", ""));
+        d.validations
+            .add("cell", "C3:E5", Validator::new("number", false, "1,10", "be"));
+        let json = d.get_data_json();
+
+        let mut d2 = DataProxy::new("t");
+        d2.set_data_json(&json);
+        // Both rules survive the round-trip.
+        assert!(d2.validations.get(0, 0).is_some());
+        assert!(d2.validations.get(4, 4).is_some());
+        assert_eq!(d2.validations.get_data().len(), 2);
+    }
+
+    #[test]
+    fn set_cell_text_records_validation_error() {
+        // The data layer (DataProxy::set_cell_text) does not itself block
+        // the write — that's the renderer's job. But the renderer's
+        // chokepoint calls `Validations::validate` and that *does* populate
+        // the errors map. We exercise that here.
+        let mut d = DataProxy::new("t");
+        d.validations
+            .add("cell", "A1", Validator::new("list", false, "a,b", ""));
+        // Manually invoke the validate hook (mirroring what the renderer
+        // does inside set_cell_text_at) and confirm the error is recorded.
+        assert!(!d.validations.validate(0, 0, "z"));
+        assert!(d.validations.get_error(0, 0).is_some());
+        // A valid value clears the error.
+        assert!(d.validations.validate(0, 0, "a"));
+        assert!(d.validations.get_error(0, 0).is_none());
+    }
+
+    #[test]
+    fn required_validator_blocks_empty_value_at_validate_layer() {
+        let mut d = DataProxy::new("t");
+        d.validations
+            .add("cell", "A1", Validator::new("text-length", true, "1,100", "be"));
+        // Empty value is rejected because `required = true`.
+        assert!(!d.validations.validate(0, 0, ""));
+        assert!(d.validations.get_error(0, 0).is_some());
+        // Whitespace-only is also rejected (the validator trims first).
+        assert!(!d.validations.validate(0, 0, "   "));
+        // Non-empty passes (it's also a valid number for the "be" operator).
+        assert!(d.validations.validate(0, 0, "5"));
+    }
+
+    #[test]
+    fn get_data_includes_validations_key() {
+        let mut d = DataProxy::new("t");
+        d.validations
+            .add("cell", "A1", Validator::new("list", false, "a,b", ""));
+        let json: serde_json::Value = serde_json::from_str(&d.get_data_json()).unwrap();
+        assert!(json.get("validations").is_some(), "validations key must serialize");
+        let arr = json.get("validations").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 1);
     }
 }

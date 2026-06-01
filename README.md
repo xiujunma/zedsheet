@@ -43,6 +43,14 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   A plain click clears all Ctrl-added ranges and starts a new single-rect
   selection; the formula bar / name box / toggle-reads always reflect the
   *active cell* (anchor of the last range), matching Excel.
+- **Data validation** (right-click → Data Validation…): constrain cell input
+  to a `list` (with dropdown arrow + click-to-pick popover), `number`
+  (between / not between / equal / not equal / less than / greater than),
+  `text-length`, `email`, or `phone` rule, optionally `Treat empty as
+  invalid`. Invalid commits keep the cell editor open with a red border
+  and an inline error label; invalid formula-bar commits surface a brief
+  toast and revert the cell. Rules are saved per cell and round-trip
+  through the workbook JSON.
 - Formula references auto-adjust when rows/columns are inserted or deleted
 
 **Interaction**

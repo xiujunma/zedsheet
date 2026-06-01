@@ -13,11 +13,13 @@ pub struct CellRange {
 
 impl Display for CellRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
-        let mut cell_ref = xy2expr(self.sri, self.sci);
+        // CellRange fields are (sri, sci, eri, eci) = (start_row, start_col,
+        // end_row, end_col). `xy2expr` takes (col, row) and must be called
+        // with the column first.
+        let mut cell_ref = xy2expr(self.sci, self.sri);
 
         if self.multiple() {
-            cell_ref = format!("{}:{}", cell_ref, xy2expr(self.eri, self.eci));
+            cell_ref = format!("{}:{}", cell_ref, xy2expr(self.eci, self.eri));
         }
 
         write!(f, "{}", cell_ref)

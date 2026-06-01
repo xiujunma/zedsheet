@@ -4,7 +4,7 @@ use std::rc::Rc;
 use gloo::utils::{document, window};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent, MouseEvent, WheelEvent};
+use web_sys::{HtmlCanvasElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent, MouseEvent, WheelEvent};
 
 use crate::renderer::alphabets::{exp2xy, xy2expr};
 
@@ -278,7 +278,44 @@ impl ZedSheet {
             .expect("textarea element");
         init_editor_style(&textarea);
 
+        // Sibling of the editor textarea: red error label shown when a
+        // commit is rejected by a data-validation rule (issue #9).
+        let mut editor_error_el = h("div", Some("zs-editor-error"));
+        let _ = editor_error_el.el.as_ref().map(|e| {
+            let _ = e.set_attribute("class", "zs-editor-error x-spreadsheet-toast");
+            let _ = e.set_attribute(
+                "style",
+                "display:none;position:absolute;font-size:12px;color:#b71c1c;\
+                 background:#fff5f5;padding:4px 8px;border:1px solid #e53935;\
+                 border-radius:3px;z-index:101;max-width:240px;pointer-events:none;",
+            );
+        });
+        let editor_error_node = editor_error_el
+            .el
+            .clone()
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok());
+        root.append_child(&mut editor_error_el);
+
         let editing: EditingCell = Rc::new(RefCell::new(None));
+
+        // Toast for top-of-screen validation errors from the formula bar
+        // (and any other commit path that can't keep the editor open).
+        let mut toast_el = h("div", Some("zs-dv-toast"));
+        let _ = toast_el.el.as_ref().map(|e| {
+            let _ = e.set_attribute("class", "zs-dv-toast x-spreadsheet-toast");
+            let _ = e.set_attribute(
+                "style",
+                "display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);\
+                 z-index:1200;font-size:13px;background:#fff5f5;color:#b71c1c;\
+                 border:1px solid #e53935;border-radius:4px;padding:6px 12px;\
+                 box-shadow:0 2px 6px rgba(0,0,0,0.2);",
+            );
+        });
+        let toast_node = toast_el
+            .el
+            .clone()
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok());
+        root.append_child(&mut toast_el);
 
         let palette_mode: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
@@ -330,12 +367,98 @@ impl ZedSheet {
             })
         };
 
-        wire_events(&mut canvas_el, &renderer, &textarea, &editing, &sync);
+        // Handle to open the Data Validation modal — populated after the
+        // modal is mounted (issue #9). The context menu's "validation"
+        // arm calls this when the user picks the menu item.
+        let dv_open: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+            Rc::new(RefCell::new(None));
+
+        // List-validity popover (issue #9): a single <ul> reused across
+        // cells. Mounted hidden; the canvas mousedown handler (wired by
+        // `wire_events` below) opens it when the user clicks the ▼ glyph.
+        let mut list_popover = h("ul", Some("zs-listpop"));
+        list_popover.set_inner_html(String::new());
+        let list_popover_node: Option<web_sys::Element> =
+            list_popover.el.clone().and_then(|e| e.dyn_into().ok());
+        let _ = list_popover_node.as_ref().map(|n| {
+            let _ = n.set_attribute(
+                "style",
+                "display:none;position:absolute;z-index:900;background:#fff;\
+                 border:1px solid #999;box-shadow:1px 2px 6px rgba(0,0,0,0.2);\
+                 padding:4px 0;margin:0;list-style:none;max-height:200px;\
+                 overflow-y:auto;font-size:13px;min-width:140px;",
+            );
+        });
+        root.append_child(&mut list_popover);
+        let list_popover_visible: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+
+        // Click handler on a <li>: set the cell value (always passes
+        // validation because list values are in the validator's CSV).
+        if let Some(ref pop) = list_popover_node {
+            let pop_for_listener = pop.clone();
+            let pop_for_hide = pop.clone();
+            let renderer_for_pop = renderer.clone();
+            let pop_visible_for_cb = list_popover_visible.clone();
+            let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+                let target = event.target();
+                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                    return;
+                };
+                let value = target_el.get_attribute("data-value").unwrap_or_default();
+                if value.is_empty() {
+                    return;
+                }
+                let (ri, ci) = {
+                    let r = renderer_for_pop.borrow();
+                    let s = r.get_selector();
+                    (s.ri, s.ci)
+                };
+                let _ = renderer_for_pop.borrow_mut().set_cell_text_at(ri, ci, &value);
+                let _ = renderer_for_pop.borrow_mut().render();
+                let _ = pop_for_hide.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                *pop_visible_for_cb.borrow_mut() = false;
+            });
+            let _ = pop_for_listener.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
+        // Outside click closes the popover.
+        {
+            let pop = list_popover_node.clone();
+            let pop_visible_for_outside = list_popover_visible.clone();
+            let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+                if !*pop_visible_for_outside.borrow() {
+                    return;
+                }
+                let Some(pop_el) = pop.as_ref() else { return };
+                let target = event.target();
+                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                    return;
+                };
+                if !pop_el.contains(Some(&target_el)) {
+                    let _ = pop_el.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                    *pop_visible_for_outside.borrow_mut() = false;
+                }
+            });
+            let _ = window()
+                .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
+
+        wire_events(
+            &mut canvas_el,
+            &renderer,
+            &textarea,
+            &editing,
+            editor_error_node,
+            list_popover_node.clone(),
+            list_popover_visible.clone(),
+            &sync,
+        );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer);
+            wire_context_menu(&mut canvas_el, menu_node, &renderer, dv_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
-            wire_formula_bar(fb, &renderer, &sync, fx_menu_node);
+            wire_formula_bar(fb, &renderer, &sync, fx_menu_node, toast_node);
         }
         // Map of toolbar action → dropdown menu node (for show-on-click).
         let mut menus: Vec<(String, web_sys::Element)> = dropdown_nodes
@@ -367,6 +490,38 @@ impl ZedSheet {
         if let Some(fp) = find_node {
             wire_find(fp, &renderer, &sync);
         }
+
+        // Data Validation modal (issue #9): mount once at root, hidden by
+        // default; opened by the right-click context menu.
+        let mut dv_modal = h("div", Some("zs-dv-modal-root"));
+        dv_modal.set_inner_html(data_validation_modal_html());
+        let dv_modal_node: Option<web_sys::Element> =
+            dv_modal.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut dv_modal);
+        if let Some(ref node) = dv_modal_node {
+            // Resolve the inner `.zs-dv-root` (the one with the inline
+            // `display:none`); the outer wrapper div is the node we pass
+            // to listeners for query_selector, but the visibility toggle
+            // happens on the inner.
+            let inner_for_open: web_sys::Element = node
+                .query_selector(".zs-dv-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            let handle = wire_data_validation_modal(node.clone(), &renderer);
+            let modal_for_open = inner_for_open;
+            let renderer_for_open = renderer.clone();
+            let handle_for_open = handle.clone();
+            *dv_open.borrow_mut() = Some(Rc::new(move || {
+                open_dv_modal(&modal_for_open, &renderer_for_open, &handle_for_open);
+            }));
+        }
+
+        // List-validity popover (issue #9): a single <ul> reused across
+        // cells. Mounted hidden; shown when the user clicks the ▼ glyph on
+        // a list-valid cell. Clicking a <li> sets the cell value.
+        // (Setup is done earlier; only the wiring callback references the
+        // already-declared `list_popover_node` / `list_popover_visible`.)
 
         sync();
 
@@ -511,6 +666,7 @@ fn wire_formula_bar(
     renderer: &SharedRenderer,
     sync: &SyncFn,
     fx_menu: Option<web_sys::Element>,
+    toast_node: Option<HtmlElement>,
 ) {
     let name_box: Option<HtmlInputElement> = fbar
         .query_selector(".zs-name-box")
@@ -582,6 +738,7 @@ fn wire_formula_bar(
         let renderer = renderer.clone();
         let formula_input = formula_input.clone();
         let sync = sync.clone();
+        let toast = toast_node.clone();
         Rc::new(move || {
             if let Some(fi) = &formula_input {
                 let v = fi.value();
@@ -592,7 +749,16 @@ fn wire_formula_bar(
                 };
                 {
                     let mut r = renderer.borrow_mut();
-                    r.set_cell_text_at(ri, ci, &v);
+                    if let Err(msg) = r.set_cell_text_at(ri, ci, &v) {
+                        // Validation failed (issue #9): revert the input to the
+                        // previous value and surface a brief toast. The cell
+                        // value is unchanged.
+                        let previous = r.data.get_cell_text(ri, ci);
+                        if let Some(fi) = &formula_input {
+                            fi.set_value(&previous);
+                        }
+                        show_toast(toast.as_ref(), &msg);
+                    }
                     r.render();
                 }
                 sync();
@@ -713,6 +879,7 @@ fn init_editor_style(ta: &HtmlTextAreaElement) {
 fn start_edit(
     renderer: &SharedRenderer,
     textarea: &HtmlTextAreaElement,
+    editor_error: Option<&HtmlElement>,
     editing: &EditingCell,
     ri: usize,
     ci: usize,
@@ -726,6 +893,12 @@ fn start_edit(
         if !r.data.is_cell_editable(ri, ci) {
             return;
         }
+    }
+    // Clear any prior validation error UI from the previous edit
+    // (issue #9).
+    let _ = textarea.style().set_property("border", "");
+    if let Some(e) = editor_error {
+        let _ = e.style().set_property("display", "none");
     }
     let (rect, text) = {
         let mut r = renderer.borrow_mut();
@@ -745,23 +918,126 @@ fn start_edit(
     textarea.select();
 }
 
-/// Commit the editor's contents to the data model and hide it.
-fn commit_edit(renderer: &SharedRenderer, textarea: &HtmlTextAreaElement, editing: &EditingCell) {
+/// Commit the editor's contents to the data model. Returns `Err(msg)` if
+/// validation rejected the value (issue #9): in that case the editor
+/// stays open with a red border and an error label below it, matching
+/// Excel. Returns `Ok(())` on success (editor is hidden).
+fn commit_edit(
+    renderer: &SharedRenderer,
+    textarea: &HtmlTextAreaElement,
+    editor_error: Option<&HtmlElement>,
+    editing: &EditingCell,
+) -> Result<(), String> {
     let cell = editing.borrow_mut().take();
-    if let Some((ri, ci)) = cell {
-        let value = textarea.value();
-        {
-            let mut r = renderer.borrow_mut();
-            r.set_cell_text_at(ri, ci, &value);
-            r.render();
+    let Some((ri, ci)) = cell else {
+        let _ = textarea.style().set_property("display", "none");
+        return Ok(());
+    };
+    let value = textarea.value();
+    let result = {
+        let mut r = renderer.borrow_mut();
+        let res = r.set_cell_text_at(ri, ci, &value);
+        r.render();
+        res
+    };
+    if let Err(ref msg) = result {
+        // Re-open the editor with the user's text preserved, red border,
+        // and an error label below it. `editing` is restored so subsequent
+        // keystrokes keep targeting the same cell.
+        let style = textarea.style();
+        let _ = style.set_property("display", "block");
+        let _ = style.set_property("border", "2px solid #e53935");
+        if let Some(e) = editor_error {
+            e.set_text_content(Some(msg));
+            let _ = e.style().set_property("display", "block");
+        }
+        *editing.borrow_mut() = Some((ri, ci));
+    } else {
+        let _ = textarea.style().set_property("display", "none");
+        let _ = textarea.style().set_property("border", "");
+        if let Some(e) = editor_error {
+            let _ = e.style().set_property("display", "none");
         }
     }
-    let _ = textarea.style().set_property("display", "none");
+    result
 }
 
-fn cancel_edit(textarea: &HtmlTextAreaElement, editing: &EditingCell) {
+/// Show a brief toast at the top of the page. Used for validation errors
+/// from the formula bar and other commit paths that can't keep the editor
+/// open (issue #9). Auto-hides after 2.5 seconds.
+fn show_toast(toast: Option<&HtmlElement>, msg: &str) {
+    if let Some(t) = toast {
+        t.set_text_content(Some(msg));
+        let _ = t.style().set_property("display", "block");
+        let toast_for_hide = t.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let _ = toast_for_hide.style().set_property("display", "none");
+        });
+        if let Some(w) = web_sys::window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                cb.as_ref().unchecked_ref(),
+                2500,
+            );
+        }
+        cb.forget();
+    }
+}
+
+/// Open the list-validity popover (issue #9) anchored at `(x, y)` showing
+/// the allowed values for the cell. The popover element is mutated in
+/// place; its `data-cell` attribute records the (ri, ci) for the click
+/// handler.
+fn show_list_popover(
+    popover: Option<&web_sys::Element>,
+    renderer: &SharedRenderer,
+    ri: usize,
+    ci: usize,
+    x: f64,
+    y: f64,
+    visible_flag: &Rc<RefCell<bool>>,
+) {
+    use wasm_bindgen::JsCast;
+    let Some(pop) = popover else { return };
+    let values = renderer.borrow().list_values_for_cell(ri, ci);
+    let Some(values) = values else { return };
+    // Build the <li> items.
+    let mut html = String::new();
+    for v in &values {
+        let escaped = v
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;");
+        html.push_str(&format!(
+            "<li data-value=\"{}\" style=\"padding:4px 14px;cursor:pointer;\">{}</li>",
+            escaped, escaped
+        ));
+    }
+    pop.set_inner_html(&html);
+    let _ = pop.set_attribute(
+        "data-cell",
+        &format!("{}_{}", ri, ci),
+    );
+    // Position the popover at (x, y). If it would overflow the viewport
+    // bottom, flip it above the click point.
+    let vh = web_sys::window()
+        .and_then(|w| w.inner_height().ok().and_then(|v| v.as_f64()))
+        .unwrap_or(800.0);
+    let top = if y + 200.0 > vh { (y - 24.0).max(0.0) } else { y };
+    let style = pop.unchecked_ref::<web_sys::HtmlElement>().style();
+    let _ = style.set_property("left", &format!("{}px", x));
+    let _ = style.set_property("top", &format!("{}px", top));
+    let _ = style.set_property("display", "block");
+    *visible_flag.borrow_mut() = true;
+}
+
+fn cancel_edit(textarea: &HtmlTextAreaElement, editor_error: Option<&HtmlElement>, editing: &EditingCell) {
     *editing.borrow_mut() = None;
     let _ = textarea.style().set_property("display", "none");
+    let _ = textarea.style().set_property("border", "");
+    if let Some(e) = editor_error {
+        let _ = e.style().set_property("display", "none");
+    }
 }
 
 /// Render the sheet-tab `<li>` items into the menu (active tab highlighted).
@@ -1222,6 +1498,8 @@ fn context_menu_html() -> String {
         item("remove-link", "Remove link"),
         divider.clone(),
         item("clear", "Clear contents"),
+        // Issue #9: data validation
+        item("validation", "Data Validation…"),
         // Text alignment helpers (issue #25). The "set_rotation" /
         // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
         // `wire_context_menu`.
@@ -1239,7 +1517,12 @@ fn context_menu_html() -> String {
 
 /// Wire the right-click context menu: open on canvas contextmenu, run the
 /// chosen command, and close on outside click.
-fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, renderer: &SharedRenderer) {
+fn wire_context_menu(
+    canvas_el: &mut Element,
+    menu_node: web_sys::Element,
+    renderer: &SharedRenderer,
+    dv_open: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+) {
     // Open on right-click, after selecting the cell under the cursor.
     {
         let renderer = renderer.clone();
@@ -1309,6 +1592,16 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
                 return;
             }
 
+            // Data Validation modal (issue #9): open before the borrow_mut
+            // match below so the open handle can take its own borrow.
+            if cmd == "validation" {
+                if let Some(open) = dv_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
             {
                 let mut r = renderer.borrow_mut();
                 // Read-only mode blocks every *write* menu action. Copy is
@@ -1369,6 +1662,483 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
             .unwrap();
         cb.forget();
     }
+}
+
+/// Data Validation modal markup (issue #9). Reuses the existing
+/// `.x-spreadsheet-modal` CSS at `src/index.css:781-833` for the header
+/// and content sections. The root div is positioned + hidden by default
+/// (the opener sets `display:block`).
+fn data_validation_modal_html() -> String {
+    format!(
+        r#"<div class="x-spreadsheet-modal zs-dv-root" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;background:#fff;border-radius:4px;border:1px solid rgba(0,0,0,0.1);box-shadow:rgba(0,0,0,0.2) 0px 2px 8px;font-size:13px;line-height:1.25em;width:420px;">
+            <div class="x-spreadsheet-modal-header" style="padding:8px 12px;border-bottom:1px solid #e6e6e6;font-weight:600;display:flex;align-items:center;justify-content:space-between;">
+                <span>Data Validation</span>
+                <span class="x-spreadsheet-icon zs-dv-close" style="cursor:pointer;color:#999;font-size:14px;">✕</span>
+            </div>
+            <div class="x-spreadsheet-modal-content" style="padding:12px;">
+                <div style="display:flex;align-items:center;margin-bottom:8px;">
+                    <label style="width:90px;">Allow</label>
+                    <select class="zs-dv-type" style="flex:1;padding:3px;">
+                        <option value="">Any value</option>
+                        <option value="list">List</option>
+                        <option value="number">Number</option>
+                        <option value="text-length">Text length</option>
+                        <option value="email">Email</option>
+                        <option value="phone">Phone</option>
+                    </select>
+                </div>
+                <div class="zs-dv-op-row" style="display:none;align-items:center;margin-bottom:8px;">
+                    <label style="width:90px;">Operator</label>
+                    <select class="zs-dv-op" style="flex:1;padding:3px;">
+                        <option value="be">between</option>
+                        <option value="nbe">not between</option>
+                        <option value="eq">equal to</option>
+                        <option value="neq">not equal to</option>
+                        <option value="lt">less than</option>
+                        <option value="lte">less than or equal to</option>
+                        <option value="gt">greater than</option>
+                        <option value="gte">greater than or equal to</option>
+                    </select>
+                </div>
+                <div class="zs-dv-val-row" style="display:none;align-items:center;margin-bottom:8px;">
+                    <label style="width:90px;" class="zs-dv-val1-label">Value</label>
+                    <input class="zs-dv-val1 zs-dv-val" type="text" style="flex:1;padding:3px;box-sizing:border-box;" />
+                    <span class="zs-dv-to" style="margin:0 6px;display:none;">to</span>
+                    <input class="zs-dv-val2 zs-dv-val" type="text" style="flex:1;display:none;padding:3px;box-sizing:border-box;" />
+                </div>
+                <div class="zs-dv-list-row" style="display:none;margin-bottom:8px;">
+                    <label style="display:block;margin-bottom:4px;">Source (comma-separated, e.g. Yes,No,Maybe)</label>
+                    <textarea class="zs-dv-list" rows="3" style="width:100%;padding:4px;box-sizing:border-box;font-family:inherit;"></textarea>
+                </div>
+                <div style="display:flex;align-items:center;margin-bottom:8px;">
+                    <label style="width:90px;">&nbsp;</label>
+                    <label style="display:flex;align-items:center;">
+                        <input type="checkbox" class="zs-dv-req" /> &nbsp;Treat empty as invalid
+                    </label>
+                </div>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <label style="width:90px;">Apply to</label>
+                    <input class="zs-dv-ref" type="text" style="flex:1;padding:3px;box-sizing:border-box;" />
+                </div>
+                <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">
+                    <button class="zs-dv-cancel" style="padding:4px 14px;">Cancel</button>
+                    <button class="zs-dv-save" style="padding:4px 14px;background:#4b89ff;color:#fff;border:0;border-radius:3px;">Save</button>
+                </div>
+            </div>
+        </div>"#,
+    )
+}
+
+/// Wire the Data Validation modal: type-change toggles operator/value
+/// rows, Save commits a `Validator` to the renderer's `validations`,
+/// Cancel/close-icon/outside-click/Escape hide. Returns a handle that
+/// the context menu can use to open the modal.
+fn wire_data_validation_modal(
+    modal_node: web_sys::Element,
+    renderer: &SharedRenderer,
+) -> Rc<RefCell<bool>> {
+    use wasm_bindgen::JsCast;
+    // Resolve the inner `.zs-dv-root` once — the wrapper passed in has
+    // an inline `display:none` on its child, not itself.
+    let inner_modal: web_sys::Element = modal_node
+        .query_selector(".zs-dv-root")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| modal_node.clone());
+    let visible: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let set_visible = move |v: bool, modal: &web_sys::Element| {
+        let _ = modal
+            .unchecked_ref::<web_sys::HtmlElement>()
+            .style()
+            .set_property("display", if v { "block" } else { "none" });
+    };
+
+    // Type change: show/hide operator row, value row, list row.
+    if let Ok(Some(type_select)) = modal_node.query_selector(".zs-dv-type") {
+        let modal_for_type = modal_node.clone();
+        let type_select_for_cb = type_select.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            let type_val = type_select_for_cb
+                .unchecked_ref::<web_sys::HtmlInputElement>()
+                .value();
+            update_dv_rows(&modal_for_type, &type_val);
+        });
+        let _ = type_select.add_event_listener_with_callback(
+            "change",
+            cb.as_ref().unchecked_ref(),
+        );
+        cb.forget();
+    }
+
+    // Operator change: re-run update_dv_rows so the "to" / val2 fields
+    // appear when "between" / "not between" is selected and disappear
+    // for the single-value operators.
+    if let Ok(Some(op_select)) = modal_node.query_selector(".zs-dv-op") {
+        let modal_for_op = modal_node.clone();
+        let op_select_for_cb = op_select.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            // Read the select's value by finding the selected option's value.
+            let op_val = op_select_for_cb
+                .query_selector("option:checked")
+                .ok()
+                .flatten()
+                .and_then(|e| e.get_attribute("value"))
+                .unwrap_or_default();
+            let type_val = modal_for_op
+                .query_selector(".zs-dv-type")
+                .ok()
+                .flatten()
+                .and_then(|e| e.query_selector("option:checked").ok().flatten())
+                .and_then(|e| e.get_attribute("value"))
+                .unwrap_or_default();
+            update_dv_rows_with_op(&modal_for_op, &type_val, &op_val);
+        });
+        let _ = op_select.add_event_listener_with_callback(
+            "change",
+            cb.as_ref().unchecked_ref(),
+        );
+        cb.forget();
+    }
+
+    // Save button.
+    if let Ok(Some(save_btn)) = modal_node.query_selector(".zs-dv-save") {
+        let modal_for_save = inner_modal.clone();
+        let renderer_for_save = renderer.clone();
+        let visible_for_save = visible.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            handle_dv_save(&modal_for_save, &renderer_for_save);
+            *visible_for_save.borrow_mut() = false;
+            let _ = modal_for_save
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("display", "none");
+        });
+        let _ = save_btn.add_event_listener_with_callback(
+            "click",
+            cb.as_ref().unchecked_ref(),
+        );
+        cb.forget();
+    }
+
+    // Cancel button.
+    if let Ok(Some(cancel_btn)) = modal_node.query_selector(".zs-dv-cancel") {
+        let modal_for_cancel = inner_modal.clone();
+        let visible_for_cancel = visible.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            let _ = modal_for_cancel
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("display", "none");
+            *visible_for_cancel.borrow_mut() = false;
+        });
+        let _ = cancel_btn.add_event_listener_with_callback(
+            "click",
+            cb.as_ref().unchecked_ref(),
+        );
+        cb.forget();
+    }
+
+    // Close icon.
+    if let Ok(Some(close_icon)) = modal_node.query_selector(".zs-dv-close") {
+        let modal_for_close = inner_modal.clone();
+        let visible_for_close = visible.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            let _ = modal_for_close
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("display", "none");
+            *visible_for_close.borrow_mut() = false;
+        });
+        let _ = close_icon.add_event_listener_with_callback(
+            "click",
+            cb.as_ref().unchecked_ref(),
+        );
+        cb.forget();
+    }
+
+    // Outside click: close the modal if the click is outside it.
+    {
+        let modal_for_outside = inner_modal.clone();
+        let visible_for_outside = visible.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+            if !*visible_for_outside.borrow() {
+                return;
+            }
+            let target = event.target();
+            let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                return;
+            };
+            if !modal_for_outside.contains(Some(&target_el)) {
+                let _ = modal_for_outside
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+                *visible_for_outside.borrow_mut() = false;
+            }
+        });
+        let _ = window()
+            .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+
+    // Escape: close the modal if open.
+    {
+        let modal_for_esc = inner_modal.clone();
+        let visible_for_esc = visible.clone();
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+            if !*visible_for_esc.borrow() {
+                return;
+            }
+            let ke: KeyboardEvent = event.dyn_into().unwrap();
+            if ke.key() == "Escape" {
+                let _ = modal_for_esc
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+                *visible_for_esc.borrow_mut() = false;
+            }
+        });
+        let _ = window()
+            .add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        cb.forget();
+    }
+
+    // Suppress unused-variable warning for the `set_visible` helper
+    // (kept for future use; the direct style writes above are equivalent).
+    let _ = set_visible;
+    visible
+}
+
+/// Show/hide the operator, value, and list rows in the DV modal based on
+/// the chosen type.
+fn update_dv_rows(modal: &web_sys::Element, type_val: &str) {
+    use wasm_bindgen::JsCast;
+    // Read the current operator from the DOM (fallback for callers that
+    // don't pass it explicitly).
+    let op_val = modal
+        .query_selector(".zs-dv-op option:checked")
+        .ok()
+        .flatten()
+        .and_then(|e| e.get_attribute("value"))
+        .unwrap_or_default();
+    update_dv_rows_with_op(modal, type_val, &op_val);
+}
+
+fn update_dv_rows_with_op(modal: &web_sys::Element, type_val: &str, op_val: &str) {
+    use wasm_bindgen::JsCast;
+    let set_row = |q: &str, display: &str| {
+        if let Ok(Some(el)) = modal.query_selector(q) {
+            let _ = el.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", display);
+        }
+    };
+    // Default: all hidden.
+    set_row(".zs-dv-op-row", "none");
+    set_row(".zs-dv-val-row", "none");
+    set_row(".zs-dv-list-row", "none");
+    set_row(".zs-dv-to", "none");
+    set_row(".zs-dv-val2", "none");
+    match type_val {
+        "list" => set_row(".zs-dv-list-row", "block"),
+        "number" | "text-length" => {
+            set_row(".zs-dv-op-row", "flex");
+            set_row(".zs-dv-val-row", "flex");
+            // The "to" label and second value input only show for between /
+            // not-between operators.
+            if op_val == "be" || op_val == "nbe" {
+                set_row(".zs-dv-to", "inline");
+                set_row(".zs-dv-val2", "block");
+            }
+        }
+        _ => {} // empty / email / phone: only the type dropdown is meaningful
+    }
+}
+
+/// Build a `Validator` from the modal's current input values and commit
+/// it to the renderer's `validations` for the chosen ref.
+fn handle_dv_save(modal: &web_sys::Element, renderer: &SharedRenderer) {
+    use wasm_bindgen::JsCast;
+    let value_of = |q: &str| -> String {
+        modal
+            .query_selector(q)
+            .ok()
+            .flatten()
+            .and_then(|e| {
+                if let Some(input) = e.dyn_ref::<web_sys::HtmlInputElement>() {
+                    Some(input.value())
+                } else if let Some(text) = e.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+                    Some(text.value())
+                } else {
+                    // <select>: read the currently selected option's value.
+                    e.query_selector("option:checked")
+                        .ok()
+                        .flatten()
+                        .and_then(|opt| opt.get_attribute("value"))
+                }
+            })
+            .unwrap_or_default()
+    };
+    let text_of = |q: &str| -> String {
+        modal
+            .query_selector(q)
+            .ok()
+            .flatten()
+            .and_then(|e| e.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+            .map(|i| i.value())
+            .unwrap_or_default()
+    };
+    let checked = |q: &str| -> bool {
+        modal
+            .query_selector(q)
+            .ok()
+            .flatten()
+            .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+            .map(|i| i.checked())
+            .unwrap_or(false)
+    };
+
+    let type_val = value_of(".zs-dv-type");
+    let op_val = value_of(".zs-dv-op");
+    let val1 = value_of(".zs-dv-val1");
+    let val2 = value_of(".zs-dv-val2");
+    let list_csv = text_of(".zs-dv-list");
+    let required = checked(".zs-dv-req");
+    let ref_str = value_of(".zs-dv-ref");
+
+    use crate::core::validation::Validator;
+    let mut r = renderer.borrow_mut();
+    if ref_str.trim().is_empty() {
+        return; // ignore: no target range
+    }
+    if type_val.is_empty() {
+        // "Any value" → clear any validator on the ref.
+        r.clear_validations_in_range(&ref_str);
+    } else if type_val == "list" {
+        let csv = list_csv.trim().to_string();
+        let v = Validator::new("list", required, &csv, "");
+        r.set_validations_for_range(&ref_str, v);
+    } else if type_val == "number" || type_val == "text-length" {
+        let value = if op_val == "be" || op_val == "nbe" {
+            format!("{},{}", val1.trim(), val2.trim())
+        } else {
+            val1.trim().to_string()
+        };
+        let v = Validator::new(&type_val, required, &value, &op_val);
+        r.set_validations_for_range(&ref_str, v);
+    } else {
+        // email / phone — no operator, no value.
+        let v = Validator::new(&type_val, required, "", "");
+        r.set_validations_for_range(&ref_str, v);
+    }
+    r.render();
+}
+
+/// Open the Data Validation modal, pre-filling the fields from any
+/// existing validator at the top-left of the current selection.
+fn open_dv_modal(
+    modal: &web_sys::Element,
+    renderer: &SharedRenderer,
+    visible: &Rc<RefCell<bool>>,
+) {
+    use crate::renderer::alphabets::xy2expr;
+    use wasm_bindgen::JsCast;
+    let (ref_str, existing) = {
+        let r = renderer.borrow();
+        let s = r.get_selector();
+        let ref_str = if s.ri == s.eri && s.ci == s.eci {
+            xy2expr(s.ci, s.ri)
+        } else {
+            format!(
+                "{}:{}",
+                xy2expr(s.ci.min(s.eci), s.ri.min(s.eri)),
+                xy2expr(s.ci.max(s.eci), s.ri.max(s.eri))
+            )
+        };
+        let existing = r
+            .data
+            .validations
+            .get(s.ri, s.ci)
+            .map(|v| v.validator.clone());
+        (ref_str, existing)
+    };
+    let set_input = |q: &str, v: &str| {
+        if let Ok(Some(el)) = modal.query_selector(q) {
+            if let Some(input) = el.dyn_ref::<web_sys::HtmlInputElement>() {
+                input.set_value(v);
+            } else if let Some(text) = el.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+                text.set_value(v);
+            } else {
+                // <select>: set the `selected` attribute on the matching
+                // option so the select's `.value` reflects our choice.
+                let target_q = format!("option[value=\"{}\"]", v);
+                if let Ok(Some(opt)) = el.query_selector(&target_q) {
+                    // Clear selected from siblings first so the new
+                    // selection takes effect.
+                    if let Ok(opts) = el.query_selector_all("option") {
+                        for i in 0..opts.length() {
+                            if let Some(o) = opts.get(i) {
+                                let oe = o.dyn_into::<web_sys::Element>();
+                                if let Ok(oe) = oe {
+                                    let _ = oe.remove_attribute("selected");
+                                }
+                            }
+                        }
+                    }
+                    let _ = opt.set_attribute("selected", "");
+                }
+                // Dispatch a synthetic change so any row-visibility
+                // listener (the operator/value/list rows) fires.
+                let _ = el.dispatch_event(&web_sys::Event::new("change").ok().unwrap());
+            }
+        }
+    };
+    set_input(".zs-dv-ref", &ref_str);
+    if let Some(v) = existing {
+        set_input(".zs-dv-type", &v.type_);
+        set_input(".zs-dv-op", &v.operator);
+        if v.type_ == "list" {
+            set_input(".zs-dv-list", &v.value);
+        } else if v.operator == "be" || v.operator == "nbe" {
+            let parts: Vec<&str> = v.value.split(',').collect();
+            if parts.len() == 2 {
+                set_input(".zs-dv-val1", parts[0]);
+                set_input(".zs-dv-val2", parts[1]);
+            }
+        } else {
+            set_input(".zs-dv-val1", &v.value);
+        }
+        // Required checkbox
+        if let Ok(Some(cb_el)) = modal.query_selector(".zs-dv-req") {
+            if let Some(input) = cb_el.dyn_ref::<web_sys::HtmlInputElement>() {
+                input.set_checked(v.required);
+            }
+        }
+    } else {
+        set_input(".zs-dv-type", "");
+        set_input(".zs-dv-op", "be");
+        set_input(".zs-dv-list", "");
+        set_input(".zs-dv-val1", "");
+        set_input(".zs-dv-val2", "");
+        if let Ok(Some(cb_el)) = modal.query_selector(".zs-dv-req") {
+            if let Some(input) = cb_el.dyn_ref::<web_sys::HtmlInputElement>() {
+                input.set_checked(false);
+            }
+        }
+    }
+    // Update row visibility based on the chosen type.
+    let type_val = modal
+        .query_selector(".zs-dv-type")
+        .ok()
+        .flatten()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.value())
+        .unwrap_or_default();
+    update_dv_rows(modal, &type_val);
+
+    let _ = modal
+        .unchecked_ref::<web_sys::HtmlElement>()
+        .style()
+        .set_property("display", "block");
+    *visible.borrow_mut() = true;
 }
 
 /// Swatches for the color palette dropdown.
@@ -1714,6 +2484,9 @@ fn wire_events(
     renderer: &SharedRenderer,
     textarea: &HtmlTextAreaElement,
     editing: &EditingCell,
+    editor_error_node: Option<HtmlElement>,
+    list_popover_node: Option<web_sys::Element>,
+    list_popover_visible: Rc<RefCell<bool>>,
     sync: &SyncFn,
 ) {
     let dragging = Rc::new(RefCell::new(false));
@@ -1735,9 +2508,12 @@ fn wire_events(
         let renderer = renderer.clone();
         let textarea = textarea.clone();
         let editing = editing.clone();
+        let editor_error = editor_error_node.clone();
         let dragging = dragging.clone();
         let drag = drag.clone();
         let sync = sync.clone();
+        let list_popover = list_popover_node.clone();
+        let list_popover_visible = list_popover_visible.clone();
         canvas_el.add_event_listener("mousedown", move |event: web_sys::Event| {
             let me: MouseEvent = event.dyn_into().unwrap();
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
@@ -1770,7 +2546,61 @@ fn wire_events(
                 return;
             }
 
-            commit_edit(&renderer, &textarea, &editing);
+            // List-validity glyph hit-test (issue #9): clicking the ▼ on a
+            // list-valid cell opens the popover instead of starting a
+            // selection. The glyph sits in the rightmost ~14px of the cell.
+            // Compute hit-test details in a single borrow scope to avoid
+            // overlapping immutable borrows on the renderer's RefCell.
+            let glyph_hit: Option<(usize, usize, f64, f64)> = {
+                let r = renderer.borrow();
+                let Some((ri, ci)) = r.cell_at(x, y) else { return; };
+                let (origin_ri, origin_ci) = r.merge_origin(ri, ci);
+                if !r.cell_has_list_validator(origin_ri, origin_ci) {
+                    return;
+                }
+                let rect = r.cell_screen_rect(origin_ri, origin_ci);
+                let in_glyph = x >= rect.x + rect.width - 17.0
+                    && x <= rect.x + rect.width
+                    && y >= rect.y && y <= rect.y + rect.height;
+                if !in_glyph { return; }
+                Some((origin_ri, origin_ci, rect.x, rect.y))
+            };
+            if let Some((origin_ri, origin_ci, _rx, _ry)) = glyph_hit {
+                // Select the cell and open the popover. We defer the
+                // `visible=true` write to after this event loop tick so the
+                // global "outside click" mousedown listener (which sees the
+                // same event we just handled) bails on `visible == false`
+                // rather than closing the popover we just opened.
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.select_cell(origin_ri, origin_ci);
+                    r.render();
+                }
+                let popover_for_open = list_popover.clone();
+                let renderer_for_open = renderer.clone();
+                let visible_for_open = list_popover_visible.clone();
+                let cb = Closure::<dyn FnMut()>::new(move || {
+                    show_list_popover(
+                        popover_for_open.as_ref(),
+                        &renderer_for_open,
+                        origin_ri, origin_ci, x, y,
+                        &visible_for_open,
+                    );
+                });
+                if let Some(w) = web_sys::window() {
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        cb.as_ref().unchecked_ref(),
+                        0,
+                    );
+                }
+                cb.forget();
+                return;
+            }
+
+            // Click-outside silently commits; on validation failure, the
+            // editor stays open with the red border (issue #9). Either way,
+            // we still fall through and process the click.
+            let _ = commit_edit(&renderer, &textarea, editor_error.as_ref(), &editing);
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
                 // Ctrl/Cmd-click on a hyperlink cell follows the link.
@@ -1898,6 +2728,7 @@ fn wire_events(
         let renderer = renderer.clone();
         let textarea = textarea.clone();
         let editing = editing.clone();
+        let editor_error = editor_error_node.clone();
         canvas_el.add_event_listener("dblclick", move |event: web_sys::Event| {
             let me: MouseEvent = event.dyn_into().unwrap();
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
@@ -1905,7 +2736,7 @@ fn wire_events(
             if let Some((ri, ci)) = hit {
                 // Edit the merge origin when the cell is part of a merge.
                 let (ri, ci) = renderer.borrow().merge_origin(ri, ci);
-                start_edit(&renderer, &textarea, &editing, ri, ci);
+                start_edit(&renderer, &textarea, editor_error.as_ref(), &editing, ri, ci);
             }
         });
     }
@@ -1933,6 +2764,7 @@ fn wire_events(
         let renderer = renderer.clone();
         let textarea = textarea.clone();
         let editing = editing.clone();
+        let editor_error = editor_error_node.clone();
         let sync = sync.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
             if editing.borrow().is_some() {
@@ -2001,7 +2833,7 @@ fn wire_events(
                         let s = r.get_selector();
                         (s.ri, s.ci)
                     };
-                    start_edit(&renderer, &textarea, &editing, ri, ci);
+                    start_edit(&renderer, &textarea, editor_error.as_ref(), &editing, ri, ci);
                     ke.prevent_default();
                     return;
                 }
@@ -2026,6 +2858,7 @@ fn wire_events(
         let renderer = renderer.clone();
         let textarea_inner = textarea.clone();
         let editing = editing.clone();
+        let editor_error = editor_error_node.clone();
         let sync = sync.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
             let ke: KeyboardEvent = event.dyn_into().unwrap();
@@ -2033,8 +2866,10 @@ fn wire_events(
                 "Enter" => {
                     ke.prevent_default();
                     ke.stop_propagation();
-                    commit_edit(&renderer, &textarea_inner, &editing);
-                    {
+                    // Issue #9: on validation failure, keep the editor open
+                    // and skip the selection move so the user can fix the
+                    // value in place.
+                    if commit_edit(&renderer, &textarea_inner, editor_error.as_ref(), &editing).is_ok() {
                         let mut r = renderer.borrow_mut();
                         r.move_selection(1, 0);
                         r.render();
@@ -2044,8 +2879,7 @@ fn wire_events(
                 "Tab" => {
                     ke.prevent_default();
                     ke.stop_propagation();
-                    commit_edit(&renderer, &textarea_inner, &editing);
-                    {
+                    if commit_edit(&renderer, &textarea_inner, editor_error.as_ref(), &editing).is_ok() {
                         let mut r = renderer.borrow_mut();
                         r.move_selection(0, 1);
                         r.render();
@@ -2055,7 +2889,7 @@ fn wire_events(
                 "Escape" => {
                     ke.prevent_default();
                     ke.stop_propagation();
-                    cancel_edit(&textarea_inner, &editing);
+                    cancel_edit(&textarea_inner, editor_error.as_ref(), &editing);
                 }
                 _ => {
                     ke.stop_propagation();

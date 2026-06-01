@@ -1,4 +1,5 @@
 use crate::core::cell_range::CellRange;
+use crate::renderer::alphabets::exp2xy;
 
 #[derive(Debug, Clone)]
 pub struct Merges {
@@ -124,49 +125,20 @@ impl Merges {
 
 impl CellRange {
     pub fn from_str(s: &str) -> Result<CellRange, ()> {
+        // Use the project-wide 0-indexed `exp2xy` (consistent with
+        // `data_proxy` / `alphabets`). The previous local `parse_cell_ref`
+        // returned 1-indexed columns which made `from_str("A1")` produce
+        // `(1, 0)` instead of `(0, 0)` and broke every `includes` call.
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() == 2 {
-            let (sri, sci) = Self::parse_cell_ref(parts[0])?;
-            let (eri, eci) = Self::parse_cell_ref(parts[1])?;
+            let (sci, sri) = exp2xy(parts[0].trim());
+            let (eci, eri) = exp2xy(parts[1].trim());
             Ok(CellRange::new(sri, sci, eri, eci))
         } else if parts.len() == 1 {
-            let (ri, ci) = Self::parse_cell_ref(parts[0])?;
+            let (ci, ri) = exp2xy(parts[0].trim());
             Ok(CellRange::new(ri, ci, ri, ci))
         } else {
             Err(())
         }
-    }
-
-    fn parse_cell_ref(s: &str) -> Result<(usize, usize), ()> {
-        let mut x_chars = Vec::new();
-        let mut y_chars = Vec::new();
-
-        for c in s.chars() {
-            if c.is_ascii_digit() {
-                y_chars.push(c);
-            } else {
-                x_chars.push(c.to_ascii_uppercase());
-            }
-        }
-
-        if x_chars.is_empty() || y_chars.is_empty() {
-            return Err(());
-        }
-
-        let x = Self::col_to_index(&String::from_iter(x_chars.into_iter()));
-        let y_str = String::from_iter(y_chars.into_iter());
-        let y: usize = y_str.parse().map_err(|_| ())?;
-        let y = y.saturating_sub(1);
-
-        Ok((x, y))
-    }
-
-    fn col_to_index(col: &str) -> usize {
-        let mut index = 0usize;
-        for c in col.chars() {
-            let c_idx = (c as usize - 'A' as usize) + 1;
-            index = index * 26 + c_idx;
-        }
-        index
     }
 }

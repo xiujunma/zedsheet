@@ -322,10 +322,24 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             );
             // Indent adds to the left padding (issue #25). Right/center
             // alignment ignores indent (Excel behavior).
+            // Reserve right-edge space for the list-validity ▼ glyph
+            // (issue #9) so cell text doesn't slide under it.
+            let has_list_glyph = renderer
+                .data
+                .get_note(row, col)
+                .is_none()
+                && renderer
+                    .data
+                    .validations
+                    .get(row, col)
+                    .map(|v| v.validator.type_ == "list")
+                    .unwrap_or(false);
+            let right_inset = if has_list_glyph { 14f64 } else { 0f64 };
+
             let left_pad = pad + style.indent as f64;
             let (tx, talign) = match style.align.as_str() {
-                "center" => (draw_rect.x + draw_rect.width / 2f64, "center"),
-                "right" => (draw_rect.x + draw_rect.width - pad, "right"),
+                "center" => (draw_rect.x + (draw_rect.width - right_inset) / 2f64, "center"),
+                "right" => (draw_rect.x + draw_rect.width - pad - right_inset, "right"),
                 _ => (draw_rect.x + left_pad, "left"),
             };
 
@@ -336,7 +350,12 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
 
             canvas.save();
             canvas.begin_path();
-            canvas.rect(draw_rect.x, draw_rect.y, draw_rect.width, draw_rect.height);
+            canvas.rect(
+                draw_rect.x,
+                draw_rect.y,
+                draw_rect.width - right_inset,
+                draw_rect.height,
+            );
             canvas.clip(None);
 
             // Rotation (issue #25): pivot around the cell center. We push
@@ -432,6 +451,30 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                 .move_to(x1 - 6f64, y0)
                 .line_to(x1, y0)
                 .line_to(x1, y0 + 6f64)
+                .close_path()
+                .fill(None);
+        }
+
+        // List-validity dropdown glyph (issue #9): a small ▼ in the cell's
+        // right edge, vertically centered. Drawn when the cell has a
+        // `list`-type validator. Skipped if a note marker is already in the
+        // top-right (they would collide).
+        if renderer.data.get_note(row, col).is_none()
+            && renderer
+                .data
+                .validations
+                .get(row, col)
+                .map(|v| v.validator.type_ == "list")
+                .unwrap_or(false)
+        {
+            let x1 = draw_rect.x + draw_rect.width;
+            let y_mid = draw_rect.y + draw_rect.height / 2f64;
+            canvas
+                .set_fill_style("#5a5a5a")
+                .begin_path()
+                .move_to(x1 - 10f64, y_mid - 3f64)
+                .line_to(x1 - 2f64, y_mid - 3f64)
+                .line_to(x1 - 6f64, y_mid + 3f64)
                 .close_path()
                 .fill(None);
         }

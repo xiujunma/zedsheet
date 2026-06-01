@@ -933,15 +933,78 @@ impl TableRenderer {
         }
     }
 
-    pub fn set_cell_text_at(&mut self, ri: usize, ci: usize, text: &str) {
+    /// Set the text of a single cell, honoring both read-only / per-cell
+    /// locking (issue #24) and any data-validation rule on the target
+    /// cell (issue #9).
+    ///
+    /// Returns `Ok(())` on success or when the cell is locked (locked
+    /// cells are silently a no-op, matching the prior behavior). Returns
+    /// `Err(message)` when validation fails — the cell is **not** written
+    /// and the undo stack is **not** pushed, so a rejected commit leaves
+    /// no junk entries behind.
+    pub fn set_cell_text_at(&mut self, ri: usize, ci: usize, text: &str) -> Result<(), String> {
         // Honor read-only mode and per-cell locking (issue #24). The data
         // layer also gates this as a safety net, but checking here lets us
         // avoid recording a no-op on the undo stack.
         if !self.data.is_cell_editable(ri, ci) {
-            return;
+            return Ok(());
+        }
+        // Validate first (issue #9). On failure, surface the message and
+        // skip both the snapshot and the write so undo/redo stay clean.
+        if !self.data.validations.validate(ri, ci, text) {
+            if let Some(msg) = self.data.validations.get_error(ri, ci) {
+                return Err(msg.clone());
+            }
+            return Err("Invalid value".to_string());
         }
         self.snapshot();
         self.data.set_cell_text(ri, ci, text);
+        Ok(())
+    }
+
+    /// Attach a validator to every cell in `ref_str` (e.g. `"A1:B3"`).
+    /// Snapshots before mutating so the change is undoable. Caller is
+    /// responsible for `render()`.
+    pub fn set_validations_for_range(&mut self, ref_str: &str, validator: crate::core::validation::Validator) {
+        self.snapshot();
+        self.data.validations.add("cell", ref_str, validator);
+    }
+
+    /// Remove any validator that covers any cell in `ref_str`. Snapshots
+    /// before mutating.
+    pub fn clear_validations_in_range(&mut self, ref_str: &str) {
+        if let Ok(cr) = crate::core::cell_range::CellRange::from_str(ref_str) {
+            self.snapshot();
+            self.data.validations.remove(&cr);
+        }
+    }
+
+    /// True iff the cell has a list-type validator (drives the ▼ glyph
+    /// and the list popover).
+    pub fn cell_has_list_validator(&self, ri: usize, ci: usize) -> bool {
+        self.data
+            .validations
+            .get(ri, ci)
+            .map(|v| v.validator.type_ == "list")
+            .unwrap_or(false)
+    }
+
+    /// The allowed values for a list-validator cell, or `None` if the
+    /// cell has no list validator. Values are trimmed; empty entries
+    /// are dropped.
+    pub fn list_values_for_cell(&self, ri: usize, ci: usize) -> Option<Vec<String>> {
+        let v = self.data.validations.get(ri, ci)?;
+        if v.validator.type_ != "list" {
+            return None;
+        }
+        Some(
+            v.validator
+                .value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        )
     }
 
     /// Replace the active sheet data (used when switching sheet tabs), resetting
