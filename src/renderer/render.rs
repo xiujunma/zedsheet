@@ -267,18 +267,51 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
 
         // Cell text (formulas resolved to their value).
         let text = renderer.data.cell_display_value(row, col);
+
+        // Resolve the effective font size: shrink-to-fit (issue #25) shrinks
+        // the font iteratively until the text fits the cell width without
+        // wrapping. Only applies when text_wrap is off and the cell has
+        // text; empty cells keep the declared size.
+        let mut font_size = style.font_size as f64;
+        if style.shrink_to_fit && !style.text_wrap && !text.is_empty() {
+            let tmp_font = format!(
+                "{}{}{}px {}",
+                if style.italic { "italic " } else { "" },
+                if style.bold { "bold " } else { "" },
+                font_size,
+                style.font_family
+            );
+            canvas.set_font(&tmp_font);
+            let max_w = (draw_rect.width - 2f64 * pad).max(1f64);
+            let max_h = (draw_rect.height - 2f64 * pad).max(1f64);
+            let line_h = font_size * 1.3;
+            // Find the largest font size that fits both width and a single
+            // line of height. Binary search would be slicker, but text
+            // measurement in canvas is cheap and the range is small.
+            while font_size > 2.0 {
+                let w = canvas.measure_text_width(&text);
+                if w <= max_w && line_h <= max_h {
+                    break;
+                }
+                font_size = (font_size - 1.0).max(2.0);
+            }
+        }
+
         if !text.is_empty() {
             let font = format!(
                 "{}{}{}px {}",
                 if style.italic { "italic " } else { "" },
                 if style.bold { "bold " } else { "" },
-                style.font_size,
+                font_size,
                 style.font_family
             );
+            // Indent adds to the left padding (issue #25). Right/center
+            // alignment ignores indent (Excel behavior).
+            let left_pad = pad + style.indent as f64;
             let (tx, talign) = match style.align.as_str() {
                 "center" => (draw_rect.x + draw_rect.width / 2f64, "center"),
                 "right" => (draw_rect.x + draw_rect.width - pad, "right"),
-                _ => (draw_rect.x + pad, "left"),
+                _ => (draw_rect.x + left_pad, "left"),
             };
 
             // Hyperlink cells render in link blue and underlined.
@@ -290,6 +323,20 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             canvas.begin_path();
             canvas.rect(draw_rect.x, draw_rect.y, draw_rect.width, draw_rect.height);
             canvas.clip(None);
+
+            // Rotation (issue #25): pivot around the cell center. We push
+            // the rotation BEFORE setting the font so the saved state has
+            // the rotated context.
+            if let Some(angle) = style.rotation {
+                if angle.abs() > 1e-9 {
+                    let cx = draw_rect.x + draw_rect.width / 2f64;
+                    let cy = draw_rect.y + draw_rect.height / 2f64;
+                    canvas.translate(cx, cy);
+                    canvas.rotate(angle * std::f64::consts::PI / 180f64);
+                    canvas.translate(-cx, -cy);
+                }
+            }
+
             canvas
                 .set_font(&font)
                 .set_fill_style(text_color)
@@ -298,9 +345,9 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             if style.text_wrap {
                 // Wrap the text into lines that fit the cell width.
                 canvas.set_text_baseline("top");
-                let max_w = (draw_rect.width - 2f64 * pad).max(1f64);
+                let max_w = (draw_rect.width - 2f64 * pad - style.indent as f64).max(1f64);
                 let lines = wrap_text(canvas, &text, max_w);
-                let line_h = style.font_size as f64 * 1.3;
+                let line_h = font_size * 1.3;
                 let total_h = line_h * lines.len() as f64;
                 let start_y = match style.valign.as_str() {
                     "bottom" => draw_rect.y + draw_rect.height - pad - total_h,
@@ -331,7 +378,7 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                     canvas.set_stroke_style(text_color);
                     canvas.set_line_width(1.0);
                     if underline_on {
-                        let ly = ty + style.font_size as f64 * 0.4;
+                        let ly = ty + font_size * 0.4;
                         canvas.line(lx0, ly, lx1, ly);
                     }
                     if style.strike {

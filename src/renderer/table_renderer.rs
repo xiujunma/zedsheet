@@ -957,6 +957,28 @@ impl TableRenderer {
         self.update_selection_style(move |s| s.text_wrap = t);
     }
 
+    /// Set the rotation angle in degrees for the selected cells. `0.0`
+    /// (or any `None`-ish value) clears the rotation (issue #25).
+    pub fn set_rotation(&mut self, angle: f64) {
+        let r = if angle.abs() < 1e-9 { None } else { Some(angle) };
+        self.update_selection_style(move |s| s.rotation = r);
+    }
+
+    /// Toggle shrink-to-fit on the selected cells (issue #25). When on, the
+    /// renderer scales the font down so the text fits without wrapping.
+    pub fn toggle_shrink_to_fit(&mut self) {
+        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).shrink_to_fit;
+        self.update_selection_style(move |s| s.shrink_to_fit = t);
+    }
+
+    /// Bump the left indent by `delta` pixels (negative `delta` decreases).
+    /// Indent is clamped at 0 (issue #25).
+    pub fn bump_indent(&mut self, delta: i64) {
+        let cur = self.data.get_cell_style(self.selector.ri, self.selector.ci).indent as i64;
+        let next = (cur + delta).max(0) as usize;
+        self.update_selection_style(move |s| s.indent = next);
+    }
+
     pub fn set_format(&mut self, format: &str) {
         let f = format.to_string();
         self.update_selection_style(move |s| s.format = f.clone());

@@ -152,6 +152,16 @@ impl ContextMenu {
             ContextMenuItem { label: "Data Validation".to_string(), action: "validation".to_string(), disabled: false, divider: false },
             ContextMenuItem { label: "Cell Printable".to_string(), action: "printable".to_string(), disabled: false, divider: false },
             ContextMenuItem { label: "Cell Editable".to_string(), action: "editable".to_string(), disabled: false, divider: false },
+            // Text alignment helpers (issue #25) — these rotate/indent the
+            // selected cells. `rotate-clear` and `shrink-toggle` are toggles;
+            // the rest set a specific value.
+            ContextMenuItem { label: "Rotate 0°".to_string(), action: "rotate-0".to_string(), disabled: false, divider: true },
+            ContextMenuItem { label: "Rotate 45°".to_string(), action: "rotate-45".to_string(), disabled: false, divider: false },
+            ContextMenuItem { label: "Rotate 90°".to_string(), action: "rotate-90".to_string(), disabled: false, divider: false },
+            ContextMenuItem { label: "Rotate -45°".to_string(), action: "rotate--45".to_string(), disabled: false, divider: false },
+            ContextMenuItem { label: "Shrink to Fit".to_string(), action: "shrink-toggle".to_string(), disabled: false, divider: false },
+            ContextMenuItem { label: "Increase Indent".to_string(), action: "indent-inc".to_string(), disabled: false, divider: false },
+            ContextMenuItem { label: "Decrease Indent".to_string(), action: "indent-dec".to_string(), disabled: false, divider: false },
         ];
     }
 

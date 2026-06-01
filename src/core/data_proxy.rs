@@ -34,6 +34,22 @@ pub struct Style {
     pub font_family: String,
     pub format: String,
     pub border: Option<Border>,
+    /// Text rotation in degrees, `Some(angle)`. `None` (or `Some(0)`) is the
+    /// default unrotated layout. Positive values rotate clockwise. Excel
+    /// conventionally uses -90 to 90; the renderer happily draws any angle
+    /// (issue #25).
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    /// When `true`, the renderer shrinks the font size until the text fits
+    /// inside the cell without wrapping. No-op for empty cells or cells with
+    /// `text_wrap` enabled (issue #25).
+    #[serde(default)]
+    pub shrink_to_fit: bool,
+    /// Left indent in CSS pixels, added on top of the cell's standard
+    /// padding. Excel uses a small fixed step (1 unit ≈ one character width);
+    /// we use raw pixels so callers can step freely (issue #25).
+    #[serde(default)]
+    pub indent: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +76,9 @@ impl Default for Style {
             font_family: "Arial".to_string(),
             format: "normal".to_string(),
             border: None,
+            rotation: None,
+            shrink_to_fit: false,
+            indent: 0,
         }
     }
 }
@@ -835,6 +854,9 @@ impl DataProxy {
             && a.font_size == b.font_size
             && a.font_family == b.font_family
             && a.format == b.format
+            && a.rotation == b.rotation
+            && a.shrink_to_fit == b.shrink_to_fit
+            && a.indent == b.indent
     }
 
     pub fn merge(&mut self) {
@@ -1807,5 +1829,47 @@ mod tests {
         d.set_cell_editable(0, 0, true);
         d.set_read_only(true);
         assert!(!d.is_cell_editable(0, 0));
+    }
+
+    // --- Text rotation / shrink-to-fit / indent (issue #25) ---
+
+    #[test]
+    fn style_defaults_have_no_rotation_or_indent() {
+        // The new fields default to no-op so old saved data loads cleanly.
+        let s = Style::default();
+        assert_eq!(s.rotation, None);
+        assert!(!s.shrink_to_fit);
+        assert_eq!(s.indent, 0);
+    }
+
+    #[test]
+    fn style_serde_round_trip_with_new_fields() {
+        // Issue #25: the new fields must serialize and deserialize so
+        // xlsx-style saved data stays loadable.
+        let mut s = Style::default();
+        s.rotation = Some(45.0);
+        s.shrink_to_fit = true;
+        s.indent = 17;
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Style = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.rotation, Some(45.0));
+        assert!(back.shrink_to_fit);
+        assert_eq!(back.indent, 17);
+    }
+
+    #[test]
+    fn style_serde_accepts_legacy_data_without_new_fields() {
+        // Saved files from before #25 don't have the new fields. The
+        // `#[serde(default)]` on each new field should fill them in.
+        // Build the JSON with `format!` so we don't have to escape the
+        // inner quote characters in a raw string.
+        let legacy = format!(
+            r#"{{"bgcolor":"{}","color":"{}","align":"left","valign":"middle","text_wrap":false,"underline":false,"strike":false,"bold":false,"italic":false,"font_size":10,"font_family":"Arial","format":"normal","border":null}}"#,
+            "#ffffff", "#0a0a0a",
+        );
+        let s: Style = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(s.rotation, None);
+        assert!(!s.shrink_to_fit);
+        assert_eq!(s.indent, 0);
     }
 }

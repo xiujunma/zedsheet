@@ -32,6 +32,11 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   menu item) locks individual cells. Toggling on either side is
   immediately visible to the other (the registry and the renderer's copy
   share state)
+- **Text rotation, shrink-to-fit & indent**: the context menu's **Rotate
+  0°/45°/90°/-45°**, **Shrink to fit**, and **Increase/Decrease indent**
+  items style the active cell's text. Rotation pivots around the cell
+  center; shrink-to-fit scales the font down to fit; indent adds to the
+  left padding (ignored for right/center alignment, matching Excel)
 - Formula references auto-adjust when rows/columns are inserted or deleted
 
 **Interaction**

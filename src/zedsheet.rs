@@ -1220,8 +1220,19 @@ fn context_menu_html() -> String {
         divider.clone(),
         item("link", "Insert / edit link"),
         item("remove-link", "Remove link"),
-        divider,
+        divider.clone(),
         item("clear", "Clear contents"),
+        // Text alignment helpers (issue #25). The "set_rotation" /
+        // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
+        // `wire_context_menu`.
+        divider.clone(),
+        item("rotate-0", "Rotate 0°"),
+        item("rotate-45", "Rotate 45°"),
+        item("rotate-90", "Rotate 90°"),
+        item("rotate--45", "Rotate -45°"),
+        item("shrink-toggle", "Shrink to fit"),
+        item("indent-inc", "Increase indent"),
+        item("indent-dec", "Decrease indent"),
     ]
     .join("")
 }
@@ -1324,6 +1335,19 @@ fn wire_context_menu(canvas_el: &mut Element, menu_node: web_sys::Element, rende
                         let was_editable = r.data.get_cell(sri, sci).map(|c| c.editable).unwrap_or(true);
                         r.data.set_cell_editable(sri, sci, !was_editable);
                     }
+                    // Text alignment helpers (issue #25). Style changes are
+                    // independent of the sheet's read-only mode — they're
+                    // presentation, not data, so they apply even on a
+                    // locked sheet. The `set_sheets_registry` clone we
+                    // update is the renderer's, so the next render uses
+                    // the new rotation/indent/shrink_to_fit immediately.
+                    "rotate-0" if !read_only => r.set_rotation(0.0),
+                    "rotate-45" if !read_only => r.set_rotation(45.0),
+                    "rotate-90" if !read_only => r.set_rotation(90.0),
+                    "rotate--45" if !read_only => r.set_rotation(-45.0),
+                    "shrink-toggle" if !read_only => r.toggle_shrink_to_fit(),
+                    "indent-inc" if !read_only => r.bump_indent(10),
+                    "indent-dec" if !read_only => r.bump_indent(-10),
                     _ => {}
                 }
                 r.render();
