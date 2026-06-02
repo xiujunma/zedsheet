@@ -714,7 +714,13 @@ impl TableRenderer {
 
     /// Select a cell. If it falls inside a merge, the whole merged range is
     /// selected (with the merge origin as the active cell).
+    ///
+    /// This is the canonical "start a fresh single selection" primitive, so it
+    /// also drops any non-contiguous (Ctrl+click) ranges — otherwise keyboard
+    /// navigation, editing, find/replace and name-box jumps would leave stale
+    /// disjoint ranges active and fan subsequent edits out to them (issue #19).
     pub fn select_cell(&mut self, ri: usize, ci: usize) {
+        self.multi_range.clear();
         self.selection_anchor = (ri, ci);
         let (r0, c0, r1, c1) = self.data.expand_range_with_merges(ri, ci, ri, ci);
         self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
