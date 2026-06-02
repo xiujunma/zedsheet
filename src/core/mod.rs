@@ -11,3 +11,4 @@ pub mod row;
 pub mod state;
 pub mod validation;
 pub mod auto_filter;
+pub mod workbook;

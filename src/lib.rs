@@ -19,19 +19,27 @@ mod zedsheet;
 mod config;
 mod core;
 mod formula;
+mod persist;
 
 use core::data_proxy::{DataProxy, Style, SheetsRegistry};
 use core::cell_range::CellRange;
 use component::options::Options;
-use zedsheet::ZedSheet;
+use zedsheet::{GetDataFn, LoadDataFn, ZedSheet};
 
-// Every mounted workbook's sheet registry, keyed by mount selector, exposed so
-// JS can toggle read-only on a named sheet (`setSheetReadOnly`, issue #24).
-// Keyed (rather than a single Option) so a second `mount()` doesn't clobber the
-// first; re-mounting the same selector replaces its entry.
+/// Everything `lib` needs to keep about a mounted workbook: the get/load
+/// closures backing the public JS API (issue #20) and the sheet registry used
+/// to toggle per-sheet read-only mode (issue #24).
+struct MountHandle {
+    get_data: GetDataFn,
+    load_data: LoadDataFn,
+    sheets: Option<SheetsRegistry>,
+}
+
+// Every mounted workbook, keyed by mount selector. Keyed (rather than a single
+// Option) so a second `mount()` doesn't clobber the first; re-mounting the same
+// selector replaces its entry.
 thread_local! {
-    static ACTIVE_SHEETS: RefCell<HashMap<String, SheetsRegistry>> =
-        RefCell::new(HashMap::new());
+    static MOUNTS: RefCell<HashMap<String, MountHandle>> = RefCell::new(HashMap::new());
 }
 
 /// Module init. Installs the panic hook. For the standalone Trunk demo it also
@@ -43,7 +51,8 @@ pub fn start() {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
 
     if document().query_selector("#zedsheet").ok().flatten().is_some() {
-        mount_into("#zedsheet", demo_data());
+        // Demo: restore the user's saved edits if present, else seed the sample.
+        finish_mount("#zedsheet", demo_data(), None);
     }
 }
 
@@ -57,25 +66,45 @@ pub fn start() {
 /// ```
 #[wasm_bindgen]
 pub fn mount(selector: &str, data_json: Option<String>) {
-    let mut data = DataProxy::new("sheet1");
-    if let Some(json) = data_json {
-        if !json.trim().is_empty() {
-            data.set_data_json(&json);
-        }
+    let explicit = data_json.filter(|j| !j.trim().is_empty());
+    finish_mount(selector, DataProxy::new("sheet1"), explicit);
+}
+
+/// Mount `initial` into `selector`, then restore the workbook from host-provided
+/// `explicit` JSON, or failing that a previous `localStorage` snapshot — all
+/// before arming persistence, so the initial render can't overwrite saved data
+/// before it has been read back (issue #20).
+fn finish_mount(selector: &str, initial: DataProxy, explicit: Option<String>) {
+    // Capture any restore payload BEFORE building: the initial render's sync
+    // runs while persistence is still disarmed.
+    let restore = explicit.or_else(|| persist::load_saved(selector));
+    mount_into(selector, initial);
+    if let Some(json) = &restore {
+        MOUNTS.with(|m| {
+            if let Some(h) = m.borrow().get(selector) {
+                (h.load_data)(json);
+            }
+        });
     }
-    mount_into(selector, data);
+    // Baseline = whatever is now displayed; arm so future edits persist.
+    if let Some(current) = MOUNTS.with(|m| m.borrow().get(selector).map(|h| (h.get_data)())) {
+        persist::seed_baseline(selector, &current);
+    }
+    persist::arm(selector);
 }
 
 fn mount_into(selector: &str, data: DataProxy) {
     let sheet = ZedSheet::new(selector, Options::default(), data);
-    // Stash the registry built inside `ZedSheet::new` so JS callers can
-    // toggle read-only by name (issue #24), keyed by selector so multiple
-    // mounts coexist.
-    if let Some(sheets) = sheet.sheets_registry() {
-        ACTIVE_SHEETS.with(|a| {
-            a.borrow_mut().insert(selector.to_string(), sheets);
-        });
-    }
+    // Stash the get/load closures and the sheet registry (for read-only, issue
+    // #24) so JS callers can drive the workbook after `ZedSheet` is forgotten.
+    let handle = MountHandle {
+        get_data: sheet.get_data_fn(),
+        load_data: sheet.load_data_fn(),
+        sheets: sheet.sheets_registry(),
+    };
+    MOUNTS.with(|m| {
+        m.borrow_mut().insert(selector.to_string(), handle);
+    });
     std::mem::forget(sheet);
 }
 
@@ -86,11 +115,13 @@ fn mount_into(selector: &str, data: DataProxy) {
 #[allow(non_snake_case)]
 pub fn setSheetReadOnly(name: &str, read_only: bool) {
     let upper = name.to_uppercase();
-    ACTIVE_SHEETS.with(|a| {
-        for sheets in a.borrow().values() {
-            for d in sheets.borrow_mut().iter_mut() {
-                if d.name.to_uppercase() == upper {
-                    d.set_read_only(read_only);
+    MOUNTS.with(|m| {
+        for h in m.borrow().values() {
+            if let Some(sheets) = &h.sheets {
+                for d in sheets.borrow_mut().iter_mut() {
+                    if d.name.to_uppercase() == upper {
+                        d.set_read_only(read_only);
+                    }
                 }
             }
         }
@@ -103,14 +134,52 @@ pub fn setSheetReadOnly(name: &str, read_only: bool) {
 #[allow(non_snake_case)]
 pub fn isSheetReadOnly(name: &str) -> bool {
     let upper = name.to_uppercase();
-    ACTIVE_SHEETS.with(|a| {
-        a.borrow().values().any(|sheets| {
-            sheets
-                .borrow()
-                .iter()
-                .any(|d| d.name.to_uppercase() == upper && d.is_read_only())
+    MOUNTS.with(|m| {
+        m.borrow().values().any(|h| {
+            h.sheets.as_ref().is_some_and(|sheets| {
+                sheets
+                    .borrow()
+                    .iter()
+                    .any(|d| d.name.to_uppercase() == upper && d.is_read_only())
+            })
         })
     })
+}
+
+/// Serialize the mounted workbook (every sheet) as an x-spreadsheet JSON array
+/// string. Returns `None` for an unmounted selector (issue #20).
+///
+/// ```js
+/// const json = get_data("#my-grid");
+/// localStorage.setItem("backup", json);   // or POST it to a server
+/// ```
+#[wasm_bindgen]
+pub fn get_data(selector: &str) -> Option<String> {
+    MOUNTS.with(|m| m.borrow().get(selector).map(|h| (h.get_data)()))
+}
+
+/// Replace the mounted workbook's contents from `json` — either a single sheet
+/// object or an array of them — re-rendering and refreshing the sheet tabs.
+/// No-op for an unmounted selector (issue #20).
+#[wasm_bindgen]
+pub fn load_data(selector: &str, json: &str) {
+    MOUNTS.with(|m| {
+        if let Some(h) = m.borrow().get(selector) {
+            (h.load_data)(json);
+        }
+    });
+}
+
+/// Register a callback invoked with the workbook JSON whenever the data changes
+/// — edits, formatting, and structural changes, but not selection moves. Passing
+/// a new callback replaces the previous one (issue #20).
+///
+/// ```js
+/// on_change("#my-grid", (json) => console.log("changed", json.length));
+/// ```
+#[wasm_bindgen]
+pub fn on_change(selector: &str, callback: js_sys::Function) {
+    persist::set_on_change(selector, Some(callback));
 }
 
 /// Sample data for the standalone demo.

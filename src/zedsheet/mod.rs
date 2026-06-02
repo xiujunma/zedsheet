@@ -60,11 +60,17 @@ pub(crate) type Sheets = Rc<RefCell<Vec<DataProxy>>>;
 pub(crate) type ActiveSheet = Rc<RefCell<usize>>;
 /// Refreshes the formula bar + toolbar state from the active cell.
 pub(crate) type SyncFn = Rc<dyn Fn()>;
+/// Serializes the whole workbook (all sheets) to a JSON string (issue #20).
+pub(crate) type GetDataFn = Rc<dyn Fn() -> String>;
+/// Replaces the whole workbook from a JSON string and re-renders (issue #20).
+pub(crate) type LoadDataFn = Rc<dyn Fn(&str)>;
 
 /// Top-level spreadsheet. Builds the DOM shell (toolbar + sheet canvas + bottom
 /// bar), owns the shared renderer, and wires pointer/keyboard interaction.
 pub struct ZedSheet {
     renderer: SharedRenderer,
+    get_data: GetDataFn,
+    load_data: LoadDataFn,
 }
 
 impl ZedSheet {
@@ -113,6 +119,8 @@ impl ZedSheet {
         // Bottom bar: add(+) button followed by the sheet-tab menu.
         let mut bottom_menu_el: Option<Element> = None;
         let mut bottom_add_el: Option<Element> = None;
+        // Raw tab-strip element, kept so `load_data` can refresh the tabs (#20).
+        let mut tab_menu_node: Option<web_sys::Element> = None;
         if options.show_bottom_bar {
             let mut bottom = h("div", Some(&format!("{}-bottombar", CSS_PREFIX)));
             let mut add_btn = h("span", Some(&format!("{}-icon", CSS_PREFIX)));
@@ -124,6 +132,7 @@ impl ZedSheet {
             bottom.append_child(&mut add_btn);
             bottom.append_child(&mut menu);
             root.append_child(&mut bottom);
+            tab_menu_node = menu.el.clone();
             bottom_menu_el = menu.el.clone().map(Element::from);
             bottom_add_el = add_btn.el.clone().map(Element::from);
         }
@@ -369,6 +378,10 @@ impl ZedSheet {
             let name_box = name_box.clone();
             let formula_input = formula_input.clone();
             let toolbar_node = toolbar_node.clone();
+            // Captured for change-driven persistence (issue #20).
+            let persist_selector = selector.to_string();
+            let persist_sheets = sheets.clone();
+            let persist_active = active.clone();
             Rc::new(move || {
                 let r = renderer.borrow();
                 let s = r.get_selector();
@@ -398,6 +411,13 @@ impl ZedSheet {
                 set_text_by_id("zs-dd-font", &style.font_family);
                 set_text_by_id("zs-dd-fontsize", &style.font_size.to_string());
                 set_text_by_id("zs-dd-format", format_label(&style.format));
+
+                // Persist on actual data changes (issue #20). `note_change`
+                // de-dupes against the last snapshot, so pure selection moves
+                // — which don't alter the serialized workbook — are no-ops.
+                drop(r);
+                let json = current_workbook_json(&renderer, &persist_sheets, &persist_active);
+                crate::persist::note_change(&persist_selector, &json);
             })
         };
 
@@ -563,13 +583,69 @@ impl ZedSheet {
         // (Setup is done earlier; only the wiring callback references the
         // already-declared `list_popover_node` / `list_popover_visible`.)
 
+        // Workbook get/load closures backing the public JS persistence API
+        // (issue #20). They capture the shared renderer, the sheet registry,
+        // the active index, the tab strip, and `sync`, so `lib` can read or
+        // replace the whole workbook without re-deriving any of that wiring.
+        let get_data: GetDataFn = {
+            let renderer = renderer.clone();
+            let sheets = sheets.clone();
+            let active = active.clone();
+            Rc::new(move || current_workbook_json(&renderer, &sheets, &active))
+        };
+        let load_data: LoadDataFn = {
+            let renderer = renderer.clone();
+            let sheets = sheets.clone();
+            let active = active.clone();
+            let sync = sync.clone();
+            let tab_menu = tab_menu_node.clone();
+            Rc::new(move |json: &str| {
+                let loaded = crate::core::workbook::deserialize(json);
+                *sheets.borrow_mut() = loaded;
+                // Re-wire the shared registry on every restored sheet so
+                // cross-sheet formulas (`Sheet2!A1`) keep resolving (issue #4).
+                for d in sheets.borrow_mut().iter_mut() {
+                    d.set_sheets(&sheets);
+                }
+                *active.borrow_mut() = 0;
+                let first = sheets.borrow()[0].clone();
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.set_data(first);
+                    r.set_selector(0, 0, 0, 0);
+                    r.render();
+                }
+                if let Some(menu) = &tab_menu {
+                    let names: Vec<String> =
+                        sheets.borrow().iter().map(|d| d.name.clone()).collect();
+                    render_tabs(menu, &names, 0);
+                }
+                sync();
+            })
+        };
+
         sync();
 
-        Self { renderer }
+        Self {
+            renderer,
+            get_data,
+            load_data,
+        }
     }
 
     pub fn renderer(&self) -> SharedRenderer {
         self.renderer.clone()
+    }
+
+    /// Closure that serializes the whole workbook to a JSON array (issue #20).
+    pub(crate) fn get_data_fn(&self) -> GetDataFn {
+        self.get_data.clone()
+    }
+
+    /// Closure that replaces the whole workbook from JSON, re-rendering and
+    /// refreshing the sheet tabs (issue #20).
+    pub(crate) fn load_data_fn(&self) -> LoadDataFn {
+        self.load_data.clone()
     }
 
     /// The workbook-wide sheets registry, so the host can toggle per-sheet
@@ -579,5 +655,19 @@ impl ZedSheet {
         // strong Rc for the caller.
         self.renderer.borrow().data.sheets.as_ref().and_then(|w| w.upgrade())
     }
+}
+
+/// Serialize the live workbook — the renderer's (possibly-unsaved) active sheet
+/// plus the stored copies of the others — to a JSON array string (issue #20).
+fn current_workbook_json(renderer: &SharedRenderer, sheets: &Sheets, active: &ActiveSheet) -> String {
+    let idx = *active.borrow();
+    let live = renderer.borrow().data_clone();
+    let arr: Vec<serde_json::Value> = sheets
+        .borrow()
+        .iter()
+        .enumerate()
+        .map(|(i, s)| if i == idx { live.get_data() } else { s.get_data() })
+        .collect();
+    serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".to_string())
 }
 
