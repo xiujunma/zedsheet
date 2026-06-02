@@ -289,23 +289,24 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
         // text; empty cells keep the declared size.
         let mut font_size = style.font_size as f64;
         if style.shrink_to_fit && !style.text_wrap && !text.is_empty() {
-            let tmp_font = format!(
-                "{}{}{}px {}",
-                if style.italic { "italic " } else { "" },
-                if style.bold { "bold " } else { "" },
-                font_size,
-                style.font_family
-            );
-            canvas.set_font(&tmp_font);
-            let max_w = (draw_rect.width - 2f64 * pad).max(1f64);
+            let max_w = (draw_rect.width - 2f64 * pad - style.indent as f64).max(1f64);
             let max_h = (draw_rect.height - 2f64 * pad).max(1f64);
-            let line_h = font_size * 1.3;
-            // Find the largest font size that fits both width and a single
-            // line of height. Binary search would be slicker, but text
-            // measurement in canvas is cheap and the range is small.
-            while font_size > 2.0 {
+            // Shrink the font until the text fits the cell (width + one line's
+            // height). The canvas font MUST be re-set each iteration, otherwise
+            // measure_text_width keeps reporting the original width and the loop
+            // walks straight to the 2px floor (the bug this fixes).
+            loop {
+                let trial_font = format!(
+                    "{}{}{}px {}",
+                    if style.italic { "italic " } else { "" },
+                    if style.bold { "bold " } else { "" },
+                    font_size,
+                    style.font_family
+                );
+                canvas.set_font(&trial_font);
                 let w = canvas.measure_text_width(&text);
-                if w <= max_w && line_h <= max_h {
+                let line_h = font_size * 1.3;
+                if (w <= max_w && line_h <= max_h) || font_size <= 2.0 {
                     break;
                 }
                 font_size = (font_size - 1.0).max(2.0);
