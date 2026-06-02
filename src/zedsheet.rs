@@ -255,13 +255,13 @@ impl ZedSheet {
         // the named sheet. Each DataProxy gets the same `Rc<RefCell<Vec<…>>>`
         // so the registry is shared across clones and sheet operations.
         for d in sheets.borrow_mut().iter_mut() {
-            d.set_sheets(sheets.clone());
+            d.set_sheets(&sheets);
         }
         // The renderer's own DataProxy is the *original* `data`, not the
         // clone inside the Vec — wire it too so the active-sheet evaluator
-        // can see peers. (Clones of a wired DataProxy copy the Rc, so
+        // can see peers. (Clones of a wired DataProxy copy the Weak, so
         // subsequent sheet switches stay wired automatically.)
-        data.set_sheets(sheets.clone());
+        data.set_sheets(&sheets);
         let active: ActiveSheet = Rc::new(RefCell::new(0));
 
         let mut renderer = TableRenderer::new(canvas, width, height, data);
@@ -535,7 +535,9 @@ impl ZedSheet {
     /// The workbook-wide sheets registry, so the host can toggle per-sheet
     /// options like read-only mode from outside the renderer (issue #24).
     pub(crate) fn sheets_registry(&self) -> Option<SheetsRegistry> {
-        self.renderer.borrow().data.sheets.clone()
+        // `data.sheets` is a Weak back-reference (issue #4); upgrade it to a
+        // strong Rc for the caller.
+        self.renderer.borrow().data.sheets.as_ref().and_then(|w| w.upgrade())
     }
 }
 
@@ -1216,7 +1218,7 @@ fn wire_bottombar(
                 let mut new_sheet = DataProxy::new(&format!("sheet{}", n));
                 // Wire the registry on the freshly added sheet so its
                 // formulas can resolve cross-sheet refs (issue #4).
-                new_sheet.set_sheets(sheets.clone());
+                new_sheet.set_sheets(&sheets);
                 s.push(new_sheet);
                 s.len() - 1
             };

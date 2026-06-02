@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use crate::core::cell_range::CellRange;
 use crate::formula::parser::{tokenize, Token};
 use crate::renderer::alphabets::{exp2xy, index_at, string_at};
@@ -18,6 +18,13 @@ use crate::core::auto_filter::AutoFilter;
 /// referenced by every `DataProxy` so cross-sheet formulas can resolve
 /// `Sheet2!A1` against the right sheet (issue #4).
 pub type SheetsRegistry = Rc<RefCell<Vec<DataProxy>>>;
+
+/// The circular-reference guard for formula evaluation. Keyed by
+/// `(sheet_name, row, col)` — the sheet component is essential so a cross-sheet
+/// cycle (`Sheet1!A1 = Sheet2!A1`, `Sheet2!A1 = Sheet1!A1`) is detected instead
+/// of recursing forever (issue #4). The set is threaded *through* cross-sheet
+/// hops rather than reset, so a reference back to an in-progress cell is caught.
+type Visited = HashSet<(String, usize, usize)>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Style {
@@ -105,7 +112,11 @@ pub struct DataProxy {
     /// All sheets in the workbook, used to resolve `Sheet2!A1` references
     /// (issue #4). `None` for tests / standalone use that don't need
     /// cross-sheet refs; `ZedSheet` wires this up at construction time.
-    pub sheets: Option<SheetsRegistry>,
+    ///
+    /// Stored as a `Weak` on purpose: each sheet lives *inside* this same
+    /// `Vec`, so a strong `Rc` here would form a reference cycle and leak the
+    /// whole workbook. `ZedSheet` (and the undo stacks) hold the strong `Rc`.
+    pub sheets: Option<Weak<RefCell<Vec<DataProxy>>>>,
     /// When `true`, every cell in this sheet is read-only — editor, paste,
     /// and clear are all blocked. Toggleable at runtime via
     /// `set_read_only` (issue #24). Wrapped in `Rc<RefCell>` so every
@@ -151,8 +162,10 @@ impl DataProxy {
     /// workbook's `Vec<DataProxy>` is built; the registry is shared via `Rc`
     /// so a single `set_sheets` on one `DataProxy` doesn't propagate to
     /// siblings — wire them all explicitly.
-    pub fn set_sheets(&mut self, sheets: SheetsRegistry) {
-        self.sheets = Some(sheets);
+    pub fn set_sheets(&mut self, sheets: &SheetsRegistry) {
+        // Downgrade to a Weak so this back-reference doesn't keep the workbook
+        // (which contains this very DataProxy) alive — see the field docs.
+        self.sheets = Some(Rc::downgrade(sheets));
     }
 
     /// Put the sheet in read-only mode. While `true`, the editor refuses to
@@ -191,13 +204,14 @@ impl DataProxy {
     /// Returns `None` if no registry is wired or no sheet with that name
     /// exists, which the evaluator surfaces as `#REF!`.
     fn find_sheet(&self, name: &str) -> Option<DataProxy> {
-        let sheets = self.sheets.as_ref()?;
+        let reg = self.sheets.as_ref()?.upgrade()?;
         let upper = name.to_uppercase();
-        sheets
+        let found = reg
             .borrow()
             .iter()
             .find(|d| d.name.to_uppercase() == upper)
-            .cloned()
+            .cloned();
+        found
     }
 
     pub fn get_cell(&self, ri: usize, ci: usize) -> Option<&Cell> {
@@ -253,8 +267,8 @@ impl DataProxy {
             return text;
         }
         let raw = if let Some(expr) = text.strip_prefix('=') {
-            let mut visited = HashSet::new();
-            visited.insert((ri, ci));
+            let mut visited: Visited = HashSet::new();
+            visited.insert((self.name.clone(), ri, ci));
             match self.eval_expr(expr, &mut visited) {
                 Ok(v) => format_number(v),
                 Err(e) => return e.code().to_string(),
@@ -270,8 +284,11 @@ impl DataProxy {
     /// Resolve a cell to a numeric value for use inside a formula. Error values
     /// propagate; non-numeric text resolves to 0; nested formulas recurse with
     /// a circular-ref guard.
-    fn resolve_numeric(&self, ri: usize, ci: usize, visited: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
-        if visited.contains(&(ri, ci)) {
+    fn resolve_numeric(&self, ri: usize, ci: usize, visited: &mut Visited) -> Result<f64, EvalErr> {
+        // Key by sheet so the same (row, col) on different sheets don't collide
+        // and a cross-sheet cycle is detected (issue #4).
+        let key = (self.name.clone(), ri, ci);
+        if visited.contains(&key) {
             return Ok(0.0);
         }
         let text = self.get_cell_text(ri, ci);
@@ -279,9 +296,9 @@ impl DataProxy {
             return Err(e);
         }
         if let Some(expr) = text.strip_prefix('=') {
-            visited.insert((ri, ci));
+            visited.insert(key.clone());
             let v = self.eval_expr(expr, visited);
-            visited.remove(&(ri, ci));
+            visited.remove(&key);
             v
         } else {
             // Plain numbers first; otherwise a date string resolves to its serial
@@ -292,7 +309,7 @@ impl DataProxy {
         }
     }
 
-    fn eval_expr(&self, expr: &str, visited: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
+    fn eval_expr(&self, expr: &str, visited: &mut Visited) -> Result<f64, EvalErr> {
         let tokens = tokenize(expr);
         let mut pos = 0usize;
         let v = self.parse_cmp(&tokens, &mut pos, visited)?;
@@ -300,7 +317,7 @@ impl DataProxy {
     }
 
     // expr := add ((= | == | > | < | >= | <=) add)*  — comparisons yield 1.0/0.0
-    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
+    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
         let mut v = self.parse_add(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
@@ -326,7 +343,7 @@ impl DataProxy {
     }
 
     // expr := term (('+' | '-') term)*
-    fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
+    fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
         let mut v = self.parse_mul(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
@@ -343,7 +360,7 @@ impl DataProxy {
     }
 
     // term := factor (('*' | '/') factor)*
-    fn parse_mul(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
+    fn parse_mul(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
         let mut v = self.parse_factor(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
@@ -367,7 +384,7 @@ impl DataProxy {
     }
 
     // factor := Number | '-' factor | '(' expr ')' | Function '(' args ')' | CellRef
-    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<f64, EvalErr> {
+    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
         let tok = t.get(*pos).ok_or(EvalErr::Value)?.clone();
         match tok {
             Token::Number(n) => {
@@ -413,12 +430,10 @@ impl DataProxy {
                 // Cross-sheet ref: resolve on the named sheet. An unknown
                 // sheet is a #REF! error (issue #4).
                 if let Some(target) = self.find_sheet(&sheet) {
-                    // Start a fresh visited set — the active sheet's circular-
-                    // ref guard shouldn't shadow a (ri, ci) on a *different*
-                    // sheet, and within-target loops are caught by the
-                    // target's own resolve_numeric adding to the set.
-                    let mut sub_vis = HashSet::new();
-                    target.resolve_numeric(row, c, &mut sub_vis)
+                    // Thread the SAME visited set through (keyed by sheet name),
+                    // so a cross-sheet cycle is caught instead of recursing
+                    // forever (issue #4).
+                    target.resolve_numeric(row, c, vis)
                 } else {
                     Err(EvalErr::Ref)
                 }
@@ -442,7 +457,7 @@ impl DataProxy {
 
     // Parse a comma-separated argument list (until RightParen), flattening
     // any `A1:B3` ranges into the individual cell values they cover.
-    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut HashSet<(usize, usize)>) -> Result<Vec<f64>, EvalErr> {
+    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Vec<f64>, EvalErr> {
         let mut args = Vec::new();
         if matches!(t.get(*pos), Some(Token::RightParen)) {
             *pos += 1;
@@ -456,12 +471,10 @@ impl DataProxy {
                 let (c1, r1) = exp2xy(&to);
                 let (r0, r1) = (r0.min(r1), r0.max(r1));
                 let (c0, c1) = (c0.min(c1), c0.max(c1));
-                // Fresh visited set per cross-sheet expansion — see the same
-                // note in parse_factor's SheetCellRef arm.
-                let mut sub_vis = HashSet::new();
+                // Thread the same sheet-keyed visited set through (issue #4).
                 for r in r0..=r1 {
                     for c in c0..=c1 {
-                        args.push(target.resolve_numeric(r, c, &mut sub_vis)?);
+                        args.push(target.resolve_numeric(r, c, vis)?);
                     }
                 }
                 *pos += 1;
@@ -1678,7 +1691,7 @@ mod tests {
     /// Build a two-sheet workbook. `setup_other` populates the second sheet's
     /// cells with the given (row, col, value) triples. Returns the active
     /// (first) sheet, already wired to the registry.
-    fn two_sheet_workbook(other: &[(usize, usize, &str)]) -> DataProxy {
+    fn two_sheet_workbook(other: &[(usize, usize, &str)]) -> (DataProxy, SheetsRegistry) {
         let mut a = DataProxy::new("Sheet1");
         let mut b = DataProxy::new("Sheet2");
         for &(r, c, v) in other {
@@ -1687,37 +1700,38 @@ mod tests {
         let sheets: SheetsRegistry = Rc::new(RefCell::new(vec![a.clone(), b.clone()]));
         // Wire the registry on every DataProxy so the evaluator can find peers.
         for d in sheets.borrow_mut().iter_mut() {
-            d.set_sheets(sheets.clone());
+            d.set_sheets(&sheets);
         }
-        a.set_sheets(sheets);
-        a
+        a.set_sheets(&sheets);
+        // Hand back the strong Rc: each DataProxy now keeps only a Weak
+        // back-reference (issue #4), so the caller must hold the registry alive.
+        (a, sheets)
     }
 
     #[test]
     fn cross_sheet_cell_ref() {
-        let mut a = two_sheet_workbook(&[(0, 0, "42")]); // Sheet2!A1
+        let (mut a, _reg) = two_sheet_workbook(&[(0, 0, "42")]); // Sheet2!A1
         a.set_cell_text(0, 0, "=Sheet2!A1");
         assert_eq!(a.cell_display_value(0, 0), "42");
     }
 
     #[test]
     fn cross_sheet_with_arithmetic() {
-        let mut a = two_sheet_workbook(&[(0, 0, "10"), (1, 0, "20")]);
+        let (mut a, _reg) = two_sheet_workbook(&[(0, 0, "10"), (1, 0, "20")]);
         a.set_cell_text(0, 0, "=Sheet2!A1+Sheet2!A2");
         assert_eq!(a.cell_display_value(0, 0), "30");
     }
 
     #[test]
     fn cross_sheet_range_in_function() {
-        let mut a = two_sheet_workbook(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3"), (3, 0, "4")]);
+        let (mut a, _reg) = two_sheet_workbook(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3"), (3, 0, "4")]);
         a.set_cell_text(0, 0, "=SUM(Sheet2!A1:A4)");
         assert_eq!(a.cell_display_value(0, 0), "10");
     }
 
     #[test]
     fn cross_sheet_unknown_sheet_is_ref_error() {
-        let a = two_sheet_workbook(&[]);
-        let mut a = a;
+        let (mut a, _reg) = two_sheet_workbook(&[]);
         a.set_cell_text(0, 0, "=Missing!A1");
         assert_eq!(a.cell_display_value(0, 0), "#REF!");
         // And in a function arg position.
@@ -1728,16 +1742,50 @@ mod tests {
     #[test]
     fn cross_sheet_uses_target_sheet_value() {
         // A2 in Sheet2 is itself a formula; the cross-sheet ref sees the result.
-        let mut a = two_sheet_workbook(&[(0, 0, "5"), (1, 0, "=Sheet2!A1*2")]);
+        let (mut a, _reg) = two_sheet_workbook(&[(0, 0, "5"), (1, 0, "=Sheet2!A1*2")]);
         a.set_cell_text(0, 0, "=Sheet2!A2+1");
         assert_eq!(a.cell_display_value(0, 0), "11"); // 5*2 + 1
     }
 
     #[test]
     fn cross_sheet_name_is_case_insensitive() {
-        let mut a = two_sheet_workbook(&[(0, 0, "7")]);
+        let (mut a, _reg) = two_sheet_workbook(&[(0, 0, "7")]);
         a.set_cell_text(0, 0, "=sheet2!A1");
         assert_eq!(a.cell_display_value(0, 0), "7");
+    }
+
+    #[test]
+    fn cross_sheet_cycle_terminates_without_overflow() {
+        // Sheet1!A1 = Sheet2!A1 and Sheet2!A1 = Sheet1!A1 — a cross-sheet cycle.
+        // The sheet-aware visited guard must break it instead of recursing
+        // forever (issue #4). Evaluate the registry's own Sheet1 copy so both
+        // sides see each other's live (cyclic) formula.
+        let mut s1 = DataProxy::new("Sheet1");
+        let mut s2 = DataProxy::new("Sheet2");
+        s1.set_cell_text(0, 0, "=Sheet2!A1");
+        s2.set_cell_text(0, 0, "=Sheet1!A1");
+        let reg: SheetsRegistry = Rc::new(RefCell::new(vec![s1, s2]));
+        for d in reg.borrow_mut().iter_mut() {
+            d.set_sheets(&reg);
+        }
+        // Would stack-overflow (crash) before the fix; now the guard yields 0.
+        let v = reg.borrow()[0].cell_display_value(0, 0);
+        assert_eq!(v, "0");
+    }
+
+    #[test]
+    fn registry_not_leaked_by_back_references() {
+        // Each sheet's back-reference to the registry must be Weak, or the
+        // Rc<Vec<DataProxy>> would form a cycle and leak the whole workbook.
+        let reg: SheetsRegistry =
+            Rc::new(RefCell::new(vec![DataProxy::new("S1"), DataProxy::new("S2")]));
+        for d in reg.borrow_mut().iter_mut() {
+            d.set_sheets(&reg);
+        }
+        let weak = Rc::downgrade(&reg);
+        assert_eq!(Rc::strong_count(&reg), 1, "back-refs must be Weak, not strong Rc");
+        drop(reg);
+        assert!(weak.upgrade().is_none(), "workbook should free (no Rc cycle)");
     }
 
     #[test]
