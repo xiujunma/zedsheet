@@ -1914,7 +1914,6 @@ fn wire_data_validation_modal(
 /// Show/hide the operator, value, and list rows in the DV modal based on
 /// the chosen type.
 fn update_dv_rows(modal: &web_sys::Element, type_val: &str) {
-    use wasm_bindgen::JsCast;
     // Read the current operator from the DOM (fallback for callers that
     // don't pass it explicitly).
     let op_val = modal
