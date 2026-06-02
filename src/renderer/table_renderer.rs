@@ -1400,14 +1400,33 @@ impl TableRenderer {
         }
     }
 
-    /// Freeze panes at the selection's top-left, or unfreeze if already there.
-    pub fn toggle_freeze(&mut self) {
+    /// Set the freeze origin (rows above `ri` and columns left of `ci` stay
+    /// fixed), keeping the renderer and the data model in sync so the freeze
+    /// persists across serialization and sheet switches (issue #18).
+    fn set_freeze_origin(&mut self, ri: usize, ci: usize) {
+        self.freeze = (ri, ci);
+        self.data.set_freeze(ri, ci);
+    }
+
+    /// Freeze the top row (issue #18).
+    pub fn freeze_top_row(&mut self) {
+        self.set_freeze_origin(1, 0);
+    }
+
+    /// Freeze the first column (issue #18).
+    pub fn freeze_first_col(&mut self) {
+        self.set_freeze_origin(0, 1);
+    }
+
+    /// Freeze the rows above and columns left of the active cell (issue #18).
+    pub fn freeze_at_selection(&mut self) {
         let (r0, c0, _, _) = self.selection_bounds();
-        if self.freeze == (r0, c0) {
-            self.freeze = (0, 0);
-        } else {
-            self.freeze = (r0, c0);
-        }
+        self.set_freeze_origin(r0, c0);
+    }
+
+    /// Remove all frozen panes (issue #18).
+    pub fn unfreeze(&mut self) {
+        self.set_freeze_origin(0, 0);
     }
 
     /// Toggle the per-cell lock (editable flag) on the active cell. Snapshots

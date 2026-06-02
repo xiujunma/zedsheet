@@ -1421,6 +1421,51 @@ mod tests {
     }
 
     #[test]
+    fn freeze_defaults_to_inactive() {
+        let d = DataProxy::new("t");
+        assert_eq!(d.freeze, (0, 0));
+        assert!(!d.freeze_is_active());
+    }
+
+    #[test]
+    fn set_freeze_activates_and_unfreeze_clears() {
+        let mut d = DataProxy::new("t");
+        d.set_freeze(2, 3);
+        assert_eq!(d.freeze, (2, 3));
+        assert!(d.freeze_is_active());
+        d.set_freeze(0, 0); // the renderer's `unfreeze` path
+        assert_eq!(d.freeze, (0, 0));
+        assert!(!d.freeze_is_active());
+    }
+
+    // The freeze origins the toolbar menu produces (#18) must survive a
+    // serialization roundtrip so frozen panes persist across save/load and
+    // sheet switches.
+    #[test]
+    fn freeze_origins_survive_serialization_roundtrip() {
+        // (label, origin) — top row, first column, panes-at-selection, unfrozen.
+        for (label, origin) in [
+            ("top-row", (1usize, 0usize)),
+            ("first-col", (0, 1)),
+            ("panes", (3, 2)),
+            ("none", (0, 0)),
+        ] {
+            let mut src = DataProxy::new("t");
+            src.set_freeze(origin.0, origin.1);
+
+            let mut dst = DataProxy::new("t");
+            dst.set_data(src.get_data());
+
+            assert_eq!(dst.freeze, origin, "{label}: freeze origin not preserved");
+            assert_eq!(
+                dst.freeze_is_active(),
+                origin != (0, 0),
+                "{label}: freeze_is_active mismatch after roundtrip"
+            );
+        }
+    }
+
+    #[test]
     fn average_range_with_arithmetic() {
         // =AVERAGE(A1:A3)+50*10-B20 = 1 + 500 - 20
         let cells = [(0, 0), (1, 0), (2, 0), (19, 1)];

@@ -114,7 +114,7 @@ pub(crate) fn wire_toolbar(
             "textwrap" => r.toggle_text_wrap(),
             "merge" => r.merge_selection(),
             "clearformat" => r.clear_format(),
-            "freeze" => r.toggle_freeze(),
+            // "freeze" opens a dropdown (registered in `menus`), handled above.
             "align-left" => r.set_align("left"),
             "align-center" => r.set_align("center"),
             "align-right" => r.set_align("right"),
@@ -239,6 +239,61 @@ pub(crate) fn wire_border_menu(menu: web_sys::Element, renderer: &SharedRenderer
         {
             let mut r = renderer.borrow_mut();
             r.set_borders(&mode);
+            r.render();
+        }
+        sync();
+        hide_palette(&menu_for_hide);
+    });
+}
+
+/// Build the freeze-panes dropdown rows (issue #18).
+pub(crate) fn freeze_menu_html() -> String {
+    let items = [
+        ("top-row", "Freeze top row"),
+        ("first-col", "Freeze first column"),
+        ("panes", "Freeze panes"),
+        ("none", "Unfreeze"),
+    ];
+    let mut s = String::new();
+    for (mode, label) in items {
+        s.push_str(&format!(
+            "<div class=\"{p}-item\" data-freeze=\"{mode}\" style=\"cursor:pointer;display:flex;align-items:center;gap:6px;\">\
+               {label}\
+             </div>",
+            p = CSS_PREFIX, mode = mode, label = label
+        ));
+    }
+    s
+}
+
+/// Wire the freeze dropdown: each row sets (or clears) the frozen panes for the
+/// active selection (issue #18).
+pub(crate) fn wire_freeze_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    let renderer = renderer.clone();
+    let sync = sync.clone();
+    let menu_for_hide = menu.clone();
+    let mut el: Element = menu.into();
+    el.add_event_listener("click", move |event: web_sys::Event| {
+        let Some(target) = event.target() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let item = elx
+            .get_attribute("data-freeze")
+            .map(|_| elx.clone())
+            .or_else(|| elx.closest("[data-freeze]").ok().flatten());
+        let Some(item) = item else { return };
+        let Some(mode) = item.get_attribute("data-freeze") else { return };
+        {
+            let mut r = renderer.borrow_mut();
+            match mode.as_str() {
+                "top-row" => r.freeze_top_row(),
+                "first-col" => r.freeze_first_col(),
+                "panes" => r.freeze_at_selection(),
+                "none" => r.unfreeze(),
+                _ => {
+                    hide_palette(&menu_for_hide);
+                    return;
+                }
+            }
             r.render();
         }
         sync();

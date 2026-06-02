@@ -227,6 +227,18 @@ impl ZedSheet {
         let border_menu_node = border_menu.el.clone();
         root.append_child(&mut border_menu);
 
+        // Freeze-panes dropdown menu (opened by the toolbar freeze button, #18).
+        let mut freeze_menu = h("div", Some(&format!("{}-dropdown-menu", CSS_PREFIX)));
+        freeze_menu.set_inner_html(freeze_menu_html());
+        let _ = freeze_menu.el.as_ref().map(|e| {
+            let _ = e.set_attribute(
+                "style",
+                "display:none;position:absolute;z-index:200;background:#fff;border:1px solid #ccc;box-shadow:1px 2px 5px 2px rgba(51,51,51,0.15);width:150px;",
+            );
+        });
+        let freeze_menu_node = freeze_menu.el.clone();
+        root.append_child(&mut freeze_menu);
+
         // Toolbar tooltip (shown on hover over a button).
         let mut tooltip_el = h("div", Some(&format!("{}-tooltip", CSS_PREFIX)));
         let _ = tooltip_el.el.as_ref().map(|e| {
@@ -490,12 +502,18 @@ impl ZedSheet {
         if let Some(bm) = border_menu_node.clone() {
             menus.push(("borders".to_string(), bm));
         }
+        if let Some(fm) = freeze_menu_node.clone() {
+            menus.push(("freeze".to_string(), fm));
+        }
 
         if let Some(mut tb) = toolbar_el {
             wire_toolbar(&mut tb, &renderer, palette_node.clone(), &palette_mode, menus, &sync);
         }
         if let Some(bm) = border_menu_node {
             wire_border_menu(bm, &renderer, &sync);
+        }
+        if let Some(fm) = freeze_menu_node {
+            wire_freeze_menu(fm, &renderer, &sync);
         }
         if let (Some(tb), Some(tip)) = (toolbar_node.clone(), tooltip_node) {
             wire_tooltip(tb, tip);
