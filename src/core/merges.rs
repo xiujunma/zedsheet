@@ -33,6 +33,12 @@ impl Merges {
         self.ranges.retain(|r| !r.within(range));
     }
 
+    /// Drop every merge overlapping `range`. Used by cell insert/delete, which
+    /// can't keep a merge straddling the shifted band (issue #14).
+    pub fn delete_intersecting(&mut self, range: &CellRange) {
+        self.ranges.retain(|r| !r.intersects(range));
+    }
+
     pub fn get_first_includes(&self, ri: usize, ci: usize) -> Option<&CellRange> {
         self.ranges.iter().find(|r| r.includes(ri, ci))
     }

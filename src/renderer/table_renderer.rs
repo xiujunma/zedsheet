@@ -1400,6 +1400,77 @@ impl TableRenderer {
         }
     }
 
+    /// Hide every row spanned by the selection (issue #14).
+    pub fn hide_rows_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, _, r1, _) = self.selection_bounds();
+        for r in r0..=r1 {
+            self.data.set_row_hidden(r, true);
+        }
+    }
+
+    /// Reveal every row spanned by the selection — including collapsed rows
+    /// caught between the selected ones (issue #14).
+    pub fn unhide_rows_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, _, r1, _) = self.selection_bounds();
+        for r in r0..=r1 {
+            self.data.set_row_hidden(r, false);
+        }
+    }
+
+    /// Hide every column spanned by the selection (issue #14).
+    pub fn hide_cols_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (_, c0, _, c1) = self.selection_bounds();
+        for c in c0..=c1 {
+            self.data.set_col_hidden(c, true);
+        }
+    }
+
+    /// Reveal every column spanned by the selection (issue #14).
+    pub fn unhide_cols_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (_, c0, _, c1) = self.selection_bounds();
+        for c in c0..=c1 {
+            self.data.set_col_hidden(c, false);
+        }
+    }
+
+    /// Insert blank cells over the selection, shifting existing cells right
+    /// (`horizontal`) or down (issue #14).
+    pub fn insert_cells_at_selection(&mut self, horizontal: bool) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        self.data.insert_cells(r0, c0, r1, c1, horizontal);
+    }
+
+    /// Delete the selected cells, pulling later cells left (`horizontal`) or
+    /// up (issue #14).
+    pub fn delete_cells_at_selection(&mut self, horizontal: bool) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        self.data.delete_cells(r0, c0, r1, c1, horizontal);
+    }
+
     /// Set the freeze origin (rows above `ri` and columns left of `ci` stay
     /// fixed), keeping the renderer and the data model in sync so the freeze
     /// persists across serialization and sheet switches (issue #18).

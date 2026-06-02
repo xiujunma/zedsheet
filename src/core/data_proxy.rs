@@ -729,6 +729,127 @@ impl DataProxy {
         self.adjust_all_formulas(false, at + 1, -1, Some(at));
     }
 
+    // --- Hide / unhide rows & columns (issue #14) ---
+
+    /// Hide or reveal row `ri`.
+    pub fn set_row_hidden(&mut self, ri: usize, hide: bool) {
+        self.rows.entry(ri).or_insert_with(Row::default).set_hide(hide);
+    }
+
+    /// Whether row `ri` is currently hidden.
+    pub fn is_row_hidden(&self, ri: usize) -> bool {
+        self.rows.get(&ri).is_some_and(|r| r.hide)
+    }
+
+    /// Hide or reveal column `ci`.
+    pub fn set_col_hidden(&mut self, ci: usize, hide: bool) {
+        self.cols.set_hide(ci, hide);
+    }
+
+    /// Whether column `ci` is currently hidden.
+    pub fn is_col_hidden(&self, ci: usize) -> bool {
+        self.cols.data.get(&ci).is_some_and(|c| c.hide)
+    }
+
+    // --- Insert / delete cells with shift (issue #14) ---
+    //
+    // Relocated cells keep their content verbatim — formula references are not
+    // rewritten (matching cut/paste, and sidestepping the ambiguous partial-
+    // range adjustment that Excel itself warns can break formulas). Merges that
+    // overlap the affected band are dropped.
+
+    fn take_cell(&mut self, r: usize, c: usize) -> Option<Cell> {
+        self.rows.get_mut(&r).and_then(|row| row.cells.remove(&c))
+    }
+
+    fn put_cell(&mut self, r: usize, c: usize, cell: Cell) {
+        self.rows.entry(r).or_insert_with(Row::default).cells.insert(c, cell);
+    }
+
+    /// Insert a blank block over the rectangle (`r0,c0`)–(`r1,c1`), pushing the
+    /// cells there (and beyond) right (`horizontal`) or down.
+    pub fn insert_cells(&mut self, r0: usize, c0: usize, r1: usize, c1: usize, horizontal: bool) {
+        let (r0, r1) = (r0.min(r1), r0.max(r1));
+        let (c0, c1) = (c0.min(c1), c0.max(c1));
+        if horizontal {
+            let w = c1 - c0 + 1;
+            for r in r0..=r1 {
+                if let Some(row) = self.rows.get_mut(&r) {
+                    // High → low so a moved cell never clobbers an unmoved one.
+                    let mut cs: Vec<usize> = row.cells.keys().copied().filter(|c| *c >= c0).collect();
+                    cs.sort_unstable_by(|a, b| b.cmp(a));
+                    for c in cs {
+                        if let Some(cell) = row.cells.remove(&c) {
+                            row.cells.insert(c + w, cell);
+                        }
+                    }
+                }
+            }
+        } else {
+            let h = r1 - r0 + 1;
+            for c in c0..=c1 {
+                let mut rs: Vec<usize> = self
+                    .rows
+                    .iter()
+                    .filter(|(r, row)| **r >= r0 && row.cells.contains_key(&c))
+                    .map(|(r, _)| *r)
+                    .collect();
+                rs.sort_unstable_by(|a, b| b.cmp(a)); // high → low
+                for r in rs {
+                    if let Some(cell) = self.take_cell(r, c) {
+                        self.put_cell(r + h, c, cell);
+                    }
+                }
+            }
+        }
+        self.merges.delete_intersecting(&CellRange::new(r0, c0, r1, c1));
+    }
+
+    /// Delete the rectangle (`r0,c0`)–(`r1,c1`), pulling the cells beyond it
+    /// left (`horizontal`) or up.
+    pub fn delete_cells(&mut self, r0: usize, c0: usize, r1: usize, c1: usize, horizontal: bool) {
+        let (r0, r1) = (r0.min(r1), r0.max(r1));
+        let (c0, c1) = (c0.min(c1), c0.max(c1));
+        if horizontal {
+            let w = c1 - c0 + 1;
+            for r in r0..=r1 {
+                if let Some(row) = self.rows.get_mut(&r) {
+                    for c in c0..=c1 {
+                        row.cells.remove(&c);
+                    }
+                    // Low → high so a moved cell never clobbers an unmoved one.
+                    let mut cs: Vec<usize> = row.cells.keys().copied().filter(|c| *c > c1).collect();
+                    cs.sort_unstable();
+                    for c in cs {
+                        if let Some(cell) = row.cells.remove(&c) {
+                            row.cells.insert(c - w, cell);
+                        }
+                    }
+                }
+            }
+        } else {
+            let h = r1 - r0 + 1;
+            for c in c0..=c1 {
+                for r in r0..=r1 {
+                    self.take_cell(r, c);
+                }
+                let mut rs: Vec<usize> = self
+                    .rows
+                    .iter()
+                    .filter(|(r, row)| **r > r1 && row.cells.contains_key(&c))
+                    .map(|(r, _)| *r)
+                    .collect();
+                rs.sort_unstable(); // low → high
+                for r in rs {
+                    if let Some(cell) = self.take_cell(r, c) {
+                        self.put_cell(r - h, c, cell);
+                    }
+                }
+            }
+        }
+        self.merges.delete_intersecting(&CellRange::new(r0, c0, r1, c1));
+    }
+
     /// Rewrite cell references in every formula after a structural edit. Any
     /// reference whose row (or column, when `is_row` is false) index is
     /// `>= shift_from` is offset by `delta`.
@@ -1463,6 +1584,100 @@ mod tests {
                 "{label}: freeze_is_active mismatch after roundtrip"
             );
         }
+    }
+
+    // --- Hide / unhide + cell shift (issue #14) ---
+
+    #[test]
+    fn hide_unhide_rows_and_cols() {
+        let mut d = DataProxy::new("t");
+        assert!(!d.is_row_hidden(2));
+        d.set_row_hidden(2, true);
+        assert!(d.is_row_hidden(2));
+        assert_eq!(d.get_row_height(2), 0.0); // collapsed for the renderer
+        d.set_row_hidden(2, false);
+        assert!(!d.is_row_hidden(2));
+        assert!(d.get_row_height(2) > 0.0);
+
+        assert!(!d.is_col_hidden(3));
+        d.set_col_hidden(3, true);
+        assert!(d.is_col_hidden(3));
+        assert_eq!(d.get_col_width(3), 0.0);
+        d.set_col_hidden(3, false);
+        assert!(!d.is_col_hidden(3));
+    }
+
+    #[test]
+    fn insert_cells_shift_down() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "a0");
+        d.set_cell_text(1, 0, "a1");
+        d.set_cell_text(0, 1, "b0"); // untouched column
+        d.insert_cells(0, 0, 0, 0, false);
+        assert_eq!(d.get_cell_text(0, 0), ""); // vacated
+        assert_eq!(d.get_cell_text(1, 0), "a0"); // pushed down
+        assert_eq!(d.get_cell_text(2, 0), "a1");
+        assert_eq!(d.get_cell_text(0, 1), "b0"); // other column intact
+    }
+
+    #[test]
+    fn delete_cells_shift_up() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "a0");
+        d.set_cell_text(1, 0, "a1");
+        d.set_cell_text(2, 0, "a2");
+        d.delete_cells(0, 0, 0, 0, false);
+        assert_eq!(d.get_cell_text(0, 0), "a1");
+        assert_eq!(d.get_cell_text(1, 0), "a2");
+        assert_eq!(d.get_cell_text(2, 0), "");
+    }
+
+    #[test]
+    fn insert_cells_shift_right() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "a");
+        d.set_cell_text(0, 1, "b");
+        d.set_cell_text(1, 0, "x"); // untouched row
+        d.insert_cells(0, 0, 0, 0, true);
+        assert_eq!(d.get_cell_text(0, 0), "");
+        assert_eq!(d.get_cell_text(0, 1), "a");
+        assert_eq!(d.get_cell_text(0, 2), "b");
+        assert_eq!(d.get_cell_text(1, 0), "x"); // other row intact
+    }
+
+    #[test]
+    fn delete_cells_shift_left() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "a");
+        d.set_cell_text(0, 1, "b");
+        d.set_cell_text(0, 2, "c");
+        d.delete_cells(0, 0, 0, 0, true);
+        assert_eq!(d.get_cell_text(0, 0), "b");
+        assert_eq!(d.get_cell_text(0, 1), "c");
+        assert_eq!(d.get_cell_text(0, 2), "");
+    }
+
+    #[test]
+    fn insert_cells_drops_overlapping_merge() {
+        let mut d = DataProxy::new("t");
+        d.merges.add(CellRange::new(0, 0, 1, 1)); // A1:B2
+        assert!(d.cell_merge(0, 0).is_some());
+        d.insert_cells(0, 0, 0, 0, false);
+        assert!(
+            d.cell_merge(0, 0).is_none(),
+            "a merge overlapping the inserted band should be dropped"
+        );
+    }
+
+    #[test]
+    fn insert_cells_block_shifts_by_its_height() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "keep");
+        d.set_cell_text(3, 0, "below");
+        // Insert a 3-row-tall block at rows 1..=3 → "below" moves down by 3.
+        d.insert_cells(1, 0, 3, 0, false);
+        assert_eq!(d.get_cell_text(0, 0), "keep"); // above the band, intact
+        assert_eq!(d.get_cell_text(6, 0), "below"); // 3 + 3
     }
 
     #[test]

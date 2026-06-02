@@ -509,7 +509,7 @@ impl ZedSheet {
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer, dv_open.clone());
+            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
             wire_formula_bar(fb, &renderer, &sync, fx_menu_node, toast_node);

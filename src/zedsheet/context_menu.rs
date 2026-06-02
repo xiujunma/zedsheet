@@ -23,6 +23,15 @@ pub(crate) fn context_menu_html() -> String {
         item("insert-col", "Insert column"),
         item("delete-row", "Delete row"),
         item("delete-col", "Delete column"),
+        // Issue #14: cell insert/delete with shift, and hide/unhide.
+        item("insert-cells-down", "Insert cells (shift down)"),
+        item("insert-cells-right", "Insert cells (shift right)"),
+        item("delete-cells-up", "Delete cells (shift up)"),
+        item("delete-cells-left", "Delete cells (shift left)"),
+        item("hide-rows", "Hide rows"),
+        item("hide-cols", "Hide columns"),
+        item("unhide-rows", "Unhide rows"),
+        item("unhide-cols", "Unhide columns"),
         divider.clone(),
         item("note", "Insert / edit note"),
         item("delete-note", "Delete note"),
@@ -56,6 +65,7 @@ pub(crate) fn wire_context_menu(
     canvas_el: &mut Element,
     menu_node: web_sys::Element,
     renderer: &SharedRenderer,
+    sync: &SyncFn,
     dv_open: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
@@ -87,6 +97,7 @@ pub(crate) fn wire_context_menu(
     // Run a command on item click, then hide.
     {
         let renderer = renderer.clone();
+        let sync = sync.clone();
         let menu = menu_node.clone();
         let menu_for_click = menu_node.clone();
         let mut menu_el: Element = menu_node.clone().into();
@@ -150,6 +161,16 @@ pub(crate) fn wire_context_menu(
                     "insert-col" if !read_only => r.insert_col_at_selection(),
                     "delete-row" if !read_only => r.delete_rows_at_selection(),
                     "delete-col" if !read_only => r.delete_cols_at_selection(),
+                    // Issue #14: cell insert/delete with shift direction.
+                    "insert-cells-down" if !read_only => r.insert_cells_at_selection(false),
+                    "insert-cells-right" if !read_only => r.insert_cells_at_selection(true),
+                    "delete-cells-up" if !read_only => r.delete_cells_at_selection(false),
+                    "delete-cells-left" if !read_only => r.delete_cells_at_selection(true),
+                    // Issue #14: hide / unhide rows & columns.
+                    "hide-rows" if !read_only => r.hide_rows_at_selection(),
+                    "hide-cols" if !read_only => r.hide_cols_at_selection(),
+                    "unhide-rows" if !read_only => r.unhide_rows_at_selection(),
+                    "unhide-cols" if !read_only => r.unhide_cols_at_selection(),
                     "delete-note" if !read_only => r.set_selection_note(None),
                     "remove-link" if !read_only => r.set_selection_link(None),
                     "clear" if !read_only => r.clear_selection_content(),
@@ -175,6 +196,8 @@ pub(crate) fn wire_context_menu(
                 }
                 r.render();
             }
+            // Refresh the formula bar / undo state and persist the edit (#20).
+            sync();
             let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
         });
         // Hide when clicking outside the menu.
