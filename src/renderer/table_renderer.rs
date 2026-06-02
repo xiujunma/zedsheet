@@ -904,7 +904,10 @@ impl TableRenderer {
             ar.max(ri),
             ac.max(ci),
         );
-        self.multi_range.extend_last(r1, c1);
+        // Pass the raw cursor: extend_last normalizes against its own anchor, so
+        // this grows the range in every direction. Passing the pre-maxed
+        // (r1, c1) collapsed reverse (up/left) drags to the anchor (issue #19).
+        self.multi_range.extend_last(ri, ci);
         self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
     }
 
@@ -1176,44 +1179,49 @@ impl TableRenderer {
     /// Apply borders to the selection. `mode` is one of:
     /// all | outer | none | top | bottom | left | right.
     /// With multi-range selection (issue #19), iterates every range; the
-    /// `outer` mode uses the union bounding box so cells on the edge of any
-    /// range pick up the outer side.
+    /// `outer` mode draws each range's OWN perimeter (not the union bbox), so
+    /// disjoint ranges each get a complete outer border.
     pub fn set_borders(&mut self, mode: &str) {
         if self.data.is_read_only() {
             return;
         }
         self.snapshot();
-        let (ur0, uc0, ur1, uc1) = self.union_bounds();
         let line = Some(("thin".to_string(), "#000000".to_string()));
-        let cells: Vec<(usize, usize)> = {
-            let mut v = Vec::new();
-            self.for_each_selected_cell(|ri, ci| v.push((ri, ci)));
-            v
+        // Per-range so "outer" edges are correct for disjoint selections; a
+        // single-rect selection is just one range.
+        let ranges = if self.multi_range.is_active() {
+            self.multi_range.normalized()
+        } else {
+            vec![self.selection_bounds()]
         };
-        for (ri, ci) in cells {
-            let mut style = self.data.get_cell_style(ri, ci);
-            if mode == "none" {
-                style.border = None;
-            } else {
-                let mut b = style.border.clone().unwrap_or(CellBorder {
-                    left: None,
-                    right: None,
-                    top: None,
-                    bottom: None,
-                });
-                let want_top = mode == "all" || mode == "top" || (mode == "outer" && ri == ur0);
-                let want_bottom = mode == "all" || mode == "bottom" || (mode == "outer" && ri == ur1);
-                let want_left = mode == "all" || mode == "left" || (mode == "outer" && ci == uc0);
-                let want_right = mode == "all" || mode == "right" || (mode == "outer" && ci == uc1);
-                if want_top { b.top = line.clone(); }
-                if want_bottom { b.bottom = line.clone(); }
-                if want_left { b.left = line.clone(); }
-                if want_right { b.right = line.clone(); }
-                let empty = b.top.is_none() && b.bottom.is_none() && b.left.is_none() && b.right.is_none();
-                style.border = if empty { None } else { Some(b) };
+        for (r0, c0, r1, c1) in ranges {
+            for ri in r0..=r1 {
+                for ci in c0..=c1 {
+                    let mut style = self.data.get_cell_style(ri, ci);
+                    if mode == "none" {
+                        style.border = None;
+                    } else {
+                        let mut b = style.border.clone().unwrap_or(CellBorder {
+                            left: None,
+                            right: None,
+                            top: None,
+                            bottom: None,
+                        });
+                        let want_top = mode == "all" || mode == "top" || (mode == "outer" && ri == r0);
+                        let want_bottom = mode == "all" || mode == "bottom" || (mode == "outer" && ri == r1);
+                        let want_left = mode == "all" || mode == "left" || (mode == "outer" && ci == c0);
+                        let want_right = mode == "all" || mode == "right" || (mode == "outer" && ci == c1);
+                        if want_top { b.top = line.clone(); }
+                        if want_bottom { b.bottom = line.clone(); }
+                        if want_left { b.left = line.clone(); }
+                        if want_right { b.right = line.clone(); }
+                        let empty = b.top.is_none() && b.bottom.is_none() && b.left.is_none() && b.right.is_none();
+                        style.border = if empty { None } else { Some(b) };
+                    }
+                    let idx = self.data.add_style(style);
+                    self.data.set_cell_style(ri, ci, idx);
+                }
             }
-            let idx = self.data.add_style(style);
-            self.data.set_cell_style(ri, ci, idx);
         }
     }
 

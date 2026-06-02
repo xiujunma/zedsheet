@@ -174,6 +174,16 @@ mod tests {
     }
 
     #[test]
+    fn extend_last_grows_in_reverse_direction() {
+        // Dragging up/left from the anchor must still grow the range (issue
+        // #19): the fix routes the raw cursor to extend_last, which normalizes.
+        let mut s = MultiRangeState::new();
+        s.add(5, 5, 5, 5); // anchor at (5, 5)
+        s.extend_last(3, 3); // drag toward the top-left
+        assert_eq!(s.normalized().last(), Some(&(3, 3, 5, 5)));
+    }
+
+    #[test]
     fn clear_empties_ranges_but_keeps_anchor() {
         let mut s = MultiRangeState::new();
         s.add(0, 0, 1, 1);
