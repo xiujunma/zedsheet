@@ -350,18 +350,11 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             let underline_on = style.underline || is_link;
 
             canvas.save();
-            canvas.begin_path();
-            canvas.rect(
-                draw_rect.x,
-                draw_rect.y,
-                draw_rect.width - right_inset,
-                draw_rect.height,
-            );
-            canvas.clip(None);
 
-            // Rotation (issue #25): pivot around the cell center. We push
-            // the rotation BEFORE setting the font so the saved state has
-            // the rotated context.
+            // Rotation (issue #25): pivot around the cell center. Apply it
+            // BEFORE the clip so the clip rectangle rotates with the text —
+            // otherwise rotated text is clipped to the unrotated cell box and
+            // gets cut off (e.g. vertical text in a short cell).
             if let Some(angle) = style.rotation {
                 if angle.abs() > 1e-9 {
                     let cx = draw_rect.x + draw_rect.width / 2f64;
@@ -371,6 +364,15 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                     canvas.translate(-cx, -cy);
                 }
             }
+
+            canvas.begin_path();
+            canvas.rect(
+                draw_rect.x,
+                draw_rect.y,
+                draw_rect.width - right_inset,
+                draw_rect.height,
+            );
+            canvas.clip(None);
 
             canvas
                 .set_font(&font)
