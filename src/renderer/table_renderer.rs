@@ -1080,6 +1080,13 @@ impl TableRenderer {
     /// Apply a style mutation to every cell in the current selection. With
     /// multi-range selection (issue #19), iterates over every range.
     pub fn update_selection_style<F: Fn(&mut CellStyle)>(&mut self, f: F) {
+        // Read-only sheets reject all formatting (issue #24). This is the funnel
+        // for every style toggle (bold/align/color/format/font/rotation/…), so
+        // guarding it here covers the toolbar, keyboard shortcuts, color palette
+        // and dropdowns in one place.
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let cells: Vec<(usize, usize)> = {
             let mut v = Vec::new();
@@ -1172,6 +1179,9 @@ impl TableRenderer {
     /// `outer` mode uses the union bounding box so cells on the edge of any
     /// range pick up the outer side.
     pub fn set_borders(&mut self, mode: &str) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (ur0, uc0, ur1, uc1) = self.union_bounds();
         let line = Some(("thin".to_string(), "#000000".to_string()));
@@ -1219,6 +1229,9 @@ impl TableRenderer {
     /// Remove styling from every cell in the selection. Fans out across all
     /// ranges in multi-range mode (issue #19).
     pub fn clear_format(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let cells: Vec<(usize, usize)> = {
             let mut v = Vec::new();
@@ -1234,6 +1247,9 @@ impl TableRenderer {
 
     /// Merge the selection (or unmerge when a single merged cell is selected).
     pub fn merge_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
         if r0 == r1 && c0 == c1 {
@@ -1263,7 +1279,10 @@ impl TableRenderer {
     }
 
     pub fn cut_selection(&mut self) {
-        self.snapshot_clipboard(true);
+        // A read-only sheet can be copied from but not cut — a cut would clear
+        // the source cells on the next paste. Fall back to a plain copy so the
+        // clipboard still works without the destructive `is_cut` flag (#24).
+        self.snapshot_clipboard(!self.data.is_read_only());
     }
 
     /// Paste the clipboard at the current selection's top-left. With multi-range
@@ -1296,7 +1315,10 @@ impl TableRenderer {
         if cb.is_cut {
             for ri in cb.r0..=cb.r1 {
                 for ci in cb.c0..=cb.c1 {
-                    self.data.delete_cell(ri, ci);
+                    // Don't clear locked source cells (issue #24).
+                    if self.data.is_cell_editable(ri, ci) {
+                        self.data.delete_cell(ri, ci);
+                    }
                 }
             }
         } else {
@@ -1322,12 +1344,18 @@ impl TableRenderer {
     }
 
     pub fn insert_row_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (r0, _, _, _) = self.selection_bounds();
         self.data.insert_row(r0, 1);
     }
 
     pub fn delete_rows_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (r0, _, r1, _) = self.selection_bounds();
         for _ in r0..=r1 {
@@ -1336,12 +1364,18 @@ impl TableRenderer {
     }
 
     pub fn insert_col_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (_, c0, _, _) = self.selection_bounds();
         self.data.insert_col(c0, 1);
     }
 
     pub fn delete_cols_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (_, c0, _, c1) = self.selection_bounds();
         for _ in c0..=c1 {
@@ -1369,6 +1403,9 @@ impl TableRenderer {
 
     /// Set or clear the note on the active cell (selection top-left), with undo.
     pub fn set_selection_note(&mut self, note: Option<String>) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (r0, c0, _, _) = self.selection_bounds();
         self.data.set_note(r0, c0, note);
@@ -1387,6 +1424,9 @@ impl TableRenderer {
     /// Set or clear the hyperlink on the active cell, with undo. A raw target is
     /// normalized via [`crate::core::link::normalize_link`] (blank clears it).
     pub fn set_selection_link(&mut self, link: Option<String>) {
+        if self.data.is_read_only() {
+            return;
+        }
         self.snapshot();
         let (r0, c0, _, _) = self.selection_bounds();
         let normalized = link.and_then(|s| crate::core::link::normalize_link(&s));
@@ -1469,6 +1509,10 @@ impl TableRenderer {
         let Some((sr0, sc0, sr1, sc1)) = self.fill_source.take() else {
             return;
         };
+        // Read-only sheets reject fill (issue #24); fill_source already cleared.
+        if self.data.is_read_only() {
+            return;
+        }
         let (_, _, tr1, tc1) = self.selection_bounds();
         let down = tr1 as isize - sr1 as isize;
         let right = tc1 as isize - sc1 as isize;
@@ -1488,6 +1532,9 @@ impl TableRenderer {
                 let slen = source.len();
                 for (i, text) in filled.iter().enumerate() {
                     let tr = sr1 + 1 + i;
+                    if !self.data.is_cell_editable(tr, c) {
+                        continue; // skip locked target cells (issue #24)
+                    }
                     self.data.set_cell_text(tr, c, text);
                     // Fill replaces the target's format with the source cell's.
                     self.data.get_cell_or_new(tr, c).style = styles[i % slen];
@@ -1505,6 +1552,9 @@ impl TableRenderer {
                 let slen = source.len();
                 for (i, text) in filled.iter().enumerate() {
                     let tc = sc1 + 1 + i;
+                    if !self.data.is_cell_editable(r, tc) {
+                        continue; // skip locked target cells (issue #24)
+                    }
                     self.data.set_cell_text(r, tc, text);
                     // Fill replaces the target's format with the source cell's.
                     self.data.get_cell_or_new(r, tc).style = styles[i % slen];
