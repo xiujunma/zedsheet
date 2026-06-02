@@ -2551,19 +2551,31 @@ fn wire_events(
             // selection. The glyph sits in the rightmost ~14px of the cell.
             // Compute hit-test details in a single borrow scope to avoid
             // overlapping immutable borrows on the renderer's RefCell.
+            // NOTE: this is a `let = { ... }` block expression, so a bare
+            // `return` here would exit the whole mousedown closure (and skip
+            // cell selection below). Every non-glyph path must yield `None`.
             let glyph_hit: Option<(usize, usize, f64, f64)> = {
                 let r = renderer.borrow();
-                let Some((ri, ci)) = r.cell_at(x, y) else { return; };
-                let (origin_ri, origin_ci) = r.merge_origin(ri, ci);
-                if !r.cell_has_list_validator(origin_ri, origin_ci) {
-                    return;
+                match r.cell_at(x, y) {
+                    Some((ri, ci)) => {
+                        let (origin_ri, origin_ci) = r.merge_origin(ri, ci);
+                        if r.cell_has_list_validator(origin_ri, origin_ci) {
+                            let rect = r.cell_screen_rect(origin_ri, origin_ci);
+                            let in_glyph = x >= rect.x + rect.width - 17.0
+                                && x <= rect.x + rect.width
+                                && y >= rect.y
+                                && y <= rect.y + rect.height;
+                            if in_glyph {
+                                Some((origin_ri, origin_ci, rect.x, rect.y))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
                 }
-                let rect = r.cell_screen_rect(origin_ri, origin_ci);
-                let in_glyph = x >= rect.x + rect.width - 17.0
-                    && x <= rect.x + rect.width
-                    && y >= rect.y && y <= rect.y + rect.height;
-                if !in_glyph { return; }
-                Some((origin_ri, origin_ci, rect.x, rect.y))
             };
             if let Some((origin_ri, origin_ci, _rx, _ry)) = glyph_hit {
                 // Select the cell and open the popover. We defer the
