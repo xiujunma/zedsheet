@@ -1410,6 +1410,19 @@ impl TableRenderer {
         }
     }
 
+    /// Toggle the per-cell lock (editable flag) on the active cell. Snapshots
+    /// first so the lock change is itself undoable — otherwise undoing an
+    /// unrelated earlier edit would silently restore the old lock state (#24).
+    pub fn toggle_selection_editable(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, c0, _, _) = self.selection_bounds();
+        let was = self.data.get_cell(r0, c0).map(|c| c.editable).unwrap_or(true);
+        self.data.set_cell_editable(r0, c0, !was);
+    }
+
     pub fn cell_text_at(&self, ri: usize, ci: usize) -> String {
         self.data.get_cell_text(ri, ci)
     }

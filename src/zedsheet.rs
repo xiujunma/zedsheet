@@ -1514,6 +1514,8 @@ fn context_menu_html() -> String {
         item("remove-link", "Remove link"),
         divider.clone(),
         item("clear", "Clear contents"),
+        // Issue #24: per-cell lock (enforced when the sheet is read-only/protected)
+        item("editable", "Lock / unlock cell"),
         // Issue #9: data validation
         item("validation", "Data Validation…"),
         // Text alignment helpers (issue #25). The "set_rotation" /
@@ -1638,11 +1640,7 @@ fn wire_context_menu(
                     // Works regardless of the sheet-wide read-only mode so
                     // a user can mark cells for later protection, but the
                     // toggle itself is a no-op in read-only mode.
-                    "editable" if !read_only => {
-                        let (sri, sci) = (r.selector.ri, r.selector.ci);
-                        let was_editable = r.data.get_cell(sri, sci).map(|c| c.editable).unwrap_or(true);
-                        r.data.set_cell_editable(sri, sci, !was_editable);
-                    }
+                    "editable" if !read_only => r.toggle_selection_editable(),
                     // Text alignment helpers (issue #25). Style changes are
                     // independent of the sheet's read-only mode — they're
                     // presentation, not data, so they apply even on a
