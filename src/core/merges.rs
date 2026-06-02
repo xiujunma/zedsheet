@@ -1,4 +1,5 @@
 use crate::core::cell_range::CellRange;
+use crate::formula::parser::looks_like_cell_ref;
 use crate::renderer::alphabets::exp2xy;
 
 #[derive(Debug, Clone)]
@@ -129,16 +130,51 @@ impl CellRange {
         // `data_proxy` / `alphabets`). The previous local `parse_cell_ref`
         // returned 1-indexed columns which made `from_str("A1")` produce
         // `(1, 0)` instead of `(0, 0)` and broke every `includes` call.
+        // Validate each part is a real cell ref BEFORE calling exp2xy, which
+        // `.unwrap()`s on its `parse::<usize>()` and would otherwise panic (and
+        // abort the WASM module) on malformed input like `"A"`, `":"` or `""`.
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() == 2 {
-            let (sci, sri) = exp2xy(parts[0].trim());
-            let (eci, eri) = exp2xy(parts[1].trim());
+            let (a, b) = (parts[0].trim(), parts[1].trim());
+            if !looks_like_cell_ref(a) || !looks_like_cell_ref(b) {
+                return Err(());
+            }
+            let (sci, sri) = exp2xy(a);
+            let (eci, eri) = exp2xy(b);
             Ok(CellRange::new(sri, sci, eri, eci))
         } else if parts.len() == 1 {
-            let (ci, ri) = exp2xy(parts[0].trim());
+            let a = parts[0].trim();
+            if !looks_like_cell_ref(a) {
+                return Err(());
+            }
+            let (ci, ri) = exp2xy(a);
             Ok(CellRange::new(ri, ci, ri, ci))
         } else {
             Err(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_parses_valid_refs() {
+        assert!(CellRange::from_str("A1").is_ok());
+        assert!(CellRange::from_str("A1:B2").is_ok());
+        assert!(CellRange::from_str("AA10:BC99").is_ok());
+    }
+
+    #[test]
+    fn from_str_rejects_malformed_input_without_panicking() {
+        // These previously reached exp2xy's `.parse().unwrap()` and panicked
+        // (aborting the WASM module) when typed into the DV "Apply to" field.
+        assert!(CellRange::from_str("A").is_err(), "no row digit");
+        assert!(CellRange::from_str("1").is_err(), "no column letter");
+        assert!(CellRange::from_str("").is_err(), "empty");
+        assert!(CellRange::from_str(":").is_err(), "empty parts");
+        assert!(CellRange::from_str("A1:").is_err(), "empty end");
+        assert!(CellRange::from_str(":B2").is_err(), "empty start");
     }
 }

@@ -60,15 +60,18 @@ impl Validator {
         }
 
         if !self.operator.is_empty() {
-            // Parse the value(s) to f64. Post-fix: non-numeric input or
-            // non-numeric configuration now fails closed instead of
-            // silently coercing to 0.0 (which caused `eq 5` against
-            // `"abc"` to be a false positive).
-            let parsed_v = v.trim().parse::<f64>().ok();
-            if parsed_v.is_none() {
-                return (false, "Must be a number".to_string());
-            }
-            let v1 = parsed_v.unwrap();
+            // The numeric operators below compare a single f64. For a
+            // `text-length` rule that f64 is the character COUNT of the input;
+            // for the numeric types it's the parsed value (non-numeric input
+            // fails closed rather than silently coercing to 0.0).
+            let v1 = if self.type_ == "text-length" {
+                v.chars().count() as f64
+            } else {
+                match v.trim().parse::<f64>().ok() {
+                    Some(n) => n,
+                    None => return (false, "Must be a number".to_string()),
+                }
+            };
 
             match self.operator.as_str() {
                 "be" => {
@@ -560,6 +563,17 @@ mod tests {
             let v = Validator::new("number", false, "1,10", "be");
             let (ok, _) = v.validate("not a number");
             assert!(!ok);
+        }
+
+        // --- text-length: operators measure the length, not the value ---
+
+        #[test]
+        fn text_length_measures_length_not_numeric_value() {
+            let v = Validator::new("text-length", false, "5", "lte");
+            assert!(v.validate("abc").0, "len 3 ≤ 5 should pass");
+            assert!(v.validate("12345").0, "len 5 ≤ 5 (measured, not parsed as 12345)");
+            assert!(!v.validate("abcdefg").0, "len 7 > 5 should fail");
+            assert!(!v.validate("123456").0, "len 6 > 5 (length, not numeric value)");
         }
 
         // --- Validation::includes / add_ref / remove_ref ---
