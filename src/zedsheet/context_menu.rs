@@ -1,0 +1,196 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+use gloo::utils::window;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
+use web_sys::MouseEvent;
+use crate::component::element::Element;
+use crate::config::CSS_PREFIX;
+#[allow(unused_imports)]
+use super::*;
+
+pub(crate) fn context_menu_html() -> String {
+    let item = |cmd: &str, label: &str| {
+        format!("<div class=\"{p}-item\" data-cmenu=\"{cmd}\">{label}</div>", p = CSS_PREFIX, cmd = cmd, label = label)
+    };
+    let divider = format!("<div class=\"{p}-item divider\"></div>", p = CSS_PREFIX);
+    [
+        item("copy", "Copy"),
+        item("cut", "Cut"),
+        item("paste", "Paste"),
+        divider.clone(),
+        item("insert-row", "Insert row"),
+        item("insert-col", "Insert column"),
+        item("delete-row", "Delete row"),
+        item("delete-col", "Delete column"),
+        divider.clone(),
+        item("note", "Insert / edit note"),
+        item("delete-note", "Delete note"),
+        divider.clone(),
+        item("link", "Insert / edit link"),
+        item("remove-link", "Remove link"),
+        divider.clone(),
+        item("clear", "Clear contents"),
+        // Issue #24: per-cell lock (enforced when the sheet is read-only/protected)
+        item("editable", "Lock / unlock cell"),
+        // Issue #9: data validation
+        item("validation", "Data Validation…"),
+        // Text alignment helpers (issue #25). The "set_rotation" /
+        // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
+        // `wire_context_menu`.
+        divider.clone(),
+        item("rotate-0", "Rotate 0°"),
+        item("rotate-45", "Rotate 45°"),
+        item("rotate-90", "Rotate 90°"),
+        item("rotate--45", "Rotate -45°"),
+        item("shrink-toggle", "Shrink to fit"),
+        item("indent-inc", "Increase indent"),
+        item("indent-dec", "Decrease indent"),
+    ]
+    .join("")
+}
+
+/// Wire the right-click context menu: open on canvas contextmenu, run the
+/// chosen command, and close on outside click.
+pub(crate) fn wire_context_menu(
+    canvas_el: &mut Element,
+    menu_node: web_sys::Element,
+    renderer: &SharedRenderer,
+    dv_open: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+) {
+    // Open on right-click, after selecting the cell under the cursor.
+    {
+        let renderer = renderer.clone();
+        let menu = menu_node.clone();
+        canvas_el.add_event_listener("contextmenu", move |event: web_sys::Event| {
+            event.prevent_default();
+            let me: MouseEvent = event.dyn_into().unwrap();
+            let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
+            let hit = renderer.borrow().cell_at(x, y);
+            if let Some((ri, ci)) = hit {
+                let mut r = renderer.borrow_mut();
+                // Issue #19: only collapse when the right-click is outside
+                // every selected range (Excel behavior).
+                if !r.contains_selected(ri, ci) {
+                    r.clear_multi_range();
+                    r.select_cell(ri, ci);
+                    r.render();
+                }
+            }
+            let style = menu.unchecked_ref::<web_sys::HtmlElement>().style();
+            let _ = style.set_property("display", "block");
+            let _ = style.set_property("left", &format!("{}px", x));
+            let _ = style.set_property("top", &format!("{}px", y));
+        });
+    }
+
+    // Run a command on item click, then hide.
+    {
+        let renderer = renderer.clone();
+        let menu = menu_node.clone();
+        let menu_for_click = menu_node.clone();
+        let mut menu_el: Element = menu_node.clone().into();
+        menu_el.add_event_listener("click", move |event: web_sys::Event| {
+            let Some(target) = event.target() else { return };
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+            let cmd = el
+                .get_attribute("data-cmenu")
+                .or_else(|| el.closest("[data-cmenu]").ok().flatten().and_then(|e| e.get_attribute("data-cmenu")));
+            let Some(cmd) = cmd else { return };
+
+            // Editing a note needs a prompt outside the renderer borrow.
+            if cmd == "note" {
+                let current = renderer.borrow().selection_note().unwrap_or_default();
+                if let Ok(Some(text)) =
+                    window().prompt_with_message_and_default("Cell note:", &current)
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.set_selection_note(if text.trim().is_empty() { None } else { Some(text) });
+                    r.render();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // Editing a hyperlink also needs a prompt outside the renderer borrow.
+            if cmd == "link" {
+                let current = renderer.borrow().selection_link().unwrap_or_default();
+                if let Ok(Some(text)) =
+                    window().prompt_with_message_and_default("Link URL:", &current)
+                {
+                    let mut r = renderer.borrow_mut();
+                    // set_selection_link normalizes the URL; blank input clears it.
+                    r.set_selection_link(if text.trim().is_empty() { None } else { Some(text) });
+                    r.render();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // Data Validation modal (issue #9): open before the borrow_mut
+            // match below so the open handle can take its own borrow.
+            if cmd == "validation" {
+                if let Some(open) = dv_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            {
+                let mut r = renderer.borrow_mut();
+                // Read-only mode blocks every *write* menu action. Copy is
+                // read-only on the data, so it stays available (issue #24).
+                let read_only = r.data.is_read_only();
+                match cmd.as_str() {
+                    "copy" => { if !r.copy_selection() { noncontiguous_copy_toast(); } }
+                    "cut" if !read_only => { if !r.cut_selection() { noncontiguous_copy_toast(); } }
+                    "paste" if !read_only => r.paste(),
+                    "insert-row" if !read_only => r.insert_row_at_selection(),
+                    "insert-col" if !read_only => r.insert_col_at_selection(),
+                    "delete-row" if !read_only => r.delete_rows_at_selection(),
+                    "delete-col" if !read_only => r.delete_cols_at_selection(),
+                    "delete-note" if !read_only => r.set_selection_note(None),
+                    "remove-link" if !read_only => r.set_selection_link(None),
+                    "clear" if !read_only => r.clear_selection_content(),
+                    // Toggle the per-cell `editable` flag on the active cell.
+                    // Works regardless of the sheet-wide read-only mode so
+                    // a user can mark cells for later protection, but the
+                    // toggle itself is a no-op in read-only mode.
+                    "editable" if !read_only => r.toggle_selection_editable(),
+                    // Text alignment helpers (issue #25). Style changes are
+                    // independent of the sheet's read-only mode — they're
+                    // presentation, not data, so they apply even on a
+                    // locked sheet. The `set_sheets_registry` clone we
+                    // update is the renderer's, so the next render uses
+                    // the new rotation/indent/shrink_to_fit immediately.
+                    "rotate-0" if !read_only => r.set_rotation(0.0),
+                    "rotate-45" if !read_only => r.set_rotation(45.0),
+                    "rotate-90" if !read_only => r.set_rotation(90.0),
+                    "rotate--45" if !read_only => r.set_rotation(-45.0),
+                    "shrink-toggle" if !read_only => r.toggle_shrink_to_fit(),
+                    "indent-inc" if !read_only => r.bump_indent(10),
+                    "indent-dec" if !read_only => r.bump_indent(-10),
+                    _ => {}
+                }
+                r.render();
+            }
+            let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+        });
+        // Hide when clicking outside the menu.
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+            if let Some(target) = event.target() {
+                if let Ok(node) = target.dyn_into::<web_sys::Node>() {
+                    if menu.contains(Some(&node)) {
+                        return;
+                    }
+                }
+            }
+            let _ = menu.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+        });
+        window()
+            .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())
+            .unwrap();
+        cb.forget();
+    }
+}
