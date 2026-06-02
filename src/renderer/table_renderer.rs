@@ -1261,7 +1261,13 @@ impl TableRenderer {
         self.data.merges.add(CellRange::new(r0, c0, r1, c1));
     }
 
-    fn snapshot_clipboard(&mut self, is_cut: bool) {
+    /// Capture the selection into the clipboard. Returns `false` (without
+    /// touching the clipboard) for a non-contiguous (Ctrl+click) selection,
+    /// which can't be represented as one rectangular block (issue #19/H6).
+    fn snapshot_clipboard(&mut self, is_cut: bool) -> bool {
+        if self.multi_range.is_active() {
+            return false;
+        }
         let (r0, c0, r1, c1) = self.selection_bounds();
         let mut cells = Vec::new();
         for ri in r0..=r1 {
@@ -1272,17 +1278,20 @@ impl TableRenderer {
             cells.push(row);
         }
         self.clipboard = Some(ClipboardData { r0, c0, r1, c1, cells, is_cut });
+        true
     }
 
-    pub fn copy_selection(&mut self) {
-        self.snapshot_clipboard(false);
+    /// Copy the selection; `false` means the selection was non-contiguous and
+    /// nothing was copied (the caller should tell the user).
+    pub fn copy_selection(&mut self) -> bool {
+        self.snapshot_clipboard(false)
     }
 
-    pub fn cut_selection(&mut self) {
+    pub fn cut_selection(&mut self) -> bool {
         // A read-only sheet can be copied from but not cut — a cut would clear
         // the source cells on the next paste. Fall back to a plain copy so the
         // clipboard still works without the destructive `is_cut` flag (#24).
-        self.snapshot_clipboard(!self.data.is_read_only());
+        self.snapshot_clipboard(!self.data.is_read_only())
     }
 
     /// Paste the clipboard at the current selection's top-left. With multi-range

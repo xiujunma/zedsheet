@@ -985,6 +985,20 @@ fn show_toast(toast: Option<&HtmlElement>, msg: &str) {
     }
 }
 
+/// Tell the user a non-contiguous (Ctrl+click) selection can't be copied
+/// (issue #19/H6), reusing the app-level toast element.
+fn noncontiguous_copy_toast() {
+    let toast = document()
+        .query_selector(".zs-dv-toast")
+        .ok()
+        .flatten()
+        .and_then(|e| e.dyn_into::<HtmlElement>().ok());
+    show_toast(
+        toast.as_ref(),
+        "Can't copy a non-contiguous selection — select a single range.",
+    );
+}
+
 /// Open the list-validity popover (issue #9) anchored at `(x, y)` showing
 /// the allowed values for the cell. The popover element is mutated in
 /// place; its `data-cell` attribute records the (ri, ci) for the click
@@ -1610,8 +1624,8 @@ fn wire_context_menu(
                 // read-only on the data, so it stays available (issue #24).
                 let read_only = r.data.is_read_only();
                 match cmd.as_str() {
-                    "copy" => r.copy_selection(),
-                    "cut" if !read_only => r.cut_selection(),
+                    "copy" => { if !r.copy_selection() { noncontiguous_copy_toast(); } }
+                    "cut" if !read_only => { if !r.cut_selection() { noncontiguous_copy_toast(); } }
                     "paste" if !read_only => r.paste(),
                     "insert-row" if !read_only => r.insert_row_at_selection(),
                     "insert-col" if !read_only => r.insert_col_at_selection(),
@@ -2799,8 +2813,8 @@ fn wire_events(
                 {
                     let mut r = renderer.borrow_mut();
                     match key.to_lowercase().as_str() {
-                        "c" => r.copy_selection(),
-                        "x" => r.cut_selection(),
+                        "c" => { if !r.copy_selection() { noncontiguous_copy_toast(); } }
+                        "x" => { if !r.cut_selection() { noncontiguous_copy_toast(); } }
                         "v" => r.paste(),
                         "b" => r.toggle_bold(),
                         "i" => r.toggle_italic(),
