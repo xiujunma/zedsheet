@@ -1,9 +1,25 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::OnceLock;
 use regex::Regex;
 use crate::core::cell_range::CellRange;
 use crate::renderer::alphabets::xy2expr;
 use serde::{Serialize, Deserialize};
+
+/// Phone validator pattern, compiled once.
+fn phone_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[1-9]\d{10}$").unwrap())
+}
+
+/// Email validator pattern, compiled once. A deliberately simple
+/// `local@domain.tld` shape with NO nested quantifiers — the previous pattern
+/// (`\w+([-.]\w+)*\.\w+...`) was vulnerable to catastrophic backtracking
+/// (ReDoS) on the main browser thread.
+fn email_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[^@\s]+@[^@\s]+\.[^@\s]+$").unwrap())
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct Validator {
@@ -31,13 +47,10 @@ impl Validator {
             return (true, String::new());
         }
 
-        let phone_regex = Regex::new(r"^[1-9]\d{10}$").unwrap();
-        let email_regex = Regex::new(r"^\w+([-+.]\w+)*@\w+([-.]\w+)*\.\w+([-.]\w+)*$").unwrap();
-
-        if self.type_ == "phone" && !phone_regex.is_match(v) {
+        if self.type_ == "phone" && !phone_re().is_match(v) {
             return (false, "Invalid phone format".to_string());
         }
-        if self.type_ == "email" && !email_regex.is_match(v) {
+        if self.type_ == "email" && !email_re().is_match(v) {
             return (false, "Invalid email format".to_string());
         }
 
@@ -491,6 +504,16 @@ mod tests {
         fn validate_email_invalid() {
             let v = Validator::new("email", false, "", "");
             assert_eq!(v.validate("not-an-email"), (false, "Invalid email format".to_string()));
+        }
+
+        #[test]
+        fn validate_email_redos_input_terminates() {
+            // `"a."` repeated with no `@` triggered catastrophic backtracking in
+            // the old nested-quantifier pattern (this test would hang). The
+            // linear pattern rejects it instantly.
+            let v = Validator::new("email", false, "", "");
+            let evil = format!("{}!", "a.".repeat(30));
+            assert_eq!(v.validate(&evil).0, false);
         }
 
         // --- numeric operators ---
