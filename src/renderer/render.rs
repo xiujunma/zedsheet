@@ -270,7 +270,10 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             draw_rect = Rect { x: rect.x, y: rect.y, width: w, height: h };
         }
 
-        let style = renderer.data.get_cell_style(row, col);
+        let mut style = renderer.data.get_cell_style(row, col);
+        // Conditional formatting (issue #11): a matching rule overrides the
+        // fill, text color, and bold before anything is drawn.
+        renderer.data.apply_cond_format(row, col, &mut style);
 
         // Background fill (only when non-white, to preserve gridlines elsewhere).
         if let Some(bg) = &style.bgcolor {

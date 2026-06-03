@@ -24,6 +24,7 @@ mod formula_bar;
 mod toolbar;
 mod context_menu;
 mod data_validation;
+mod cond_format_modal;
 mod filter_menu;
 mod find_replace;
 mod bottom_bar;
@@ -34,6 +35,7 @@ pub(crate) use formula_bar::*;
 pub(crate) use toolbar::*;
 pub(crate) use context_menu::*;
 pub(crate) use data_validation::*;
+pub(crate) use cond_format_modal::*;
 pub(crate) use filter_menu::*;
 pub(crate) use find_replace::*;
 pub(crate) use bottom_bar::*;
@@ -62,6 +64,8 @@ pub(crate) type Sheets = Rc<RefCell<Vec<DataProxy>>>;
 pub(crate) type ActiveSheet = Rc<RefCell<usize>>;
 /// Refreshes the formula bar + toolbar state from the active cell.
 pub(crate) type SyncFn = Rc<dyn Fn()>;
+/// Open-a-dialog handle, populated once its modal is mounted (issues #9, #11).
+pub(crate) type OpenHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 /// Serializes the whole workbook (all sheets) to a JSON string (issue #20).
 pub(crate) type GetDataFn = Rc<dyn Fn() -> String>;
 /// Replaces the whole workbook from a JSON string and re-renders (issue #20).
@@ -426,8 +430,9 @@ impl ZedSheet {
         // Handle to open the Data Validation modal — populated after the
         // modal is mounted (issue #9). The context menu's "validation"
         // arm calls this when the user picks the menu item.
-        let dv_open: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
-            Rc::new(RefCell::new(None));
+        let dv_open: OpenHandle = Rc::new(RefCell::new(None));
+        // Same pattern for the Conditional Formatting dialog (issue #11).
+        let cf_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -554,7 +559,7 @@ impl ZedSheet {
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone());
+            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone(), cf_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
             wire_formula_bar(fb, &renderer, &sync, fx_menu_node, toast_node);
@@ -619,6 +624,26 @@ impl ZedSheet {
             let handle_for_open = handle.clone();
             *dv_open.borrow_mut() = Some(Rc::new(move || {
                 open_dv_modal(&modal_for_open, &renderer_for_open, &handle_for_open);
+            }));
+        }
+
+        // Conditional Formatting modal (issue #11): mounted hidden at root,
+        // opened by the right-click context menu via `cf_open`.
+        let mut cf_modal = h("div", Some("zs-cf-modal-root"));
+        cf_modal.set_inner_html(cond_format_modal_html());
+        let cf_modal_node: Option<web_sys::Element> =
+            cf_modal.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut cf_modal);
+        if let Some(ref node) = cf_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-cf-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_cond_format_modal(inner.clone(), &renderer, &sync);
+            let renderer_for_open = renderer.clone();
+            *cf_open.borrow_mut() = Some(Rc::new(move || {
+                open_cf_modal(&inner, &renderer_for_open);
             }));
         }
 

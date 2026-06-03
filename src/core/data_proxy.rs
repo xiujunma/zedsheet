@@ -13,6 +13,7 @@ use crate::core::merges::Merges;
 use crate::core::state::{Selector, Scroll, Clipboard, History};
 use crate::core::validation::{Validation, Validations};
 use crate::core::auto_filter::AutoFilter;
+use crate::core::cond_format::{lerp_hex, CondRule};
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
 /// referenced by every `DataProxy` so cross-sheet formulas can resolve
@@ -106,6 +107,8 @@ pub struct DataProxy {
     pub history: History,
     pub clipboard: Clipboard,
     pub auto_filter: AutoFilter,
+    /// Conditional-formatting rules, evaluated at render time (issue #11).
+    pub cond_formats: Vec<CondRule>,
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
     /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
     pub named_ranges: HashMap<String, String>,
@@ -143,6 +146,7 @@ impl Default for DataProxy {
             history: History::new(),
             clipboard: Clipboard::new(),
             auto_filter: AutoFilter::new(),
+            cond_formats: Vec::new(),
             named_ranges: HashMap::new(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
@@ -261,25 +265,81 @@ impl DataProxy {
     /// The text shown for a cell: formulas (text starting with `=`) are
     /// evaluated; everything else is returned verbatim.
     pub fn cell_display_value(&self, ri: usize, ci: usize) -> String {
+        let raw = self.cell_raw_value(ri, ci);
+        // Apply the cell's display format (number/currency/percent/…).
+        let fmt = self.get_cell_style(ri, ci).format;
+        crate::core::format::format_value(&raw, &fmt)
+    }
+
+    /// The cell's computed value BEFORE display formatting — formulas
+    /// evaluated, but no currency/percent decoration. Conditional-format
+    /// rules match against this so `> 150` works on a `$`-formatted column
+    /// (issue #11).
+    pub fn cell_raw_value(&self, ri: usize, ci: usize) -> String {
         let text = self.get_cell_text(ri, ci);
         // A cell that literally holds an error value displays it verbatim.
         if EvalErr::from_literal(&text).is_some() {
             return text;
         }
-        let raw = if let Some(expr) = text.strip_prefix('=') {
+        if let Some(expr) = text.strip_prefix('=') {
             let mut visited: Visited = HashSet::new();
             visited.insert((self.name.clone(), ri, ci));
             match self.eval_expr(expr, &mut visited) {
                 Ok(Value::Number(v)) => format_number(v),
                 Ok(Value::Text(s)) => s,
-                Err(e) => return e.code().to_string(),
+                Err(e) => e.code().to_string(),
             }
         } else {
             text
-        };
-        // Apply the cell's display format (number/currency/percent/…).
-        let fmt = self.get_cell_style(ri, ci).format;
-        crate::core::format::format_value(&raw, &fmt)
+        }
+    }
+
+    /// Overlay the first matching conditional-format rule onto `style`
+    /// (issue #11). Comparison/contains rules apply their fixed overrides;
+    /// a `scale2` rule interpolates the fill between its two colors across
+    /// the range's numeric values.
+    pub fn apply_cond_format(&self, ri: usize, ci: usize, style: &mut Style) {
+        for rule in &self.cond_formats {
+            let Some((r0, c0, r1, c1)) = rule.bounds() else { continue };
+            if ri < r0 || ri > r1 || ci < c0 || ci > c1 {
+                continue;
+            }
+            if rule.op == "scale2" {
+                let Ok(n) = self.cell_raw_value(ri, ci).trim().parse::<f64>() else {
+                    continue;
+                };
+                let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+                for r in r0..=r1 {
+                    for c in c0..=c1 {
+                        if let Ok(x) = self.cell_raw_value(r, c).trim().parse::<f64>() {
+                            min = min.min(x);
+                            max = max.max(x);
+                        }
+                    }
+                }
+                if !min.is_finite() || !max.is_finite() {
+                    continue;
+                }
+                let t = if max > min { (n - min) / (max - min) } else { 0.5 };
+                if let Some(bg) = lerp_hex(&rule.v1, &rule.v2, t) {
+                    style.bgcolor = Some(bg);
+                    return;
+                }
+                continue;
+            }
+            if rule.matches_value(&self.cell_raw_value(ri, ci)) {
+                if let Some(bg) = &rule.bgcolor {
+                    style.bgcolor = Some(bg.clone());
+                }
+                if let Some(c) = &rule.color {
+                    style.color = c.clone();
+                }
+                if rule.bold {
+                    style.bold = true;
+                }
+                return; // first matching rule wins
+            }
+        }
     }
 
     /// Resolve a cell to a formula value (issue #2). Error values propagate;
@@ -1186,6 +1246,7 @@ impl DataProxy {
             "validations": self.validations.get_data(),
             "autofilter": self.auto_filter.get_data(),
             "namedRanges": serde_json::to_value(&self.named_ranges).unwrap_or_default(),
+            "condfmts": serde_json::to_value(&self.cond_formats).unwrap_or_default(),
         })
     }
 
@@ -1233,6 +1294,12 @@ impl DataProxy {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.named_ranges = nr;
+        }
+        if let Some(cf) = data
+            .get("condfmts")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.cond_formats = cf;
         }
     }
 
@@ -2392,6 +2459,109 @@ mod tests {
         assert_eq!(cmp_cell_values("5", "", false), Ordering::Less);
         assert_eq!(cmp_cell_values("10", "9", true), Ordering::Greater); // numeric, not lexicographic
         assert_eq!(cmp_cell_values("Apple", "banana", true), Ordering::Less); // case-insensitive
+    }
+
+    // --- Conditional formatting (issue #11) ---
+
+    fn red_rule(range: &str, op: &str, v1: &str) -> CondRule {
+        CondRule {
+            range: range.into(),
+            op: op.into(),
+            v1: v1.into(),
+            v2: String::new(),
+            bgcolor: Some("#ffc7ce".into()),
+            color: Some("#9c0006".into()),
+            bold: true,
+        }
+    }
+
+    #[test]
+    fn cond_format_overrides_style_for_matching_cells_only() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 1, "200");
+        d.set_cell_text(2, 1, "100");
+        d.set_cell_text(3, 3, "999"); // outside the rule range
+        d.cond_formats.push(red_rule("B2:B3", "gt", "150"));
+
+        let mut s = d.get_cell_style(1, 1);
+        d.apply_cond_format(1, 1, &mut s);
+        assert_eq!(s.bgcolor.as_deref(), Some("#ffc7ce"));
+        assert_eq!(s.color, "#9c0006");
+        assert!(s.bold);
+
+        let mut s = d.get_cell_style(2, 1);
+        d.apply_cond_format(2, 1, &mut s);
+        assert_ne!(s.bgcolor.as_deref(), Some("#ffc7ce"), "100 doesn't match > 150");
+
+        let mut s = d.get_cell_style(3, 3);
+        d.apply_cond_format(3, 3, &mut s);
+        assert_ne!(s.bgcolor.as_deref(), Some("#ffc7ce"), "outside the range");
+    }
+
+    #[test]
+    fn cond_format_matches_raw_value_not_formatted_display() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "1234.5");
+        let mut usd = Style::default();
+        usd.format = "usd".to_string();
+        let idx = d.add_style(usd);
+        d.set_cell_style(0, 0, idx);
+        assert_eq!(d.cell_display_value(0, 0), "$1,234.50"); // formatted
+        d.cond_formats.push(red_rule("A1", "gt", "1000"));
+        let mut s = d.get_cell_style(0, 0);
+        d.apply_cond_format(0, 0, &mut s);
+        assert_eq!(s.bgcolor.as_deref(), Some("#ffc7ce"), "rule sees the raw 1234.5");
+    }
+
+    #[test]
+    fn cond_format_first_matching_rule_wins_and_formulas_count() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=100+100"); // evaluates to 200
+        d.cond_formats.push(red_rule("A1", "gt", "150"));
+        let mut green = red_rule("A1", "gt", "10");
+        green.bgcolor = Some("#c6efce".into());
+        d.cond_formats.push(green);
+
+        let mut s = d.get_cell_style(0, 0);
+        d.apply_cond_format(0, 0, &mut s);
+        assert_eq!(s.bgcolor.as_deref(), Some("#ffc7ce"), "first rule wins");
+    }
+
+    #[test]
+    fn cond_format_scale2_interpolates_fill() {
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "0"), (1, "50"), (2, "100")] {
+            d.set_cell_text(r, 0, v);
+        }
+        d.cond_formats.push(CondRule {
+            range: "A1:A3".into(),
+            op: "scale2".into(),
+            v1: "#000000".into(),
+            v2: "#ffffff".into(),
+            bgcolor: None,
+            color: None,
+            bold: false,
+        });
+        let fill = |r: usize| {
+            let mut s = d.get_cell_style(r, 0);
+            d.apply_cond_format(r, 0, &mut s);
+            s.bgcolor
+        };
+        assert_eq!(fill(0).as_deref(), Some("#000000")); // min
+        assert_eq!(fill(1).as_deref(), Some("#808080")); // midpoint
+        assert_eq!(fill(2).as_deref(), Some("#ffffff")); // max
+    }
+
+    #[test]
+    fn cond_format_rules_survive_serialization_roundtrip() {
+        let mut src = DataProxy::new("t");
+        src.cond_formats.push(red_rule("B2:B10", "between", "10"));
+        let mut dst = DataProxy::new("t");
+        dst.set_data(src.get_data());
+        assert_eq!(dst.cond_formats.len(), 1);
+        assert_eq!(dst.cond_formats[0].range, "B2:B10");
+        assert_eq!(dst.cond_formats[0].op, "between");
+        assert_eq!(dst.cond_formats[0].bgcolor.as_deref(), Some("#ffc7ce"));
     }
 
     #[test]

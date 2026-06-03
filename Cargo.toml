@@ -43,5 +43,6 @@ features = [
   "CssStyleDeclaration",
   "DomStringMap",
   "HtmlInputElement",
+  "HtmlSelectElement",
   "Storage"
 ]

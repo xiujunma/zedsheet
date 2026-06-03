@@ -44,6 +44,8 @@ pub(crate) fn context_menu_html() -> String {
         item("editable", "Lock / unlock cell"),
         // Issue #9: data validation
         item("validation", "Data Validation…"),
+        // Issue #11: conditional formatting rules dialog.
+        item("condfmt", "Conditional formatting…"),
         // Text alignment helpers (issue #25). The "set_rotation" /
         // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
         // `wire_context_menu`.
@@ -66,7 +68,8 @@ pub(crate) fn wire_context_menu(
     menu_node: web_sys::Element,
     renderer: &SharedRenderer,
     sync: &SyncFn,
-    dv_open: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+    dv_open: OpenHandle,
+    cf_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -133,6 +136,16 @@ pub(crate) fn wire_context_menu(
                     // set_selection_link normalizes the URL; blank input clears it.
                     r.set_selection_link(if text.trim().is_empty() { None } else { Some(text) });
                     r.render();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // Conditional Formatting dialog (issue #11): same open-handle
+            // pattern as the validation modal below.
+            if cmd == "condfmt" {
+                if let Some(open) = cf_open.borrow().as_ref() {
+                    open();
                 }
                 let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
                 return;

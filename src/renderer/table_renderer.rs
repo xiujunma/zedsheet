@@ -1070,7 +1070,7 @@ impl TableRenderer {
     }
 
     /// Normalized selection bounds (top-left .. bottom-right).
-    fn selection_bounds(&self) -> (usize, usize, usize, usize) {
+    pub(crate) fn selection_bounds(&self) -> (usize, usize, usize, usize) {
         let s = self.selector;
         (
             s.ri.min(s.eri),
@@ -1533,6 +1533,27 @@ impl TableRenderer {
             .collect();
         out.sort_by(|a, b| crate::core::data_proxy::cmp_cell_values(&a.0, &b.0, true));
         out
+    }
+
+    /// Append a conditional-formatting rule (issue #11).
+    pub fn add_cond_rule(&mut self, rule: crate::core::cond_format::CondRule) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        self.data.cond_formats.push(rule);
+    }
+
+    /// Remove the conditional-formatting rule at `idx` (issue #11).
+    pub fn remove_cond_rule(&mut self, idx: usize) {
+        if self.data.is_read_only() {
+            return;
+        }
+        if idx >= self.data.cond_formats.len() {
+            return;
+        }
+        self.snapshot();
+        self.data.cond_formats.remove(idx);
     }
 
     /// If `(x, y)` hits the dropdown glyph on an AutoFilter header cell, the
