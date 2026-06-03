@@ -3,46 +3,42 @@
 zedsheet compiles to a WebAssembly module that you load and `mount` into a DOM
 element. Below is the full path from this repo to a working React component.
 
-## 1. Build the npm package
+## 1. Install
+
+```sh
+npm install zedsheet
+```
+
+The package is self-contained:
+
+```
+zedsheet/
+├── package.json      # name: "zedsheet"
+├── zedsheet.js       # ESM: default export = init(), named exports = mount(), …
+├── zedsheet.d.ts     # TypeScript types
+├── zedsheet.css      # grid + chrome styles, toolbar icon sprite inlined
+└── zedsheet_bg.wasm
+```
+
+To build it from source instead:
 
 ```sh
 # one-time setup
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack
 
-# from the zedsheet repo root — produces ./pkg (ESM + .wasm + .d.ts)
-wasm-pack build --target web --out-dir pkg --out-name zedsheet
-```
-
-`pkg/` is a self-contained, importable package:
-
-```
-pkg/
-├── package.json      # name: "zedsheet"
-├── zedsheet.js       # ESM: default export = init(), named export = mount()
-├── zedsheet.d.ts     # TypeScript types
-└── zedsheet_bg.wasm
-```
-
-## 2. Add it to your React project
-
-Install the local package (or copy `pkg/` in and import by relative path):
-
-```sh
+# from the zedsheet repo root — produces ./pkg
+node scripts/build-npm.mjs
 npm install /absolute/path/to/zedsheet/pkg
 ```
 
-The renderer also needs two static assets from this repo:
+## 2. Import the stylesheet
 
-- **Styles** — copy `src/index.css` into your app and import it once
-  (e.g. `import "./zedsheet.css"`).
-- **Icon sprite** — copy this repo's `asset/` folder into your app's `public/`
-  so the toolbar icons resolve at `/asset/sprite.svg` (the CSS references that
-  absolute path).
+Import it once, anywhere in your app — no assets to copy (the icon sprite is
+inlined as a data URI):
 
-```sh
-cp /path/to/zedsheet/src/index.css   src/zedsheet.css
-cp -R /path/to/zedsheet/asset         public/asset
+```ts
+import "zedsheet/zedsheet.css";
 ```
 
 ## 3. The React component
@@ -57,7 +53,7 @@ after every edit).
 ## 4. Use it
 
 ```tsx
-import "./zedsheet.css";          // the copied styles
+import "zedsheet/zedsheet.css";   // grid + toolbar styles
 import ZedSheet from "./ZedSheet";
 
 export default function App() {

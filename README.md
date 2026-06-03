@@ -107,18 +107,14 @@ Then open the printed URL. The app mounts into the `#zedsheet` element in
 
 ### Using it in your own app (React, etc.)
 
-Build an importable package with `wasm-pack`, install it, and copy the two
-static assets (styles + toolbar icon sprite):
-
 ```sh
-# from the zedsheet repo root — emits ./pkg (ESM + .wasm + .d.ts)
-wasm-pack build --target web --out-dir pkg --out-name zedsheet
-
-# in your React app
-npm install /absolute/path/to/zedsheet/pkg
-cp    /path/to/zedsheet/src/index.css  src/zedsheet.css   # grid + chrome styles
-cp -R /path/to/zedsheet/asset          public/asset       # toolbar icon sprite
+npm install zedsheet
 ```
+
+The package is self-contained — ESM glue + `.wasm` + TypeScript types + a
+stylesheet with the toolbar icon sprite inlined. No assets to copy. (To build
+it from source instead: `node scripts/build-npm.mjs`, then
+`npm install /path/to/zedsheet/pkg`.)
 
 #### React example
 
@@ -179,7 +175,7 @@ export default function ZedSheet({ id = "zedsheet-root", data, onChange }: Props
 `App.tsx`:
 
 ```tsx
-import "./zedsheet.css"; // the styles copied above
+import "zedsheet/zedsheet.css"; // grid + toolbar styles (icons inlined)
 import ZedSheet from "./ZedSheet";
 
 export default function App() {
@@ -217,8 +213,8 @@ if (bytes) {
 ```
 
 **Next.js**: render it client-side only —
-`dynamic(() => import("./ZedSheet"), { ssr: false })`. Bundler notes and asset
-details live in **[docs/REACT.md](./docs/REACT.md)**.
+`dynamic(() => import("./ZedSheet"), { ssr: false })`. Bundler notes live in
+**[docs/REACT.md](./docs/REACT.md)**.
 
 > **Tip:** when verifying behavior, prefer building once and serving the static
 > `dist/` over `trunk serve` — Trunk's auto-reload re-initializes the WASM
@@ -259,6 +255,12 @@ cargo build --target wasm32-unknown-unknown
 
 # Run unit tests (native)
 cargo test
+
+# Build the publishable npm package into pkg/ (wasm-pack + CSS + manifest)
+node scripts/build-npm.mjs
+
+# Publish (maintainers)
+cd pkg && npm publish
 ```
 
 ## Status & known limitations
