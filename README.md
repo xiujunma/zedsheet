@@ -107,20 +107,118 @@ Then open the printed URL. The app mounts into the `#zedsheet` element in
 
 ### Using it in your own app (React, etc.)
 
-Build an importable package with `wasm-pack` and call the exported `mount`:
+Build an importable package with `wasm-pack`, install it, and copy the two
+static assets (styles + toolbar icon sprite):
 
 ```sh
+# from the zedsheet repo root — emits ./pkg (ESM + .wasm + .d.ts)
 wasm-pack build --target web --out-dir pkg --out-name zedsheet
+
+# in your React app
+npm install /absolute/path/to/zedsheet/pkg
+cp    /path/to/zedsheet/src/index.css  src/zedsheet.css   # grid + chrome styles
+cp -R /path/to/zedsheet/asset          public/asset       # toolbar icon sprite
 ```
 
-```js
-import init, { mount } from "zedsheet";
-await init();
-mount("#my-grid");   // mounts an interactive spreadsheet into that element
+#### React example
+
+`ZedSheet.tsx` — loads the wasm once, mounts a spreadsheet into a sized
+`<div>`, and reports edits through an `onChange` prop (same component as
+[`examples/react/ZedSheet.tsx`](./examples/react/ZedSheet.tsx)):
+
+```tsx
+import { useEffect, useRef } from "react";
+
+// Load + instantiate the .wasm once for the whole app.
+let ready: Promise<typeof import("zedsheet")> | null = null;
+function load() {
+  if (!ready) {
+    ready = import("zedsheet").then(async (mod) => {
+      await mod.default(); // init(): fetches and instantiates the .wasm
+      return mod;
+    });
+  }
+  return ready;
+}
+
+type Props = {
+  /** Container id — `#${id}` is also the selector the JS data API targets.
+   *  Give each instance its own id. (Avoid `zedsheet`: that id triggers the
+   *  standalone demo's auto-mount.) */
+  id?: string;
+  /** Seed workbook: zedsheet JSON (string, object, or array). Omit for blank. */
+  data?: unknown;
+  /** Called with the serialized workbook after every edit. */
+  onChange?: (json: string) => void;
+};
+
+/** Interactive spreadsheet that fills its container (which must have a size). */
+export default function ZedSheet({ id = "zedsheet-root", data, onChange }: Props) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    load().then((mod) => {
+      if (cancelled || !ref.current) return;
+      const seed =
+        typeof data === "string" ? data : data ? JSON.stringify(data) : undefined;
+      mod.mount(`#${id}`, seed);
+      if (onChange) mod.on_change(`#${id}`, onChange);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Mount once — the sheet owns its state from here on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  return <div id={id} ref={ref} style={{ width: "100%", height: "100%" }} />;
+}
 ```
 
-See **[docs/REACT.md](./docs/REACT.md)** for the full React walkthrough
-(component, styles, sprite asset, bundler notes).
+`App.tsx`:
+
+```tsx
+import "./zedsheet.css"; // the styles copied above
+import ZedSheet from "./ZedSheet";
+
+export default function App() {
+  return (
+    <div style={{ height: "100vh", width: "100vw" }}>
+      <ZedSheet onChange={(json) => localStorage.setItem("workbook", json)} />
+    </div>
+  );
+}
+```
+
+Drive the mounted sheet from anywhere via the JS API (every function takes the
+container's CSS selector):
+
+```ts
+import {
+  get_data, load_data,        // workbook JSON: snapshot / restore
+  export_csv, import_csv,     // active sheet ⇄ CSV text
+  export_xlsx, import_xlsx,   // whole workbook ⇄ .xlsx bytes
+  setSheetReadOnly,           // lock / unlock a sheet by name
+} from "zedsheet";
+
+const json = get_data("#zedsheet-root");      // serialize every sheet
+if (json) load_data("#zedsheet-root", json);  // replace the workbook
+setSheetReadOnly("sheet1", true);             // block all edits to that sheet
+
+// Download the workbook as .xlsx
+const bytes = export_xlsx("#zedsheet-root");
+if (bytes) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([bytes]));
+  a.download = "workbook.xlsx";
+  a.click();
+}
+```
+
+**Next.js**: render it client-side only —
+`dynamic(() => import("./ZedSheet"), { ssr: false })`. Bundler notes and asset
+details live in **[docs/REACT.md](./docs/REACT.md)**.
 
 > **Tip:** when verifying behavior, prefer building once and serving the static
 > `dist/` over `trunk serve` — Trunk's auto-reload re-initializes the WASM

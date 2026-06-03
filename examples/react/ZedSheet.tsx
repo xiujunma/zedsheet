@@ -1,55 +1,47 @@
 import { useEffect, useRef } from "react";
 
-// Load + initialize the wasm module once for the whole app.
+// Load + instantiate the .wasm once for the whole app.
 let ready: Promise<typeof import("zedsheet")> | null = null;
 function load() {
   if (!ready) {
-    ready = (async () => {
-      const mod = await import("zedsheet");
+    ready = import("zedsheet").then(async (mod) => {
       await mod.default(); // init(): fetches and instantiates the .wasm
       return mod;
-    })();
+    });
   }
   return ready;
 }
 
 type Props = {
-  /** Optional seed data (zedsheet JSON). Omit for a blank sheet. */
+  /** Container id — `#${id}` is also the selector the JS data API targets.
+   *  Give each instance its own id. (Avoid `zedsheet`: that id triggers the
+   *  standalone demo's auto-mount.) */
+  id?: string;
+  /** Seed workbook: zedsheet JSON (string, object, or array). Omit for blank. */
   data?: unknown;
-  style?: React.CSSProperties;
-  className?: string;
+  /** Called with the serialized workbook after every edit. */
+  onChange?: (json: string) => void;
 };
 
-/**
- * Mounts an interactive zedsheet spreadsheet that fills its container.
- * The container must have a defined size (the canvas sizes to its client box).
- */
-export default function ZedSheet({ data, style, className }: Props) {
+/** Interactive spreadsheet that fills its container (which must have a size). */
+export default function ZedSheet({ id = "zedsheet-root", data, onChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const el = ref.current;
-    if (!el) return;
-    // The wasm `mount` takes a CSS selector, so give the container a stable id.
-    if (!el.id) el.id = "zedsheet-" + Math.random().toString(36).slice(2);
-
     load().then((mod) => {
-      if (cancelled) return;
-      mod.mount("#" + el.id, data ? JSON.stringify(data) : undefined);
+      if (cancelled || !ref.current) return;
+      const seed =
+        typeof data === "string" ? data : data ? JSON.stringify(data) : undefined;
+      mod.mount(`#${id}`, seed);
+      if (onChange) mod.on_change(`#${id}`, onChange);
     });
-
     return () => {
       cancelled = true;
     };
+    // Mount once — the sheet owns its state from here on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [id]);
 
-  return (
-    <div
-      ref={ref}
-      className={className}
-      style={{ width: "100%", height: "100%", ...style }}
-    />
-  );
+  return <div id={id} ref={ref} style={{ width: "100%", height: "100%" }} />;
 }

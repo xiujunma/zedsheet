@@ -49,8 +49,10 @@ cp -R /path/to/zedsheet/asset         public/asset
 
 Copy [`examples/react/ZedSheet.tsx`](../examples/react/ZedSheet.tsx) into your
 app. It dynamically imports the wasm module, initializes it once, and mounts a
-spreadsheet into a ref'd `<div>` (which is given a unique id because the wasm
-`mount` API takes a CSS selector).
+spreadsheet into a `<div>` with a stable id (the wasm `mount` API takes a CSS
+selector — the same selector also targets the JS data API). Props: `id`,
+`data` (seed workbook), and `onChange` (fires with the serialized workbook
+after every edit).
 
 ## 4. Use it
 
@@ -74,17 +76,24 @@ formulas, multi-sheet tabs, …).
 ## API
 
 ```ts
-import init, { mount } from "zedsheet";
+import init, {
+  mount,                              // mount(selector, dataJson?)
+  get_data, load_data,                // workbook JSON: snapshot / restore
+  on_change,                          // change callback (autosave, sync, …)
+  export_csv, import_csv,             // active sheet ⇄ CSV text
+  export_xlsx, import_xlsx,           // whole workbook ⇄ .xlsx bytes
+  setSheetReadOnly, isSheetReadOnly,  // lock / query a sheet by name
+} from "zedsheet";
 
-await init();                  // load the wasm (call once)
-mount(selector: string,        // CSS selector of the container
-      data_json?: string);     // optional seed data (zedsheet JSON)
+await init();                              // load the wasm (call once)
+mount("#my-grid");                         // blank sheet (pass JSON to seed)
+on_change("#my-grid", (json) => { ... });  // fires after every edit
 ```
 
-> **Data import/export is still in progress.** `mount` accepts zedsheet's own
-> serialized JSON; full x-spreadsheet-format import and a `getData()` /
-> `onChange()` API are tracked in issues #15 and #20. For now the most reliable
-> use is a blank, interactive sheet (`mount("#id")`).
+Every function takes the mounted container's CSS selector, except
+`setSheetReadOnly` / `isSheetReadOnly`, which take a sheet name. `mount`
+accepts x-spreadsheet-format JSON (a single sheet object or an array of
+sheets); `get_data` returns the same format.
 
 ## Bundler notes
 
