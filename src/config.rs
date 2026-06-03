@@ -1,3 +1,3 @@
 
 
-pub const CSS_PREFIX: &'static str = "x-spreadsheet";
+pub const CSS_PREFIX: &'static str = "zedsheet";

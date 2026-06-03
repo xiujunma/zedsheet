@@ -341,7 +341,7 @@ impl ZedSheet {
         // commit is rejected by a data-validation rule (issue #9).
         let mut editor_error_el = h("div", Some("zs-editor-error"));
         let _ = editor_error_el.el.as_ref().map(|e| {
-            let _ = e.set_attribute("class", "zs-editor-error x-spreadsheet-toast");
+            let _ = e.set_attribute("class", "zs-editor-error zedsheet-toast");
             let _ = e.set_attribute(
                 "style",
                 "display:none;position:absolute;font-size:12px;color:#b71c1c;\
@@ -361,7 +361,7 @@ impl ZedSheet {
         // (and any other commit path that can't keep the editor open).
         let mut toast_el = h("div", Some("zs-dv-toast"));
         let _ = toast_el.el.as_ref().map(|e| {
-            let _ = e.set_attribute("class", "zs-dv-toast x-spreadsheet-toast");
+            let _ = e.set_attribute("class", "zs-dv-toast zedsheet-toast");
             let _ = e.set_attribute(
                 "style",
                 "display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);\

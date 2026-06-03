@@ -52,12 +52,12 @@ pub(crate) fn show_list_popover(
 
 pub(crate) fn data_validation_modal_html() -> String {
     format!(
-        r#"<div class="x-spreadsheet-modal zs-dv-root" role="dialog" aria-modal="true" aria-labelledby="zs-dv-title" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;background:#fff;border-radius:4px;border:1px solid rgba(0,0,0,0.1);box-shadow:rgba(0,0,0,0.2) 0px 2px 8px;font-size:13px;line-height:1.25em;width:420px;">
-            <div class="x-spreadsheet-modal-header" style="padding:8px 12px;border-bottom:1px solid #e6e6e6;font-weight:600;display:flex;align-items:center;justify-content:space-between;">
+        r#"<div class="zedsheet-modal zs-dv-root" role="dialog" aria-modal="true" aria-labelledby="zs-dv-title" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;background:#fff;border-radius:4px;border:1px solid rgba(0,0,0,0.1);box-shadow:rgba(0,0,0,0.2) 0px 2px 8px;font-size:13px;line-height:1.25em;width:420px;">
+            <div class="zedsheet-modal-header" style="padding:8px 12px;border-bottom:1px solid #e6e6e6;font-weight:600;display:flex;align-items:center;justify-content:space-between;">
                 <span id="zs-dv-title">Data Validation</span>
-                <span class="x-spreadsheet-icon zs-dv-close" role="button" tabindex="0" aria-label="Close" style="cursor:pointer;color:#999;font-size:14px;">✕</span>
+                <span class="zedsheet-icon zs-dv-close" role="button" tabindex="0" aria-label="Close" style="cursor:pointer;color:#999;font-size:14px;">✕</span>
             </div>
-            <div class="x-spreadsheet-modal-content" style="padding:12px;">
+            <div class="zedsheet-modal-content" style="padding:12px;">
                 <div style="display:flex;align-items:center;margin-bottom:8px;">
                     <label for="zs-dv-type-sel" style="width:90px;">Allow</label>
                     <select id="zs-dv-type-sel" class="zs-dv-type" style="flex:1;padding:3px;">

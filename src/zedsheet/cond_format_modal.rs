@@ -36,12 +36,12 @@ pub(crate) fn cond_format_modal_html() -> String {
     let row = "display:flex;align-items:center;gap:8px;margin-bottom:8px;";
     let label = "width:90px;flex:none;";
     format!(
-        r##"<div class="x-spreadsheet-modal zs-cf-root" role="dialog" aria-modal="true" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;background:#fff;border-radius:4px;border:1px solid rgba(0,0,0,0.1);box-shadow:rgba(0,0,0,0.2) 0px 2px 8px;font-size:13px;line-height:1.25em;width:460px;">
-            <div class="x-spreadsheet-modal-header" style="padding:8px 12px;border-bottom:1px solid #e6e6e6;font-weight:600;display:flex;align-items:center;justify-content:space-between;">
+        r##"<div class="zedsheet-modal zs-cf-root" role="dialog" aria-modal="true" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;background:#fff;border-radius:4px;border:1px solid rgba(0,0,0,0.1);box-shadow:rgba(0,0,0,0.2) 0px 2px 8px;font-size:13px;line-height:1.25em;width:460px;">
+            <div class="zedsheet-modal-header" style="padding:8px 12px;border-bottom:1px solid #e6e6e6;font-weight:600;display:flex;align-items:center;justify-content:space-between;">
                 <span>Conditional formatting</span>
                 <span class="zs-cf-close" role="button" tabindex="0" aria-label="Close" style="cursor:pointer;color:#999;font-size:14px;">✕</span>
             </div>
-            <div class="x-spreadsheet-modal-content" style="padding:12px;">
+            <div class="zedsheet-modal-content" style="padding:12px;">
                 <div class="zs-cf-list" style="max-height:130px;overflow-y:auto;margin-bottom:10px;"></div>
                 <div style="border-top:1px solid #e6e6e6;margin-bottom:10px;"></div>
                 <div style="{row}">

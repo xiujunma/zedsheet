@@ -1,7 +1,7 @@
 body {
   margin: 0;
 }
-.x-spreadsheet {
+.zedsheet {
   font-size: 13px;
   line-height: normal;
   user-select: none;
@@ -11,17 +11,17 @@ body {
   background: #fff;
   -webkit-font-smoothing: antialiased;
 }
-.x-spreadsheet textarea {
+.zedsheet textarea {
   font: 400 13px Arial, 'Lato', 'Source Sans Pro', Roboto, Helvetica, sans-serif;
 }
-.x-spreadsheet-sheet {
+.zedsheet-sheet {
   position: relative;
   overflow: hidden;
 }
-.x-spreadsheet-table {
+.zedsheet-table {
   vertical-align: bottom;
 }
-.x-spreadsheet-tooltip {
+.zedsheet-tooltip {
   font-family: inherit;
   position: absolute;
   padding: 5px 10px;
@@ -31,7 +31,7 @@ body {
   font-size: 12px;
   z-index: 201;
 }
-.x-spreadsheet-tooltip:before {
+.zedsheet-tooltip:before {
   pointer-events: none;
   position: absolute;
   left: calc(50% - 4px);
@@ -45,32 +45,32 @@ body {
   z-index: 1;
   box-shadow: 1px 1px 3px -1px rgba(0, 0, 0, 0.3);
 }
-.x-spreadsheet-color-palette {
+.zedsheet-color-palette {
   padding: 5px;
 }
-.x-spreadsheet-color-palette table {
+.zedsheet-color-palette table {
   margin: 0;
   padding: 0;
   border-collapse: separate;
   border-spacing: 2;
   background: #fff;
 }
-.x-spreadsheet-color-palette table td {
+.zedsheet-color-palette table td {
   margin: 0;
   cursor: pointer;
   border: 1px solid transparent;
 }
-.x-spreadsheet-color-palette table td:hover {
+.zedsheet-color-palette table td:hover {
   border-color: #ddd;
 }
-.x-spreadsheet-color-palette table td .x-spreadsheet-color-palette-cell {
+.zedsheet-color-palette table td .zedsheet-color-palette-cell {
   width: 16px;
   height: 16px;
 }
-.x-spreadsheet-border-palette {
+.zedsheet-border-palette {
   padding: 6px;
 }
-.x-spreadsheet-border-palette table {
+.zedsheet-border-palette table {
   margin: 0;
   padding: 0;
   border-collapse: separate;
@@ -78,105 +78,105 @@ body {
   background: #fff;
   table-layout: fixed;
 }
-.x-spreadsheet-border-palette table td {
+.zedsheet-border-palette table td {
   margin: 0;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-left {
+.zedsheet-border-palette .zedsheet-border-palette-left {
   border-right: 1px solid #eee;
   padding-right: 6px;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-left .x-spreadsheet-border-palette-cell {
+.zedsheet-border-palette .zedsheet-border-palette-left .zedsheet-border-palette-cell {
   width: 30px;
   height: 30px;
   cursor: pointer;
   text-align: center;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-left .x-spreadsheet-border-palette-cell .x-spreadsheet-icon-img {
+.zedsheet-border-palette .zedsheet-border-palette-left .zedsheet-border-palette-cell .zedsheet-icon-img {
   opacity: 0.8;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-left .x-spreadsheet-border-palette-cell:hover {
+.zedsheet-border-palette .zedsheet-border-palette-left .zedsheet-border-palette-cell:hover {
   background-color: #eee;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-right {
+.zedsheet-border-palette .zedsheet-border-palette-right {
   padding-left: 6px;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-right .x-spreadsheet-toolbar-btn {
+.zedsheet-border-palette .zedsheet-border-palette-right .zedsheet-toolbar-btn {
   margin-top: 0;
   margin-bottom: 3px;
 }
-.x-spreadsheet-border-palette .x-spreadsheet-border-palette-right .x-spreadsheet-line-type {
+.zedsheet-border-palette .zedsheet-border-palette-right .zedsheet-line-type {
   position: relative;
   left: 0;
   top: -3px;
 }
-.x-spreadsheet-dropdown {
+.zedsheet-dropdown {
   position: relative;
 }
-.x-spreadsheet-dropdown .x-spreadsheet-dropdown-content {
+.zedsheet-dropdown .zedsheet-dropdown-content {
   position: absolute;
   z-index: 200;
   background: #fff;
   box-shadow: 1px 2px 5px 2px rgba(51, 51, 51, 0.15);
 }
-.x-spreadsheet-dropdown.bottom-left .x-spreadsheet-dropdown-content {
+.zedsheet-dropdown.bottom-left .zedsheet-dropdown-content {
   top: calc(100% + 5px);
   left: 0;
 }
-.x-spreadsheet-dropdown.bottom-right .x-spreadsheet-dropdown-content {
+.zedsheet-dropdown.bottom-right .zedsheet-dropdown-content {
   top: calc(100% + 5px);
   right: 0;
 }
-.x-spreadsheet-dropdown.top-left .x-spreadsheet-dropdown-content {
+.zedsheet-dropdown.top-left .zedsheet-dropdown-content {
   bottom: calc(100% + 5px);
   left: 0;
 }
-.x-spreadsheet-dropdown.top-right .x-spreadsheet-dropdown-content {
+.zedsheet-dropdown.top-right .zedsheet-dropdown-content {
   bottom: calc(100% + 5px);
   right: 0;
 }
-.x-spreadsheet-dropdown .x-spreadsheet-dropdown-title {
+.zedsheet-dropdown .zedsheet-dropdown-title {
   padding: 0 5px;
   display: inline-block;
 }
-.x-spreadsheet-dropdown .x-spreadsheet-dropdown-header .x-spreadsheet-icon.arrow-left {
+.zedsheet-dropdown .zedsheet-dropdown-header .zedsheet-icon.arrow-left {
   margin-left: 4px;
 }
-.x-spreadsheet-dropdown .x-spreadsheet-dropdown-header .x-spreadsheet-icon.arrow-right {
+.zedsheet-dropdown .zedsheet-dropdown-header .zedsheet-icon.arrow-right {
   width: 10px;
   margin-right: 4px;
 }
-.x-spreadsheet-dropdown .x-spreadsheet-dropdown-header .x-spreadsheet-icon.arrow-right .arrow-down {
+.zedsheet-dropdown .zedsheet-dropdown-header .zedsheet-icon.arrow-right .arrow-down {
   left: -130px;
 }
 /* resizer **/
-.x-spreadsheet-resizer {
+.zedsheet-resizer {
   position: absolute;
   z-index: 11;
 }
-.x-spreadsheet-resizer .x-spreadsheet-resizer-hover {
+.zedsheet-resizer .zedsheet-resizer-hover {
   background-color: rgba(75, 137, 255, 0.25);
 }
-.x-spreadsheet-resizer .x-spreadsheet-resizer-line {
+.zedsheet-resizer .zedsheet-resizer-line {
   position: absolute;
 }
-.x-spreadsheet-resizer.horizontal {
+.zedsheet-resizer.horizontal {
   cursor: row-resize;
 }
-.x-spreadsheet-resizer.horizontal .x-spreadsheet-resizer-line {
+.zedsheet-resizer.horizontal .zedsheet-resizer-line {
   border-bottom: 2px dashed #4b89ff;
   left: 0;
   bottom: 0;
 }
-.x-spreadsheet-resizer.vertical {
+.zedsheet-resizer.vertical {
   cursor: col-resize;
 }
-.x-spreadsheet-resizer.vertical .x-spreadsheet-resizer-line {
+.zedsheet-resizer.vertical .zedsheet-resizer-line {
   border-right: 2px dashed #4b89ff;
   top: 0;
   right: 0;
 }
 /* scrollbar */
-.x-spreadsheet-scrollbar {
+.zedsheet-scrollbar {
   position: absolute;
   bottom: 0;
   right: 0;
@@ -184,40 +184,40 @@ body {
   opacity: 0.9;
   z-index: 12;
 }
-.x-spreadsheet-scrollbar.horizontal {
+.zedsheet-scrollbar.horizontal {
   right: 15px;
   overflow-x: scroll;
   overflow-y: hidden;
 }
-.x-spreadsheet-scrollbar.horizontal > div {
+.zedsheet-scrollbar.horizontal > div {
   height: 1px;
   background: #ddd;
 }
-.x-spreadsheet-scrollbar.vertical {
+.zedsheet-scrollbar.vertical {
   bottom: 15px;
   overflow-x: hidden;
   overflow-y: scroll;
 }
-.x-spreadsheet-scrollbar.vertical > div {
+.zedsheet-scrollbar.vertical > div {
   width: 1px;
   background: #ddd;
 }
 /* @{css-prefix}-overlayer */
-.x-spreadsheet-overlayer {
+.zedsheet-overlayer {
   position: absolute;
   left: 0;
   top: 0;
   z-index: 10;
 }
-.x-spreadsheet-overlayer .x-spreadsheet-overlayer-content {
+.zedsheet-overlayer .zedsheet-overlayer-content {
   position: absolute;
   overflow: hidden;
   pointer-events: none;
   width: 100%;
   height: 100%;
 }
-.x-spreadsheet-editor,
-.x-spreadsheet-selector {
+.zedsheet-editor,
+.zedsheet-selector {
   box-sizing: content-box;
   position: absolute;
   overflow: hidden;
@@ -228,34 +228,34 @@ body {
   height: 100%;
 }
 /* @{css-prefix}-selector */
-.x-spreadsheet-selector .hide-input {
+.zedsheet-selector .hide-input {
   position: absolute;
   z-index: 0;
 }
-.x-spreadsheet-selector .hide-input input {
+.zedsheet-selector .hide-input input {
   padding: 0;
   width: 0;
   border: none!important;
 }
-.x-spreadsheet-selector .x-spreadsheet-selector-area {
+.zedsheet-selector .zedsheet-selector-area {
   position: absolute;
   border: 2px solid #4b89ff;
   background: rgba(75, 137, 255, 0.1);
   z-index: 5;
 }
-.x-spreadsheet-selector .x-spreadsheet-selector-clipboard,
-.x-spreadsheet-selector .x-spreadsheet-selector-autofill {
+.zedsheet-selector .zedsheet-selector-clipboard,
+.zedsheet-selector .zedsheet-selector-autofill {
   position: absolute;
   background: transparent;
   z-index: 100;
 }
-.x-spreadsheet-selector .x-spreadsheet-selector-clipboard {
+.zedsheet-selector .zedsheet-selector-clipboard {
   border: 2px dashed #4b89ff;
 }
-.x-spreadsheet-selector .x-spreadsheet-selector-autofill {
+.zedsheet-selector .zedsheet-selector-autofill {
   border: 1px dashed rgba(0, 0, 0, 0.45);
 }
-.x-spreadsheet-selector .x-spreadsheet-selector-corner {
+.zedsheet-selector .zedsheet-selector-corner {
   pointer-events: auto;
   position: absolute;
   cursor: crosshair;
@@ -267,10 +267,10 @@ body {
   border: 2px solid #ffffff;
   background: #4b89ff;
 }
-.x-spreadsheet-editor {
+.zedsheet-editor {
   z-index: 20;
 }
-.x-spreadsheet-editor .x-spreadsheet-editor-area {
+.zedsheet-editor .zedsheet-editor-area {
   position: absolute;
   text-align: left;
   border: 2px solid #4b89ff;
@@ -278,7 +278,7 @@ body {
   z-index: 100;
   pointer-events: auto;
 }
-.x-spreadsheet-editor .x-spreadsheet-editor-area textarea {
+.zedsheet-editor .zedsheet-editor-area textarea {
   box-sizing: content-box;
   border: none;
   padding: 0 3px;
@@ -293,14 +293,14 @@ body {
   line-height: 22px;
   margin: 0;
 }
-.x-spreadsheet-editor .x-spreadsheet-editor-area .textline {
+.zedsheet-editor .zedsheet-editor-area .textline {
   overflow: hidden;
   visibility: hidden;
   position: fixed;
   top: 0;
   left: 0;
 }
-.x-spreadsheet-item {
+.zedsheet-item {
   user-select: none;
   background: 0;
   border: 1px solid transparent;
@@ -314,33 +314,33 @@ body {
   text-align: left;
   overflow: hidden;
 }
-.x-spreadsheet-item.disabled {
+.zedsheet-item.disabled {
   pointer-events: none;
   opacity: 0.5;
 }
-.x-spreadsheet-item:hover,
-.x-spreadsheet-item.active {
+.zedsheet-item:hover,
+.zedsheet-item.active {
   background: rgba(0, 0, 0, 0.05);
 }
-.x-spreadsheet-item.divider {
+.zedsheet-item.divider {
   height: 0;
   padding: 0;
   margin: 5px 0;
   border: none;
   border-bottom: 1px solid rgba(0, 0, 0, 0.1);
 }
-.x-spreadsheet-item .label {
+.zedsheet-item .label {
   float: right;
   opacity: 0.65;
   font-size: 1em;
 }
-.x-spreadsheet-item.state,
-.x-spreadsheet-header.state {
+.zedsheet-item.state,
+.zedsheet-header.state {
   padding-left: 35px!important;
   position: relative;
 }
-.x-spreadsheet-item.state:before,
-.x-spreadsheet-header.state:before {
+.zedsheet-item.state:before,
+.zedsheet-header.state:before {
   content: '';
   position: absolute;
   width: 10px;
@@ -350,11 +350,11 @@ body {
   background: rgba(0, 0, 0, 0.08);
   border-radius: 2px;
 }
-.x-spreadsheet-item.state.checked:before,
-.x-spreadsheet-header.state.checked:before {
+.zedsheet-item.state.checked:before,
+.zedsheet-header.state.checked:before {
   background: #4b89ff;
 }
-.x-spreadsheet-checkbox {
+.zedsheet-checkbox {
   position: relative;
   display: inline-block;
   backface-visibility: hidden;
@@ -364,7 +364,7 @@ body {
   font-size: 1rem;
   line-height: 1em;
 }
-.x-spreadsheet-checkbox > input {
+.zedsheet-checkbox > input {
   position: absolute;
   top: 0;
   left: 0;
@@ -372,9 +372,9 @@ body {
   outline: 0;
   z-index: -1;
 }
-.x-spreadsheet-suggest,
-.x-spreadsheet-contextmenu,
-.x-spreadsheet-sort-filter {
+.zedsheet-suggest,
+.zedsheet-contextmenu,
+.zedsheet-sort-filter {
   position: absolute;
   box-shadow: 1px 2px 5px 2px rgba(51, 51, 51, 0.15);
   background: #fff;
@@ -383,44 +383,44 @@ body {
   pointer-events: auto;
   overflow: auto;
 }
-.x-spreadsheet-suggest {
+.zedsheet-suggest {
   width: 200px;
 }
-.x-spreadsheet-filter {
+.zedsheet-filter {
   border: 1px solid #e9e9e9;
   font-size: 12px;
   margin: 10px;
 }
-.x-spreadsheet-filter .x-spreadsheet-header {
+.zedsheet-filter .zedsheet-header {
   padding: 0.5em 0.75em;
   background: #f8f8f9;
   border-bottom: 1px solid #e9e9e9;
   border-left: 1px solid transparent;
 }
-.x-spreadsheet-filter .x-spreadsheet-body {
+.zedsheet-filter .zedsheet-body {
   height: 200px;
   overflow-y: auto;
 }
-.x-spreadsheet-filter .x-spreadsheet-body .x-spreadsheet-item {
+.zedsheet-filter .zedsheet-body .zedsheet-item {
   height: 20px;
   line-height: 20px;
 }
-.x-spreadsheet-sort-filter .x-spreadsheet-buttons {
+.zedsheet-sort-filter .zedsheet-buttons {
   margin: 10px;
 }
-.x-spreadsheet-toolbar,
-.x-spreadsheet-bottombar {
+.zedsheet-toolbar,
+.zedsheet-bottombar {
   height: 40px;
   padding: 0 30px;
   text-align: left;
   background: #f5f6f7;
   display: flex;
 }
-.x-spreadsheet-bottombar {
+.zedsheet-bottombar {
   position: relative;
   border-top: 1px solid #e0e2e4;
 }
-.x-spreadsheet-bottombar .x-spreadsheet-menu > li {
+.zedsheet-bottombar .zedsheet-menu > li {
   line-height: 40px;
   height: 40px;
   padding-top: 0;
@@ -428,13 +428,13 @@ body {
   vertical-align: middle;
   border-right: 1px solid #e8eaed;
 }
-.x-spreadsheet-menu {
+.zedsheet-menu {
   list-style: none;
   margin: 0;
   padding: 0;
   user-select: none;
 }
-.x-spreadsheet-menu > li {
+.zedsheet-menu > li {
   float: left;
   line-height: 1.25em;
   padding: 0.785em 1em;
@@ -448,33 +448,33 @@ body {
   transition: all 0.3s;
   font-weight: bold;
 }
-.x-spreadsheet-menu > li.active {
+.zedsheet-menu > li.active {
   background-color: #fff;
   color: rgba(0, 0, 0, 0.65);
 }
-.x-spreadsheet-menu > li .x-spreadsheet-icon {
+.zedsheet-menu > li .zedsheet-icon {
   margin: 0 6px;
 }
-.x-spreadsheet-menu > li .x-spreadsheet-icon .x-spreadsheet-icon-img:hover {
+.zedsheet-menu > li .zedsheet-icon .zedsheet-icon-img:hover {
   opacity: 0.85;
 }
-.x-spreadsheet-menu > li .x-spreadsheet-dropdown {
+.zedsheet-menu > li .zedsheet-dropdown {
   display: inline-block;
 }
-.x-spreadsheet-toolbar {
+.zedsheet-toolbar {
   border-bottom: 1px solid #e0e2e4;
 }
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-btns {
+.zedsheet-toolbar .zedsheet-toolbar-btns {
   display: inline-flex;
 }
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-more {
+.zedsheet-toolbar .zedsheet-toolbar-more {
   padding: 0 6px 6px;
   text-align: left;
 }
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-more .x-spreadsheet-toolbar-divider {
+.zedsheet-toolbar .zedsheet-toolbar-more .zedsheet-toolbar-divider {
   margin-top: 0;
 }
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn {
+.zedsheet-toolbar .zedsheet-toolbar-btn {
   flex: 0 0 auto;
   display: inline-block;
   border: 1px solid transparent;
@@ -486,15 +486,15 @@ body {
   text-align: center;
   border-radius: 2px;
 }
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn.disabled {
+.zedsheet-toolbar .zedsheet-toolbar-btn.disabled {
   pointer-events: none;
   opacity: 0.5;
 }
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn:hover,
-.x-spreadsheet-toolbar .x-spreadsheet-toolbar-btn.active {
+.zedsheet-toolbar .zedsheet-toolbar-btn:hover,
+.zedsheet-toolbar .zedsheet-toolbar-btn.active {
   background: rgba(0, 0, 0, 0.08);
 }
-.x-spreadsheet-toolbar-divider {
+.zedsheet-toolbar-divider {
   display: inline-block;
   border-right: 1px solid #e0e2e4;
   width: 0;
@@ -502,7 +502,7 @@ body {
   height: 18px;
   margin: 12px 3px 0;
 }
-.x-spreadsheet-print {
+.zedsheet-print {
   position: absolute;
   left: 0;
   top: 0;
@@ -512,57 +512,57 @@ body {
   display: flex;
   flex-direction: column;
 }
-.x-spreadsheet-print-bar {
+.zedsheet-print-bar {
   background: #424242;
   height: 60px;
   line-height: 60px;
   padding: 0 30px;
 }
-.x-spreadsheet-print-bar .-title {
+.zedsheet-print-bar .-title {
   color: #fff;
   font-weight: bold;
   font-size: 1.2em;
   float: left;
 }
-.x-spreadsheet-print-bar .-right {
+.zedsheet-print-bar .-right {
   float: right;
   margin-top: 12px;
 }
-.x-spreadsheet-print-content {
+.zedsheet-print-content {
   display: flex;
   flex: auto;
   flex-direction: row;
   background: #d0d0d0;
   height: calc(100% - 60px);
 }
-.x-spreadsheet-print-content .-sider {
+.zedsheet-print-content .-sider {
   flex: 0 0 300px;
   width: 300px;
   border-left: 2px solid #ccc;
   background: #fff;
 }
-.x-spreadsheet-print-content .-content {
+.zedsheet-print-content .-content {
   flex: auto;
   overflow-x: auto;
   overflow-y: scroll;
   height: 100%;
 }
-.x-spreadsheet-canvas-card-wraper {
+.zedsheet-canvas-card-wraper {
   margin: 40px 20px;
 }
-.x-spreadsheet-canvas-card {
+.zedsheet-canvas-card {
   background: #fff;
   margin: auto;
   page-break-before: auto;
   page-break-after: always;
   box-shadow: 0 8px 10px 1px rgba(0, 0, 0, 0.14), 0 3px 14px 3px rgba(0, 0, 0, 0.12), 0 4px 5px 0 rgba(0, 0, 0, 0.2);
 }
-.x-spreadsheet-calendar {
+.zedsheet-calendar {
   color: rgba(0, 0, 0, 0.65);
   background: #ffffff;
   user-select: none;
 }
-.x-spreadsheet-calendar .calendar-header {
+.zedsheet-calendar .calendar-header {
   font-weight: 700;
   line-height: 30px;
   text-align: center;
@@ -570,27 +570,27 @@ body {
   float: left;
   background: #f9fafb;
 }
-.x-spreadsheet-calendar .calendar-header .calendar-header-left {
+.zedsheet-calendar .calendar-header .calendar-header-left {
   padding-left: 5px;
   float: left;
 }
-.x-spreadsheet-calendar .calendar-header .calendar-header-right {
+.zedsheet-calendar .calendar-header .calendar-header-right {
   float: right;
 }
-.x-spreadsheet-calendar .calendar-header .calendar-header-right a {
+.zedsheet-calendar .calendar-header .calendar-header-right a {
   padding: 3px 0;
   margin-right: 2px;
   border-radius: 2px;
 }
-.x-spreadsheet-calendar .calendar-header .calendar-header-right a:hover {
+.zedsheet-calendar .calendar-header .calendar-header-right a:hover {
   background: rgba(0, 0, 0, 0.08);
 }
-.x-spreadsheet-calendar .calendar-body {
+.zedsheet-calendar .calendar-body {
   border-collapse: collapse;
   border-spacing: 0;
 }
-.x-spreadsheet-calendar .calendar-body th,
-.x-spreadsheet-calendar .calendar-body td {
+.zedsheet-calendar .calendar-body th,
+.zedsheet-calendar .calendar-body td {
   width: 100%/7;
   min-width: 32px;
   text-align: center;
@@ -598,19 +598,19 @@ body {
   line-height: 30px;
   padding: 0;
 }
-.x-spreadsheet-calendar .calendar-body td > .cell:hover {
+.zedsheet-calendar .calendar-body td > .cell:hover {
   background: #ecf6fd;
 }
-.x-spreadsheet-calendar .calendar-body td > .cell.active,
-.x-spreadsheet-calendar .calendar-body td > .cell.active:hover {
+.zedsheet-calendar .calendar-body td > .cell.active,
+.zedsheet-calendar .calendar-body td > .cell.active:hover {
   background: #ecf6fd;
   color: #2185D0;
 }
-.x-spreadsheet-calendar .calendar-body td > .cell.disabled {
+.zedsheet-calendar .calendar-body td > .cell.disabled {
   pointer-events: none;
   opacity: 0.5;
 }
-.x-spreadsheet-datepicker {
+.zedsheet-datepicker {
   box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
   position: absolute;
   left: 0;
@@ -618,14 +618,14 @@ body {
   z-index: 10;
   width: auto;
 }
-.x-spreadsheet-buttons {
+.zedsheet-buttons {
   display: flex;
   justify-content: flex-end;
 }
-.x-spreadsheet-buttons .x-spreadsheet-button {
+.zedsheet-buttons .zedsheet-button {
   margin-left: 8px;
 }
-.x-spreadsheet-button {
+.zedsheet-button {
   display: inline-block;
   border-radius: 3px;
   line-height: 1em;
@@ -646,28 +646,28 @@ body {
   user-select: none;
   transition: all 0.1s linear;
 }
-.x-spreadsheet-button.active,
-.x-spreadsheet-button:hover {
+.zedsheet-button.active,
+.zedsheet-button:hover {
   background-color: #C0C1C2;
   color: rgba(0, 0, 0, 0.8);
 }
-.x-spreadsheet-button.primary {
+.zedsheet-button.primary {
   color: #fff;
   background-color: #2185D0;
 }
-.x-spreadsheet-button.primary:hover,
-.x-spreadsheet-button.primary.active {
+.zedsheet-button.primary:hover,
+.zedsheet-button.primary.active {
   color: #fff;
   background-color: #1678c2;
 }
-.x-spreadsheet-form-input {
+.zedsheet-form-input {
   font-size: 1em;
   position: relative;
   font-weight: 400;
   display: inline-flex;
   color: rgba(0, 0, 0, 0.87);
 }
-.x-spreadsheet-form-input input {
+.zedsheet-form-input input {
   z-index: 1;
   margin: 0;
   max-width: 100%;
@@ -684,11 +684,11 @@ body {
   transition: box-shadow 0.1s ease, border-color 0.1s ease;
   box-shadow: inset 0 1px 2px hsla(0, 0%, 4%, 0.06);
 }
-.x-spreadsheet-form-input input:focus {
+.zedsheet-form-input input:focus {
   border-color: #4b89ff;
   box-shadow: inset 0 1px 2px rgba(75, 137, 255, 0.2);
 }
-.x-spreadsheet-form-select {
+.zedsheet-form-select {
   position: relative;
   display: inline-block;
   background: #fff;
@@ -699,7 +699,7 @@ body {
   user-select: none;
   box-shadow: inset 0 1px 2px hsla(0, 0%, 4%, 0.06);
 }
-.x-spreadsheet-form-select .input-text {
+.zedsheet-form-select .input-text {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 60px;
@@ -708,36 +708,36 @@ body {
   line-height: 30px;
   padding: 0 8px;
 }
-.x-spreadsheet-form-fields {
+.zedsheet-form-fields {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
 }
-.x-spreadsheet-form-fields .x-spreadsheet-form-field {
+.zedsheet-form-fields .zedsheet-form-field {
   flex: 0 1 auto;
 }
-.x-spreadsheet-form-fields .x-spreadsheet-form-field .label {
+.zedsheet-form-fields .zedsheet-form-field .label {
   display: inline-block;
   margin: 0 10px 0 0;
 }
-.x-spreadsheet-form-field {
+.zedsheet-form-field {
   display: block;
   vertical-align: middle;
   margin-left: 10px;
   margin-bottom: 10px;
 }
-.x-spreadsheet-form-field:first-child {
+.zedsheet-form-field:first-child {
   margin-left: 0;
 }
-.x-spreadsheet-form-field.error .x-spreadsheet-form-select,
-.x-spreadsheet-form-field.error input {
+.zedsheet-form-field.error .zedsheet-form-select,
+.zedsheet-form-field.error input {
   border-color: #f04134;
 }
-.x-spreadsheet-form-field .tip {
+.zedsheet-form-field .tip {
   color: #f04134;
   font-size: 0.9em;
 }
-.x-spreadsheet-dimmer {
+.zedsheet-dimmer {
   display: none;
   position: absolute;
   top: 0 !important;
@@ -756,7 +756,7 @@ body {
   user-select: none;
   z-index: 1000;
 }
-.x-spreadsheet-dimmer.active {
+.zedsheet-dimmer.active {
   display: block;
   opacity: 1;
 }
@@ -778,8 +778,8 @@ form fieldset select {
   padding: 0.5em 0.85em;
   border-radius: 2px;
 }
-.x-spreadsheet-modal,
-.x-spreadsheet-toast {
+.zedsheet-modal,
+.zedsheet-toast {
   font-size: 13px;
   position: fixed;
   z-index: 1001;
@@ -794,49 +794,49 @@ form fieldset select {
   background-clip: padding-box;
   box-shadow: rgba(0, 0, 0, 0.2) 0px 2px 8px;
 }
-.x-spreadsheet-toast {
+.zedsheet-toast {
   background-color: rgba(255, 255, 255, 0.85);
 }
-.x-spreadsheet-modal-header,
-.x-spreadsheet-toast-header {
+.zedsheet-modal-header,
+.zedsheet-toast-header {
   font-weight: 600;
   background-clip: padding-box;
   background-color: rgba(255, 255, 255, 0.85);
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   border-radius: 4px 4px 0 0;
 }
-.x-spreadsheet-modal-header .x-spreadsheet-icon,
-.x-spreadsheet-toast-header .x-spreadsheet-icon {
+.zedsheet-modal-header .zedsheet-icon,
+.zedsheet-toast-header .zedsheet-icon {
   position: absolute;
   right: 0.8em;
   top: 0.65em;
   border-radius: 18px;
 }
-.x-spreadsheet-modal-header .x-spreadsheet-icon:hover,
-.x-spreadsheet-toast-header .x-spreadsheet-icon:hover {
+.zedsheet-modal-header .zedsheet-icon:hover,
+.zedsheet-toast-header .zedsheet-icon:hover {
   opacity: 1;
   background: rgba(0, 0, 0, 0.08);
 }
-.x-spreadsheet-toast-header {
+.zedsheet-toast-header {
   color: #F2711C;
 }
-.x-spreadsheet-modal-header {
+.zedsheet-modal-header {
   border-bottom: 1px solid #e0e2e4;
   background: rgba(0, 0, 0, 0.08);
   font-size: 1.0785em;
 }
-.x-spreadsheet-modal-header,
-.x-spreadsheet-modal-content,
-.x-spreadsheet-toast-header,
-.x-spreadsheet-toast-content {
+.zedsheet-modal-header,
+.zedsheet-modal-content,
+.zedsheet-toast-header,
+.zedsheet-toast-content {
   padding: 0.75em 1em;
 }
 @media screen and (min-width: 320px) and (max-width: 480px) {
-  .x-spreadsheet-toolbar {
+  .zedsheet-toolbar {
     display: none;
   }
 }
-.x-spreadsheet-icon {
+.zedsheet-icon {
   width: 18px;
   height: 18px;
   margin: 1px 1px 2px 1px;
@@ -848,190 +848,190 @@ form fieldset select {
   display: inline-block;
   line-height: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img {
+.zedsheet-icon .zedsheet-icon-img {
   background-image: url('/asset/sprite.svg');
   position: absolute;
   width: 262px;
   height: 444px;
   opacity: 0.56;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.undo {
+.zedsheet-icon .zedsheet-icon-img.undo {
   left: 0;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.redo {
+.zedsheet-icon .zedsheet-icon-img.redo {
   left: -18px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.print {
+.zedsheet-icon .zedsheet-icon-img.print {
   left: -36px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.paintformat {
+.zedsheet-icon .zedsheet-icon-img.paintformat {
   left: -54px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.clearformat {
+.zedsheet-icon .zedsheet-icon-img.clearformat {
   left: -72px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.font-bold {
+.zedsheet-icon .zedsheet-icon-img.font-bold {
   left: -90px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.font-italic {
+.zedsheet-icon .zedsheet-icon-img.font-italic {
   left: -108px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.underline {
+.zedsheet-icon .zedsheet-icon-img.underline {
   left: -126px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.strike {
+.zedsheet-icon .zedsheet-icon-img.strike {
   left: -144px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.color {
+.zedsheet-icon .zedsheet-icon-img.color {
   left: -162px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.bgcolor {
+.zedsheet-icon .zedsheet-icon-img.bgcolor {
   left: -180px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.merge {
+.zedsheet-icon .zedsheet-icon-img.merge {
   left: -198px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.align-left {
+.zedsheet-icon .zedsheet-icon-img.align-left {
   left: -216px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.align-center {
+.zedsheet-icon .zedsheet-icon-img.align-center {
   left: -234px;
   top: 0;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.align-right {
+.zedsheet-icon .zedsheet-icon-img.align-right {
   left: 0;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.align-top {
+.zedsheet-icon .zedsheet-icon-img.align-top {
   left: -18px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.align-middle {
+.zedsheet-icon .zedsheet-icon-img.align-middle {
   left: -36px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.align-bottom {
+.zedsheet-icon .zedsheet-icon-img.align-bottom {
   left: -54px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.textwrap {
+.zedsheet-icon .zedsheet-icon-img.textwrap {
   left: -72px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.autofilter {
+.zedsheet-icon .zedsheet-icon-img.autofilter {
   left: -90px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.formula {
+.zedsheet-icon .zedsheet-icon-img.formula {
   left: -108px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.arrow-down {
+.zedsheet-icon .zedsheet-icon-img.arrow-down {
   left: -126px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.arrow-right {
+.zedsheet-icon .zedsheet-icon-img.arrow-right {
   left: -144px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.link {
+.zedsheet-icon .zedsheet-icon-img.link {
   left: -162px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.chart {
+.zedsheet-icon .zedsheet-icon-img.chart {
   left: -180px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.freeze {
+.zedsheet-icon .zedsheet-icon-img.freeze {
   left: -198px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.ellipsis {
+.zedsheet-icon .zedsheet-icon-img.ellipsis {
   left: -216px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.add {
+.zedsheet-icon .zedsheet-icon-img.add {
   left: -234px;
   top: -18px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-all {
+.zedsheet-icon .zedsheet-icon-img.border-all {
   left: 0;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-inside {
+.zedsheet-icon .zedsheet-icon-img.border-inside {
   left: -18px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-horizontal {
+.zedsheet-icon .zedsheet-icon-img.border-horizontal {
   left: -36px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-vertical {
+.zedsheet-icon .zedsheet-icon-img.border-vertical {
   left: -54px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-outside {
+.zedsheet-icon .zedsheet-icon-img.border-outside {
   left: -72px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-left {
+.zedsheet-icon .zedsheet-icon-img.border-left {
   left: -90px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-top {
+.zedsheet-icon .zedsheet-icon-img.border-top {
   left: -108px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-right {
+.zedsheet-icon .zedsheet-icon-img.border-right {
   left: -126px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-bottom {
+.zedsheet-icon .zedsheet-icon-img.border-bottom {
   left: -144px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.border-none {
+.zedsheet-icon .zedsheet-icon-img.border-none {
   left: -162px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.line-color {
+.zedsheet-icon .zedsheet-icon-img.line-color {
   left: -180px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.line-type {
+.zedsheet-icon .zedsheet-icon-img.line-type {
   left: -198px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.close {
+.zedsheet-icon .zedsheet-icon-img.close {
   left: -234px;
   top: -36px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.chevron-down {
+.zedsheet-icon .zedsheet-icon-img.chevron-down {
   left: 0;
   top: -54px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.chevron-up {
+.zedsheet-icon .zedsheet-icon-img.chevron-up {
   left: -18px;
   top: -54px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.chevron-left {
+.zedsheet-icon .zedsheet-icon-img.chevron-left {
   left: -36px;
   top: -54px;
 }
-.x-spreadsheet-icon .x-spreadsheet-icon-img.chevron-right {
+.zedsheet-icon .zedsheet-icon-img.chevron-right {
   left: -54px;
   top: -54px;
 }
