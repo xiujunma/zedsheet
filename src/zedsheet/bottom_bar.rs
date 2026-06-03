@@ -1,5 +1,6 @@
 use gloo::utils::window;
 use wasm_bindgen::JsCast;
+use web_sys::{HtmlElement, HtmlTextAreaElement};
 use crate::component::element::Element;
 use crate::core::data_proxy::DataProxy;
 #[allow(unused_imports)]
@@ -50,12 +51,20 @@ pub(crate) fn switch_sheet(
 
 /// Wire the bottom bar: tab clicks switch sheets, double-click renames,
 /// right-click deletes, and the add button appends a sheet.
+///
+/// Takes the in-cell editor handles because every sheet swap must commit a
+/// pending edit FIRST: `commit_edit` writes through the renderer's current
+/// data, so an unreconciled commit after the swap would land the value on
+/// the wrong sheet.
 pub(crate) fn wire_bottombar(
     menu_el: Element,
     mut add_el: Element,
     renderer: &SharedRenderer,
     sheets: &Sheets,
     active: &ActiveSheet,
+    textarea: &HtmlTextAreaElement,
+    editor_error: Option<HtmlElement>,
+    editing: &EditingCell,
     sync: &SyncFn,
 ) {
     let menu_node = menu_el.el.clone().unwrap();
@@ -73,6 +82,9 @@ pub(crate) fn wire_bottombar(
         let active = active.clone();
         let menu_for_handler = menu_node.clone();
         let sync = sync.clone();
+        let textarea = textarea.clone();
+        let editor_error = editor_error.clone();
+        let editing = editing.clone();
         let mut menu_el_mut = menu_el;
         menu_el_mut.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
@@ -83,6 +95,10 @@ pub(crate) fn wire_bottombar(
                 .or_else(|| el.closest("[data-index]").ok().flatten());
             let Some(li) = li else { return };
             if let Some(idx) = li.get_attribute("data-index").and_then(|s| s.parse::<usize>().ok()) {
+                // Commit a pending edit to THIS sheet before swapping data.
+                if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
+                    return;
+                }
                 switch_sheet(&renderer, &sheets, &active, &menu_for_handler, idx);
                 sync();
             }
@@ -123,11 +139,18 @@ pub(crate) fn wire_bottombar(
         let active = active.clone();
         let menu_for = menu_node.clone();
         let sync = sync.clone();
+        let textarea = textarea.clone();
+        let editor_error = editor_error.clone();
+        let editing = editing.clone();
         let mut menu_ctx: Element = menu_node.clone().into();
         menu_ctx.add_event_listener("contextmenu", move |event: web_sys::Event| {
             event.prevent_default();
             let Some(idx) = tab_index_from_event(&event) else { return };
             if sheets.borrow().len() <= 1 {
+                return;
+            }
+            // Settle a pending edit before any data swap (see wire_bottombar).
+            if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
                 return;
             }
             let nm = sheets.borrow()[idx].name.clone();
@@ -167,7 +190,14 @@ pub(crate) fn wire_bottombar(
         let active = active.clone();
         let menu_for_add = menu_node.clone();
         let sync = sync.clone();
+        let textarea = textarea.clone();
+        let editor_error = editor_error.clone();
+        let editing = editing.clone();
         add_el.add_event_listener("click", move |_event: web_sys::Event| {
+            // Settle a pending edit before any data swap (see wire_bottombar).
+            if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
+                return;
+            }
             let new_idx = {
                 let mut s = sheets.borrow_mut();
                 let n = s.len() + 1;

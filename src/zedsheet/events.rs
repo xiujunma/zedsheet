@@ -52,6 +52,16 @@ pub(crate) fn wire_events(
             let me: MouseEvent = event.dyn_into().unwrap();
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
 
+            // Every canvas interaction below can scroll the viewport, resize
+            // geometry, or move the selection out from under the open editor
+            // overlay (whose position is fixed at `start_edit`), so commit it
+            // before processing. On validation failure the editor stays open
+            // (issue #9) and the interaction is swallowed so nothing shifts
+            // under the invalid editor.
+            if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
+                return;
+            }
+
             // Header boundary → start a resize.
             let resize = renderer.borrow().resize_target(x, y);
             if let Some(kind) = resize {
@@ -171,10 +181,8 @@ pub(crate) fn wire_events(
                 return;
             }
 
-            // Click-outside silently commits; on validation failure, the
-            // editor stays open with the red border (issue #9). Either way,
-            // we still fall through and process the click.
-            let _ = commit_edit(&renderer, &textarea, editor_error.as_ref(), &editing);
+            // (Click-outside committed the open editor at the top of this
+            // handler, so the click below always lands on a settled grid.)
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
                 // Ctrl/Cmd-click on a hyperlink cell follows the link.
@@ -318,9 +326,19 @@ pub(crate) fn wire_events(
     // wheel: scroll the body by whole cells.
     {
         let renderer = renderer.clone();
+        let textarea = textarea.clone();
+        let editing = editing.clone();
+        let editor_error = editor_error_node.clone();
         canvas_el.add_event_listener("wheel", move |event: web_sys::Event| {
             let we: WheelEvent = event.clone().dyn_into().unwrap();
             we.prevent_default();
+            // Scrolling re-renders the grid (and its canvas-drawn selection)
+            // at new screen positions while the absolutely-positioned editor
+            // would stay at stale pixels — commit it first. An invalid value
+            // keeps the editor open and swallows the scroll (issue #9).
+            if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
+                return;
+            }
             let dy = we.delta_y();
             let dx = we.delta_x();
             let d_rows = if dy > 0.0 { 1 } else if dy < 0.0 { -1 } else { 0 };

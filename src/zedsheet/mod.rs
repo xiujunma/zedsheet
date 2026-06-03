@@ -560,7 +560,7 @@ impl ZedSheet {
             &renderer,
             &textarea,
             &editing,
-            editor_error_node,
+            editor_error_node.clone(),
             list_popover_node.clone(),
             list_popover_visible.clone(),
             filter_menu_node.clone(),
@@ -604,7 +604,17 @@ impl ZedSheet {
             wire_dropdown(node, kind, title_id, &renderer);
         }
         if let (Some(menu), Some(add)) = (bottom_menu_el, bottom_add_el) {
-            wire_bottombar(menu, add, &renderer, &sheets, &active, &sync);
+            wire_bottombar(
+                menu,
+                add,
+                &renderer,
+                &sheets,
+                &active,
+                &textarea,
+                editor_error_node,
+                &editing,
+                &sync,
+            );
         }
         if let Some(fp) = find_node {
             wire_find(fp, &renderer, &sync);

@@ -334,6 +334,25 @@ pub(crate) fn commit_edit(
     result
 }
 
+/// Commit the open in-cell editor before an interaction that would scroll
+/// the viewport, resize geometry, or swap the data out from under it
+/// (wheel, scrollbar/resize drags, sheet switches). The editor overlay is
+/// positioned once at `start_edit`, so any of those would leave it floating
+/// over the wrong cell. Returns `false` when a validation failure keeps the
+/// editor open (issue #9) — the caller must swallow the interaction so
+/// nothing moves under the invalid editor.
+pub(crate) fn reconcile_editor(
+    renderer: &SharedRenderer,
+    textarea: &HtmlTextAreaElement,
+    editor_error: Option<&HtmlElement>,
+    editing: &EditingCell,
+) -> bool {
+    if editing.borrow().is_none() {
+        return true;
+    }
+    commit_edit(renderer, textarea, editor_error, editing).is_ok()
+}
+
 /// Open the list-validity popover (issue #9) anchored at `(x, y)` showing
 /// the allowed values for the cell. The popover element is mutated in
 /// place; its `data-cell` attribute records the (ri, ci) for the click
