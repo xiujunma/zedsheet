@@ -66,7 +66,11 @@ const manifest = {
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 
 // npmjs.com renders the package README; make repo-relative links absolute.
+// Images must point at raw.githubusercontent.com (blob/ URLs serve an HTML
+// page, not image bytes) — rewrite them FIRST, then the remaining doc links.
+const RAW_URL = REPO_URL.replace("github.com", "raw.githubusercontent.com");
 const readme = readFileSync(path.join(root, "README.md"), "utf8")
+  .replace(/(!\[[^\]]*\]\()\.\/([^)]+?\.(?:png|jpe?g|gif|svg))\)/g, `$1${RAW_URL}/main/$2)`)
   .replaceAll("](./", `](${REPO_URL}/blob/main/`);
 writeFileSync(path.join(pkgDir, "README.md"), readme);
 copyFileSync(path.join(root, "LICENSE"), path.join(pkgDir, "LICENSE"));

@@ -6,6 +6,8 @@ the grid is drawn on a single `<canvas>` and the surrounding chrome (toolbar,
 formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 `wasm-bindgen` / `web-sys`.
 
+![zedsheet — canvas grid, formula engine, currency formats, notes & links](./docs/screenshot.png)
+
 ## Features
 
 **Grid & data**
