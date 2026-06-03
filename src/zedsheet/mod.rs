@@ -571,7 +571,16 @@ impl ZedSheet {
             wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
-            wire_formula_bar(fb, &renderer, &sync, fx_menu_node, toast_node);
+            wire_formula_bar(
+                fb,
+                &renderer,
+                &textarea,
+                editor_error_node.clone(),
+                &editing,
+                &sync,
+                fx_menu_node,
+                toast_node,
+            );
         }
         // Map of toolbar action → dropdown menu node (for show-on-click).
         let mut menus: Vec<(String, web_sys::Element)> = dropdown_nodes

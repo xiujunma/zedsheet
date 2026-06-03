@@ -36,6 +36,9 @@ pub(crate) fn fx_menu_html() -> String {
 pub(crate) fn wire_formula_bar(
     fbar: web_sys::Element,
     renderer: &SharedRenderer,
+    textarea: &HtmlTextAreaElement,
+    editor_error: Option<HtmlElement>,
+    editing: &EditingCell,
     sync: &SyncFn,
     fx_menu: Option<web_sys::Element>,
     toast_node: Option<HtmlElement>,
@@ -53,6 +56,31 @@ pub(crate) fn wire_formula_bar(
     let cancel = fbar.query_selector(".zs-fb-cancel").ok().flatten();
     let confirm = fbar.query_selector(".zs-fb-confirm").ok().flatten();
     let fx_span = fbar.query_selector(".zs-fx").ok().flatten();
+
+    // Focusing the formula bar while the in-cell editor is open commits the
+    // editor first: both edit the same cell, and the bar's commit path
+    // (Enter / ✓: write the active cell, move the selection) would otherwise
+    // run under a still-open editor — leaving it floating over a moved
+    // selection with two competing values. On validation failure, focus is
+    // sent straight back to the invalid editor (issue #9 keeps it open).
+    for input in [name_box.clone(), formula_input.clone()].into_iter().flatten() {
+        let renderer = renderer.clone();
+        let textarea = textarea.clone();
+        let editing = editing.clone();
+        let editor_error = editor_error.clone();
+        let sync = sync.clone();
+        let mut el: Element = input.dyn_into::<web_sys::Element>().unwrap().into();
+        el.add_event_listener("focus", move |_e: web_sys::Event| {
+            if editing.borrow().is_none() {
+                return;
+            }
+            if reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
+                sync(); // refresh the bar with the just-committed value
+            } else {
+                let _ = textarea.focus();
+            }
+        });
+    }
 
     // fx picker: click fx to open the menu, click a function to insert it.
     if let (Some(fx_span), Some(menu), Some(fi)) = (fx_span, fx_menu.clone(), formula_input.clone()) {
@@ -74,8 +102,11 @@ pub(crate) fn wire_formula_bar(
                 let Some(name) = elx.get_attribute("data-fxfn") else { return };
                 let value = format!("={}()", name);
                 let caret = value.len().saturating_sub(1) as u32;
-                fi.set_value(&value);
+                // Focus FIRST: the focus guard above may commit an open cell
+                // editor and sync() the input — doing it after set_value
+                // would clobber the inserted template.
                 let _ = fi.focus();
+                fi.set_value(&value);
                 let _ = fi.set_selection_range(caret, caret);
                 hide_palette(&menu_for_hide);
             });
@@ -218,15 +249,37 @@ pub(crate) fn wire_formula_bar(
 
     if let Some(c) = confirm {
         let commit = commit.clone();
+        let renderer = renderer.clone();
+        let textarea = textarea.clone();
+        let editing = editing.clone();
+        let editor_error = editor_error.clone();
+        let sync = sync.clone();
         let mut el: Element = c.into();
         el.add_event_listener("click", move |_e: web_sys::Event| {
+            // With the cell editor open, IT is the live edit session: ✓
+            // commits the editor's (fresher) text, not the bar's stale copy.
+            if editing.borrow().is_some() {
+                if reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
+                    sync();
+                } else {
+                    let _ = textarea.focus();
+                }
+                return;
+            }
             commit();
         });
     }
     if let Some(c) = cancel {
         let sync = sync.clone();
+        let textarea = textarea.clone();
+        let editing = editing.clone();
+        let editor_error = editor_error.clone();
         let mut el: Element = c.into();
         el.add_event_listener("click", move |_e: web_sys::Event| {
+            // With the cell editor open, ✗ cancels the edit session itself.
+            if editing.borrow().is_some() {
+                cancel_edit(&textarea, editor_error.as_ref(), &editing);
+            }
             sync();
         });
     }
