@@ -97,6 +97,13 @@ pub(crate) fn wire_toolbar(
             return;
         }
 
+        // Print renders the sheet into a hidden iframe and opens the native
+        // print dialog (issue #17).
+        if action == "print" {
+            open_print(&renderer);
+            return;
+        }
+
         // Dropdown buttons open their registered menu under the button.
         if let Some((_, menu)) = menus.iter().find(|(a, _)| *a == action) {
             show_palette_under(menu, &button);

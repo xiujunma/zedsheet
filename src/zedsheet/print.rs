@@ -1,0 +1,211 @@
+//! Print support (issue #17): render the active sheet's used extent to a
+//! print-friendly HTML document, load it into a hidden iframe, and call the
+//! iframe's `window.print()`. The browser's native dialog supplies paper
+//! size, orientation, margins, and scaling; `@page`/`break-inside` CSS keeps
+//! the table pagination tidy. The document builder is pure and host-tested.
+
+use wasm_bindgen::JsCast;
+use web_sys::HtmlIFrameElement;
+use crate::core::data_proxy::{DataProxy, Style};
+#[allow(unused_imports)]
+use super::*;
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Inline CSS for one cell, from its resolved style (conditional formats
+/// already applied by the caller).
+fn td_style(s: &Style) -> String {
+    let mut css = String::new();
+    // Skip the defaults (white fill, near-black text, left align) so a plain
+    // cell prints with an empty style attribute.
+    if let Some(bg) = &s.bgcolor {
+        if !matches!(bg.to_lowercase().as_str(), "#ffffff" | "#fff" | "white") {
+            css.push_str(&format!("background:{};", esc(bg)));
+        }
+    }
+    if !s.color.is_empty() && s.color != "#0a0a0a" {
+        css.push_str(&format!("color:{};", esc(&s.color)));
+    }
+    if s.bold {
+        css.push_str("font-weight:bold;");
+    }
+    if s.italic {
+        css.push_str("font-style:italic;");
+    }
+    if s.underline {
+        css.push_str("text-decoration:underline;");
+    }
+    if s.strike {
+        css.push_str("text-decoration:line-through;");
+    }
+    if !s.align.is_empty() && s.align != "left" {
+        css.push_str(&format!("text-align:{};", esc(&s.align)));
+    }
+    if s.text_wrap {
+        css.push_str("white-space:normal;word-break:break-word;");
+    }
+    if s.font_size != 10 {
+        css.push_str(&format!("font-size:{}px;", s.font_size + 2));
+    }
+    css
+}
+
+/// Build a standalone HTML document of the sheet's used extent: a fixed-layout
+/// table with the grid's column widths and row heights, merged cells as
+/// colspan/rowspan, display-formatted values, and per-cell styles (including
+/// conditional formatting, issue #11).
+pub(crate) fn build_print_html(sheet: &DataProxy) -> String {
+    let mut body = String::new();
+    if let Some((max_r, max_c)) = sheet.used_extent() {
+        body.push_str("<table><colgroup>");
+        for c in 0..=max_c {
+            body.push_str(&format!(
+                "<col style=\"width:{}px\"/>",
+                sheet.get_col_width(c) as i64
+            ));
+        }
+        body.push_str("</colgroup>");
+        for r in 0..=max_r {
+            body.push_str(&format!(
+                "<tr style=\"height:{}px\">",
+                sheet.get_row_height(r) as i64
+            ));
+            for c in 0..=max_c {
+                let merge = sheet.cell_merge(r, c);
+                if let Some(m) = &merge {
+                    // Only the merge origin renders; covered cells are skipped.
+                    if (r, c) != (m.sri, m.sci) {
+                        continue;
+                    }
+                }
+                let mut style = sheet.get_cell_style(r, c);
+                sheet.apply_cond_format(r, c, &mut style);
+                let span = merge
+                    .map(|m| {
+                        format!(
+                            " colspan=\"{}\" rowspan=\"{}\"",
+                            m.eci - m.sci + 1,
+                            m.eri - m.sri + 1
+                        )
+                    })
+                    .unwrap_or_default();
+                body.push_str(&format!(
+                    "<td{span} style=\"{}\">{}</td>",
+                    td_style(&style),
+                    esc(&sheet.cell_display_value(r, c))
+                ));
+            }
+            body.push_str("</tr>");
+        }
+        body.push_str("</table>");
+    }
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>{title}</title><style>\
+           @page {{ margin: 1.5cm; }}\
+           body {{ margin: 0; font: 12px Arial, sans-serif; }}\
+           table {{ border-collapse: collapse; table-layout: fixed; }}\
+           td {{ border: 1px solid #c8c8c8; padding: 2px 4px; overflow: hidden; \
+                 white-space: nowrap; vertical-align: middle; }}\
+           tr {{ break-inside: avoid; }}\
+         </style></head><body>{body}</body></html>",
+        title = esc(&sheet.name),
+        body = body
+    )
+}
+
+/// Print the active sheet: load the document into a hidden, reused iframe and
+/// invoke its `print()` once loaded (issue #17).
+pub(crate) fn open_print(renderer: &SharedRenderer) {
+    let html = build_print_html(&renderer.borrow().data);
+    let doc = gloo::utils::document();
+    // Replace any previous print frame so repeated prints stay clean.
+    if let Ok(Some(old)) = doc.query_selector("#zs-print-frame") {
+        old.remove();
+    }
+    let Ok(frame) = doc.create_element("iframe") else { return };
+    let _ = frame.set_attribute("id", "zs-print-frame");
+    let _ = frame.set_attribute(
+        "style",
+        "position:fixed;right:0;bottom:0;width:0;height:0;border:0;",
+    );
+    let _ = frame.set_attribute("srcdoc", &html);
+    let Some(body) = doc.body() else { return };
+    let _ = body.append_child(&frame);
+    // Print once the srcdoc document has loaded.
+    if let Some(iframe) = frame.dyn_ref::<HtmlIFrameElement>() {
+        let iframe_for_load = iframe.clone();
+        let mut el: crate::component::element::Element = frame.clone().into();
+        el.add_event_listener("load", move |_e: web_sys::Event| {
+            if let Some(w) = iframe_for_load.content_window() {
+                let _ = w.focus();
+                let _ = w.print();
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::cell_range::CellRange;
+
+    #[test]
+    fn print_html_contains_formatted_values_and_escapes() {
+        let mut d = DataProxy::new("Report");
+        d.set_cell_text(0, 0, "<b>safe</b>");
+        d.set_cell_text(0, 1, "2");
+        d.set_cell_text(0, 2, "=B1*3");
+        let html = build_print_html(&d);
+        assert!(html.contains("<title>Report</title>"));
+        assert!(html.contains("&lt;b&gt;safe&lt;/b&gt;"), "values are escaped");
+        assert!(!html.contains("<b>safe</b>"));
+        assert!(html.contains("<td style=\"\">6</td>"), "formula prints computed");
+    }
+
+    #[test]
+    fn print_html_renders_merges_as_spans() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "wide");
+        d.set_cell_text(1, 1, "x"); // extends the used extent past the merge
+        d.merges.add(CellRange::new(0, 0, 0, 1)); // A1:B1
+        let html = build_print_html(&d);
+        assert!(html.contains("colspan=\"2\" rowspan=\"1\""));
+        // The covered cell (0,1) is skipped: the first row has exactly one <td>.
+        let first_row = html.split("<tr").nth(1).unwrap();
+        assert_eq!(first_row.matches("<td").count(), 1);
+    }
+
+    #[test]
+    fn print_html_applies_styles_and_cond_formats() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "200");
+        let mut bold = Style::default();
+        bold.bold = true;
+        let idx = d.add_style(bold);
+        d.set_cell_style(0, 0, idx);
+        d.cond_formats.push(crate::core::cond_format::CondRule {
+            range: "A1".into(),
+            op: "gt".into(),
+            v1: "150".into(),
+            v2: String::new(),
+            bgcolor: Some("#ffc7ce".into()),
+            color: None,
+            bold: false,
+        });
+        let html = build_print_html(&d);
+        assert!(html.contains("font-weight:bold;"));
+        assert!(html.contains("background:#ffc7ce;"), "cond format prints too");
+    }
+
+    #[test]
+    fn empty_sheet_prints_an_empty_document() {
+        let html = build_print_html(&DataProxy::new("Empty"));
+        assert!(html.contains("<title>Empty</title>"));
+        assert!(!html.contains("<table>"));
+    }
+}
