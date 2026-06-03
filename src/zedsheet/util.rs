@@ -49,16 +49,19 @@ pub(crate) fn set_text_by_id(id: &str, text: &str) {
     }
 }
 
-/// Human label for a format key, shown in the format dropdown title.
+/// Short name for a format key, shown in the toolbar's format-dropdown
+/// title (a 72px box — longer "name + sample" labels wrap and bleed into
+/// the formula bar). The dropdown MENU items carry the full name + sample
+/// text; this title shows the name only.
 pub(crate) fn format_label(key: &str) -> &'static str {
     match key {
-        "number" => "Number 1,000.12",
-        "percent" => "Percent 10.12%",
-        "rmb" => "RMB ￥10.00",
-        "usd" => "USD $10.00",
-        "eur" => "EUR €10.00",
-        "date" => "Date 2024-01-15",
-        "time" => "Time 13:30:00",
+        "number" => "Number",
+        "percent" => "Percent",
+        "rmb" => "RMB",
+        "usd" => "USD",
+        "eur" => "EUR",
+        "date" => "Date",
+        "time" => "Time",
         "datetime" => "Date Time",
         "text" => "Text",
         _ => "Normal",
