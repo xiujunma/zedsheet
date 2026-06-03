@@ -481,6 +481,34 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                 .close_path()
                 .fill(None);
         }
+
+        // AutoFilter header glyph (issue #10): a small ▼ at the right edge of
+        // each header cell in the active filter range — blue when that column
+        // has an active value filter, gray otherwise.
+        if renderer
+            .data
+            .auto_filter
+            .hrange()
+            .map(|h| h.includes(row, col))
+            .unwrap_or(false)
+        {
+            let filtered = renderer
+                .data
+                .auto_filter
+                .get_filter(col)
+                .map(|f| f.operator == "in")
+                .unwrap_or(false);
+            let x1 = draw_rect.x + draw_rect.width;
+            let y_mid = draw_rect.y + draw_rect.height / 2f64;
+            canvas
+                .set_fill_style(if filtered { "#1a73e8" } else { "#5a5a5a" })
+                .begin_path()
+                .move_to(x1 - 12f64, y_mid - 3f64)
+                .line_to(x1 - 4f64, y_mid - 3f64)
+                .line_to(x1 - 8f64, y_mid + 3f64)
+                .close_path()
+                .fill(None);
+        }
     });
 }
 

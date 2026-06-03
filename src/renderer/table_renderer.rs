@@ -1471,6 +1471,86 @@ impl TableRenderer {
         self.data.delete_cells(r0, c0, r1, c1, horizontal);
     }
 
+    /// Toggle the AutoFilter on the selection (issue #10). A single-cell
+    /// selection expands to the sheet's used extent, so the common
+    /// "click one cell, hit the filter button" flow covers the whole table.
+    /// Toggling off reveals every row the filter hid.
+    pub fn toggle_autofilter(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        if self.data.can_autofilter() {
+            let (r0, c0, r1, c1) = self.selection_bounds();
+            let range = if r0 == r1 && c0 == c1 {
+                self.data
+                    .used_extent()
+                    .map(|(mr, mc)| CellRange::new(0, 0, mr, mc))
+                    .unwrap_or_else(|| CellRange::new(r0, c0, r1, c1))
+            } else {
+                CellRange::new(r0, c0, r1, c1)
+            };
+            // `autofilter()` reads the data selector — set it explicitly so the
+            // range never depends on selector-sync timing.
+            self.data.set_selected_range(range);
+        }
+        self.data.autofilter();
+    }
+
+    /// Set (or with `operator == "all"` clear) the value filter on column
+    /// `ci` and re-apply row visibility (issue #10).
+    pub fn set_column_filter(&mut self, ci: usize, operator: &str, values: Vec<String>) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        self.data.auto_filter.add_filter(ci, operator, values);
+        self.data.apply_filter_visibility();
+    }
+
+    /// Sort the filter range by column `ci` (issue #10).
+    pub fn sort_filter(&mut self, ci: usize, asc: bool) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        self.data.sort_filter_range(ci, asc);
+    }
+
+    /// Distinct displayed values in filter column `ci` as
+    /// `(value, count, currently_included)`, sorted for the dropdown
+    /// (issue #10).
+    pub fn filter_items(&self, ci: usize) -> Vec<(String, usize, bool)> {
+        let af = &self.data.auto_filter;
+        let counts = af.items(ci, |r, c| Some(self.data.cell_display_value(r, c)));
+        let current = af.get_filter(ci);
+        let mut out: Vec<(String, usize, bool)> = counts
+            .into_iter()
+            .map(|(v, n)| {
+                let checked = current.is_none_or(|f| f.includes(&v));
+                (v, n, checked)
+            })
+            .collect();
+        out.sort_by(|a, b| crate::core::data_proxy::cmp_cell_values(&a.0, &b.0, true));
+        out
+    }
+
+    /// If `(x, y)` hits the dropdown glyph on an AutoFilter header cell, the
+    /// column index (issue #10). The glyph occupies the rightmost ~17px.
+    pub fn filter_glyph_hit(&self, x: f64, y: f64) -> Option<usize> {
+        let hrange = self.data.auto_filter.hrange()?;
+        let (ri, ci) = self.cell_at(x, y)?;
+        if !hrange.includes(ri, ci) {
+            return None;
+        }
+        let rect = self.cell_screen_rect(ri, ci);
+        let in_glyph = x >= rect.x + rect.width - 17.0
+            && x <= rect.x + rect.width
+            && y >= rect.y
+            && y <= rect.y + rect.height;
+        in_glyph.then_some(ci)
+    }
+
     /// Set the freeze origin (rows above `ri` and columns left of `ci` stay
     /// fixed), keeping the renderer and the data model in sync so the freeze
     /// persists across serialization and sheet switches (issue #18).

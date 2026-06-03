@@ -115,6 +115,7 @@ pub(crate) fn wire_toolbar(
             "merge" => r.merge_selection(),
             "clearformat" => r.clear_format(),
             // "freeze" opens a dropdown (registered in `menus`), handled above.
+            "autofilter" => r.toggle_autofilter(),
             "align-left" => r.set_align("left"),
             "align-center" => r.set_align("center"),
             "align-right" => r.set_align("right"),

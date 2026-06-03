@@ -17,6 +17,8 @@ pub(crate) fn wire_events(
     editor_error_node: Option<HtmlElement>,
     list_popover_node: Option<web_sys::Element>,
     list_popover_visible: Rc<RefCell<bool>>,
+    filter_menu_node: Option<web_sys::Element>,
+    filter_menu_visible: Rc<RefCell<bool>>,
     sync: &SyncFn,
 ) {
     let dragging = Rc::new(RefCell::new(false));
@@ -44,6 +46,8 @@ pub(crate) fn wire_events(
         let sync = sync.clone();
         let list_popover = list_popover_node.clone();
         let list_popover_visible = list_popover_visible.clone();
+        let filter_menu = filter_menu_node.clone();
+        let filter_menu_visible = filter_menu_visible.clone();
         canvas_el.add_event_listener("mousedown", move |event: web_sys::Event| {
             let me: MouseEvent = event.dyn_into().unwrap();
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
@@ -73,6 +77,34 @@ pub(crate) fn wire_events(
                 renderer.borrow_mut().start_fill();
                 *drag.borrow_mut() =
                     Some(DragState { kind: DragKind::Fill, start_x: x, start_y: y, start_size: 0f64 });
+                return;
+            }
+
+            // AutoFilter header glyph (issue #10): clicking the ▼ on a header
+            // cell of the active filter range opens the filter menu. Deferred
+            // a tick (like the list popover) so the global outside-click
+            // closer, which sees this same mousedown, doesn't immediately
+            // close the menu we just opened.
+            let filter_hit = renderer.borrow().filter_glyph_hit(x, y);
+            if let Some(f_ci) = filter_hit {
+                let menu_for_open = filter_menu.clone();
+                let renderer_for_open = renderer.clone();
+                let visible_for_open = filter_menu_visible.clone();
+                let cb = Closure::<dyn FnMut()>::new(move || {
+                    show_filter_menu(
+                        menu_for_open.as_ref(),
+                        &renderer_for_open,
+                        f_ci, x, y,
+                        &visible_for_open,
+                    );
+                });
+                if let Some(w) = web_sys::window() {
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        cb.as_ref().unchecked_ref(),
+                        0,
+                    );
+                }
+                cb.forget();
                 return;
             }
 

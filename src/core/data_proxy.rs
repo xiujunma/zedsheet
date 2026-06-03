@@ -733,7 +733,7 @@ impl DataProxy {
 
     /// Hide or reveal row `ri`.
     pub fn set_row_hidden(&mut self, ri: usize, hide: bool) {
-        self.rows.entry(ri).or_insert_with(Row::default).set_hide(hide);
+        self.rows.entry(ri).or_default().set_hide(hide);
     }
 
     /// Whether row `ri` is currently hidden.
@@ -763,7 +763,7 @@ impl DataProxy {
     }
 
     fn put_cell(&mut self, r: usize, c: usize, cell: Cell) {
-        self.rows.entry(r).or_insert_with(Row::default).cells.insert(c, cell);
+        self.rows.entry(r).or_default().cells.insert(c, cell);
     }
 
     /// Insert a blank block over the rectangle (`r0,c0`)–(`r1,c1`), pushing the
@@ -959,10 +959,88 @@ impl DataProxy {
 
     pub fn autofilter(&mut self) {
         if self.auto_filter.active() {
+            // Clearing the filter reveals every data row it may have hidden.
+            if let Some(range) = self.auto_filter.range() {
+                for ri in (range.sri + 1)..=range.eri {
+                    self.set_row_hidden(ri, false);
+                }
+            }
             self.auto_filter.clear();
         } else {
             self.auto_filter.ref_ = Some(self.selector.range.to_string());
         }
+    }
+
+    /// The bounding (max_row, max_col) over all non-empty cells, if any —
+    /// used to expand a single-cell selection to the whole table when the
+    /// filter toggles on (issue #10).
+    pub fn used_extent(&self) -> Option<(usize, usize)> {
+        let mut out: Option<(usize, usize)> = None;
+        for (ri, row) in &self.rows {
+            for (ci, cell) in &row.cells {
+                if !cell.text.is_empty() {
+                    let (mr, mc) = out.unwrap_or((0, 0));
+                    out = Some((mr.max(*ri), mc.max(*ci)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Re-evaluate the active filters and hide/reveal the data rows of the
+    /// autofilter range accordingly (issue #10). Filters match on the
+    /// *displayed* value (formula results, applied formats) — the same string
+    /// the filter dropdown lists. Rows outside the range are untouched.
+    pub fn apply_filter_visibility(&mut self) {
+        let af = self.auto_filter.clone();
+        let (hidden, visible) = af.filtered_rows(|ri, ci| Some(self.cell_display_value(ri, ci)));
+        for ri in &visible {
+            self.set_row_hidden(*ri, false);
+        }
+        for ri in &hidden {
+            self.set_row_hidden(*ri, true);
+        }
+    }
+
+    /// Sort the autofilter range's data rows (header row excluded) by column
+    /// `ci`, moving only the cells within the range's column span so data
+    /// outside the table stays put (issue #10). Keys are displayed values:
+    /// numbers compare numerically, text case-insensitively, blanks last.
+    pub fn sort_filter_range(&mut self, ci: usize, asc: bool) {
+        let Some(range) = self.auto_filter.range() else { return };
+        let (sri, eri) = (range.sri + 1, range.eri);
+        if sri > eri {
+            return;
+        }
+        let (sci, eci) = (range.sci, range.eci);
+        let mut entries: Vec<(String, HashMap<usize, Cell>)> = (sri..=eri)
+            .map(|ri| {
+                let key = self.cell_display_value(ri, ci);
+                let cells = self
+                    .rows
+                    .get(&ri)
+                    .map(|row| {
+                        row.cells
+                            .iter()
+                            .filter(|(c, _)| **c >= sci && **c <= eci)
+                            .map(|(c, cell)| (*c, cell.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (key, cells)
+            })
+            .collect();
+        entries.sort_by(|a, b| cmp_cell_values(&a.0, &b.0, asc));
+        for (offset, (_, cells)) in entries.into_iter().enumerate() {
+            let row = self.rows.entry(sri + offset).or_default();
+            row.cells.retain(|c, _| *c < sci || *c > eci);
+            for (c, cell) in cells {
+                row.cells.insert(c, cell);
+            }
+        }
+        self.auto_filter.set_sort(ci, Some(if asc { "asc" } else { "desc" }));
+        // Rows moved, so the hidden/visible assignment must be recomputed.
+        self.apply_filter_visibility();
     }
 
     pub fn add_style(&mut self, style: Style) -> usize {
@@ -1159,6 +1237,29 @@ fn adjust_formula_refs(
 /// (`drow`, `dcol`) — the copy/fill transform. `$`-anchored components stay
 /// put. Sheet prefixes are masked out so the regex only touches refs
 /// (issue #4).
+/// Order two cell display values for sorting (issue #10): numbers compare
+/// numerically, text case-insensitively, and blanks always sort last
+/// regardless of direction (matching Excel).
+pub(crate) fn cmp_cell_values(a: &str, b: &str, asc: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (ea, eb) = (a.trim().is_empty(), b.trim().is_empty());
+    match (ea, eb) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Greater,
+        (false, true) => return Ordering::Less,
+        (false, false) => {}
+    }
+    let ord = match (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+        (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+        _ => a.to_lowercase().cmp(&b.to_lowercase()),
+    };
+    if asc {
+        ord
+    } else {
+        ord.reverse()
+    }
+}
+
 fn shift_formula_refs(text: &str, drow: isize, dcol: isize) -> String {
     let (masked, placeholders) = mask_sheet_prefixes(text);
     let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
@@ -1678,6 +1779,90 @@ mod tests {
         d.insert_cells(1, 0, 3, 0, false);
         assert_eq!(d.get_cell_text(0, 0), "keep"); // above the band, intact
         assert_eq!(d.get_cell_text(6, 0), "below"); // 3 + 3
+    }
+
+    // --- Sort & AutoFilter (issue #10) ---
+
+    /// A1:B4 table — header row + 3 data rows; the filter range covers it.
+    fn filter_fixture() -> DataProxy {
+        let mut d = DataProxy::new("t");
+        for (ri, name, score) in [(1, "carol", "33"), (2, "alice", "2"), (3, "bob", "10")] {
+            d.set_cell_text(ri, 0, name);
+            d.set_cell_text(ri, 1, score);
+        }
+        d.set_cell_text(0, 0, "Name");
+        d.set_cell_text(0, 1, "Score");
+        d.set_selected_range(CellRange::new(0, 0, 3, 1));
+        d.autofilter(); // ref = A1:B4
+        d
+    }
+
+    #[test]
+    fn filter_in_hides_nonmatching_rows_and_all_reveals() {
+        let mut d = filter_fixture();
+        d.auto_filter.add_filter(0, "in", vec!["alice".into(), "bob".into()]);
+        d.apply_filter_visibility();
+        assert!(d.is_row_hidden(1), "carol row should hide");
+        assert!(!d.is_row_hidden(2) && !d.is_row_hidden(3));
+        assert!(!d.is_row_hidden(0), "header row never hides");
+
+        d.auto_filter.add_filter(0, "all", vec![]);
+        d.apply_filter_visibility();
+        assert!(!d.is_row_hidden(1), "'all' reveals previously hidden rows");
+    }
+
+    #[test]
+    fn toggling_autofilter_off_reveals_hidden_rows() {
+        let mut d = filter_fixture();
+        d.auto_filter.add_filter(0, "in", vec!["alice".into()]);
+        d.apply_filter_visibility();
+        assert!(d.is_row_hidden(1) && d.is_row_hidden(3));
+        d.autofilter(); // toggle off
+        assert!(!d.auto_filter.active());
+        assert!(!d.is_row_hidden(1) && !d.is_row_hidden(3));
+    }
+
+    #[test]
+    fn sort_filter_range_numeric_and_desc() {
+        let mut d = filter_fixture();
+        d.sort_filter_range(1, true); // by Score asc: 2, 10, 33
+        assert_eq!(
+            [d.get_cell_text(1, 1), d.get_cell_text(2, 1), d.get_cell_text(3, 1)],
+            ["2", "10", "33"]
+        );
+        // Whole data rows move together: names follow their scores.
+        assert_eq!(
+            [d.get_cell_text(1, 0), d.get_cell_text(2, 0), d.get_cell_text(3, 0)],
+            ["alice", "bob", "carol"]
+        );
+        assert_eq!(d.get_cell_text(0, 1), "Score", "header row not sorted");
+
+        d.sort_filter_range(1, false); // desc: 33, 10, 2
+        assert_eq!(
+            [d.get_cell_text(1, 1), d.get_cell_text(2, 1), d.get_cell_text(3, 1)],
+            ["33", "10", "2"]
+        );
+        assert_eq!(d.auto_filter.sort.as_ref().map(|s| s.order.as_str()), Some("desc"));
+    }
+
+    #[test]
+    fn sort_leaves_columns_outside_the_range_alone() {
+        let mut d = filter_fixture(); // range is A1:B4
+        d.set_cell_text(1, 3, "d1"); // column D, outside
+        d.set_cell_text(3, 3, "d3");
+        d.sort_filter_range(0, true); // names asc reorders rows 1..=3
+        assert_eq!(d.get_cell_text(1, 3), "d1", "outside column untouched");
+        assert_eq!(d.get_cell_text(3, 3), "d3");
+    }
+
+    #[test]
+    fn cmp_cell_values_blanks_always_last() {
+        use std::cmp::Ordering;
+        assert_eq!(cmp_cell_values("", "5", true), Ordering::Greater);
+        assert_eq!(cmp_cell_values("", "5", false), Ordering::Greater);
+        assert_eq!(cmp_cell_values("5", "", false), Ordering::Less);
+        assert_eq!(cmp_cell_values("10", "9", true), Ordering::Greater); // numeric, not lexicographic
+        assert_eq!(cmp_cell_values("Apple", "banana", true), Ordering::Less); // case-insensitive
     }
 
     #[test]

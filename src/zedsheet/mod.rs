@@ -24,6 +24,7 @@ mod formula_bar;
 mod toolbar;
 mod context_menu;
 mod data_validation;
+mod filter_menu;
 mod find_replace;
 mod bottom_bar;
 mod events;
@@ -33,6 +34,7 @@ pub(crate) use formula_bar::*;
 pub(crate) use toolbar::*;
 pub(crate) use context_menu::*;
 pub(crate) use data_validation::*;
+pub(crate) use filter_menu::*;
 pub(crate) use find_replace::*;
 pub(crate) use bottom_bar::*;
 pub(crate) use events::*;
@@ -498,6 +500,47 @@ impl ZedSheet {
             cb.forget();
         }
 
+        // AutoFilter dropdown (issue #10): a single reused panel opened from
+        // the ▼ glyph on a filter-range header cell (wired in `wire_events`).
+        let mut filter_menu_el = h("div", Some("zs-filtermenu"));
+        let filter_menu_node: Option<web_sys::Element> =
+            filter_menu_el.el.clone().and_then(|e| e.dyn_into().ok());
+        let _ = filter_menu_node.as_ref().map(|n| {
+            let _ = n.set_attribute(
+                "style",
+                "display:none;position:absolute;z-index:900;background:#fff;\
+                 border:1px solid #999;box-shadow:1px 2px 6px rgba(0,0,0,0.2);\
+                 padding:4px 0;margin:0;font-size:13px;min-width:180px;",
+            );
+        });
+        root.append_child(&mut filter_menu_el);
+        let filter_menu_visible: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+        if let Some(ref fm) = filter_menu_node {
+            wire_filter_menu(fm.clone(), &renderer, &sync, &filter_menu_visible);
+        }
+        // Outside click closes the filter menu.
+        {
+            let fm = filter_menu_node.clone();
+            let fm_visible_for_outside = filter_menu_visible.clone();
+            let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+                if !*fm_visible_for_outside.borrow() {
+                    return;
+                }
+                let Some(fm_el) = fm.as_ref() else { return };
+                let target = event.target();
+                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                    return;
+                };
+                if !fm_el.contains(Some(&target_el)) {
+                    let _ = fm_el.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                    *fm_visible_for_outside.borrow_mut() = false;
+                }
+            });
+            let _ = window()
+                .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+            cb.forget();
+        }
+
         wire_events(
             &mut canvas_el,
             &renderer,
@@ -506,6 +549,8 @@ impl ZedSheet {
             editor_error_node,
             list_popover_node.clone(),
             list_popover_visible.clone(),
+            filter_menu_node.clone(),
+            filter_menu_visible.clone(),
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
