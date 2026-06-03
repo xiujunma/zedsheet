@@ -136,10 +136,13 @@ impl ZedSheet {
         let mut tab_menu_node: Option<web_sys::Element> = None;
         if options.show_bottom_bar {
             let mut bottom = h("div", Some(&format!("{}-bottombar", CSS_PREFIX)));
+            // Sprite-based add(+) icon, matching the reference bottombar
+            // (`new Icon('add')`). A text "+" inside `.{p}-icon` gets clipped
+            // to a dot by the class's 18px overflow-hidden box.
             let mut add_btn = h("span", Some(&format!("{}-icon", CSS_PREFIX)));
-            add_btn.set_inner_html("&#43;".to_string()); // plus sign
+            add_btn.set_inner_html(format!("<div class=\"{}-icon-img add\"></div>", CSS_PREFIX));
             let _ = add_btn.el.as_ref().map(|e| {
-                let _ = e.set_attribute("style", "cursor:pointer;padding:0 10px;font-size:18px;line-height:40px;display:inline-block;");
+                let _ = e.set_attribute("style", "cursor:pointer;margin:11px 4px 11px 8px;");
             });
             let mut menu = h("ul", Some(&format!("{}-menu", CSS_PREFIX)));
             bottom.append_child(&mut add_btn);
