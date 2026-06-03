@@ -270,7 +270,8 @@ impl DataProxy {
             let mut visited: Visited = HashSet::new();
             visited.insert((self.name.clone(), ri, ci));
             match self.eval_expr(expr, &mut visited) {
-                Ok(v) => format_number(v),
+                Ok(Value::Number(v)) => format_number(v),
+                Ok(Value::Text(s)) => s,
                 Err(e) => return e.code().to_string(),
             }
         } else {
@@ -281,15 +282,17 @@ impl DataProxy {
         crate::core::format::format_value(&raw, &fmt)
     }
 
-    /// Resolve a cell to a numeric value for use inside a formula. Error values
-    /// propagate; non-numeric text resolves to 0; nested formulas recurse with
-    /// a circular-ref guard.
-    fn resolve_numeric(&self, ri: usize, ci: usize, visited: &mut Visited) -> Result<f64, EvalErr> {
+    /// Resolve a cell to a formula value (issue #2). Error values propagate;
+    /// numeric text becomes a number and date text its serial (so `=A1+1`
+    /// works); other text stays text so string functions and comparisons see
+    /// it. Blank cells resolve to 0, matching the engine's historic numeric
+    /// behavior. Nested formulas recurse with a circular-ref guard.
+    fn resolve_value(&self, ri: usize, ci: usize, visited: &mut Visited) -> Result<Value, EvalErr> {
         // Key by sheet so the same (row, col) on different sheets don't collide
         // and a cross-sheet cycle is detected (issue #4).
         let key = (self.name.clone(), ri, ci);
         if visited.contains(&key) {
-            return Ok(0.0);
+            return Ok(Value::Number(0.0));
         }
         let text = self.get_cell_text(ri, ci);
         if let Some(e) = EvalErr::from_literal(&text) {
@@ -301,39 +304,49 @@ impl DataProxy {
             visited.remove(&key);
             v
         } else {
-            // Plain numbers first; otherwise a date string resolves to its serial
-            // so date arithmetic (e.g. `=A1+1`) and date functions work.
             let t = text.trim();
-            Ok(t.parse::<f64>()
-                .unwrap_or_else(|_| crate::core::date::parse_date(t).unwrap_or(0.0)))
+            if t.is_empty() {
+                Ok(Value::Number(0.0))
+            } else if let Ok(n) = t.parse::<f64>() {
+                Ok(Value::Number(n))
+            } else if let Some(serial) = crate::core::date::parse_date(t) {
+                Ok(Value::Number(serial))
+            } else {
+                Ok(Value::Text(text))
+            }
         }
     }
 
-    fn eval_expr(&self, expr: &str, visited: &mut Visited) -> Result<f64, EvalErr> {
+    fn eval_expr(&self, expr: &str, visited: &mut Visited) -> Result<Value, EvalErr> {
         let tokens = tokenize(expr);
         let mut pos = 0usize;
         let v = self.parse_cmp(&tokens, &mut pos, visited)?;
         Ok(v)
     }
 
-    // expr := add ((= | == | > | < | >= | <=) add)*  — comparisons yield 1.0/0.0
-    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
+    // expr := add ((= | == | <> | > | < | >= | <=) add)* — comparisons yield 1/0.
+    // Numbers compare numerically, text case-insensitively; a number never
+    // equals text (and orders before it), matching Excel.
+    fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
         let mut v = self.parse_add(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
-                if matches!(op.as_str(), "=" | "==" | ">" | "<" | ">=" | "<=") {
+                if matches!(op.as_str(), "=" | "==" | "<>" | ">" | "<" | ">=" | "<=") {
                     let op = op.clone();
                     *pos += 1;
                     let r = self.parse_add(t, pos, vis)?;
+                    use std::cmp::Ordering::*;
+                    let ord = compare_values(&v, &r);
                     let b = match op.as_str() {
-                        "=" | "==" => v == r,
-                        ">" => v > r,
-                        "<" => v < r,
-                        ">=" => v >= r,
-                        "<=" => v <= r,
+                        "=" | "==" => ord == Some(Equal),
+                        "<>" => ord != Some(Equal),
+                        ">" => ord == Some(Greater),
+                        "<" => ord == Some(Less),
+                        ">=" => matches!(ord, Some(Greater | Equal)),
+                        "<=" => matches!(ord, Some(Less | Equal)),
                         _ => false,
                     };
-                    v = if b { 1.0 } else { 0.0 };
+                    v = Value::Number(if b { 1.0 } else { 0.0 });
                     continue;
                 }
             }
@@ -342,15 +355,16 @@ impl DataProxy {
         Ok(v)
     }
 
-    // expr := term (('+' | '-') term)*
-    fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
+    // expr := term (('+' | '-') term)* — arithmetic coerces text to numbers.
+    fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
         let mut v = self.parse_mul(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
                 if op == "+" || op == "-" {
                     *pos += 1;
-                    let r = self.parse_mul(t, pos, vis)?;
-                    v = if op == "+" { v + r } else { v - r };
+                    let r = self.parse_mul(t, pos, vis)?.as_number();
+                    let l = v.as_number();
+                    v = Value::Number(if op == "+" { l + r } else { l - r });
                     continue;
                 }
             }
@@ -360,20 +374,21 @@ impl DataProxy {
     }
 
     // term := factor (('*' | '/') factor)*
-    fn parse_mul(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
+    fn parse_mul(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
         let mut v = self.parse_factor(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
                 if op == "*" || op == "/" {
                     *pos += 1;
-                    let r = self.parse_factor(t, pos, vis)?;
+                    let r = self.parse_factor(t, pos, vis)?.as_number();
+                    let l = v.as_number();
                     if op == "*" {
-                        v *= r;
+                        v = Value::Number(l * r);
                     } else {
                         if r == 0.0 {
                             return Err(EvalErr::Div0);
                         }
-                        v /= r;
+                        v = Value::Number(l / r);
                     }
                     continue;
                 }
@@ -384,12 +399,12 @@ impl DataProxy {
     }
 
     // factor := Number | '-' factor | '(' expr ')' | Function '(' args ')' | CellRef
-    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<f64, EvalErr> {
+    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
         let tok = t.get(*pos).ok_or(EvalErr::Value)?.clone();
         match tok {
             Token::Number(n) => {
                 *pos += 1;
-                Ok(n)
+                Ok(Value::Number(n))
             }
             Token::Error(code) => {
                 *pos += 1;
@@ -397,7 +412,7 @@ impl DataProxy {
             }
             Token::Operator(op) if op == "-" => {
                 *pos += 1;
-                Ok(-self.parse_factor(t, pos, vis)?)
+                Ok(Value::Number(-self.parse_factor(t, pos, vis)?.as_number()))
             }
             Token::Operator(op) if op == "+" => {
                 *pos += 1;
@@ -416,13 +431,32 @@ impl DataProxy {
                 if matches!(t.get(*pos), Some(Token::LeftParen)) {
                     *pos += 1;
                 }
-                let args = self.parse_args(t, pos, vis)?;
-                apply_function(&name, &args)
+                let args = self.parse_args(t, pos, vis);
+                // IFERROR sees per-argument results: the first argument's
+                // error selects the fallback instead of propagating (issue #2).
+                if name.eq_ignore_ascii_case("IFERROR") {
+                    let mut it = args.into_iter();
+                    return match it.next() {
+                        Some(Ok(a)) => Ok(a.into_scalar()),
+                        Some(Err(_)) | None => match it.next() {
+                            Some(Ok(a)) => Ok(a.into_scalar()),
+                            Some(Err(e)) => Err(e),
+                            None => Ok(Value::Number(0.0)),
+                        },
+                    };
+                }
+                // Every other function propagates the first failing argument,
+                // preserving the engine's historic error behavior.
+                let mut ok_args = Vec::with_capacity(args.len());
+                for a in args {
+                    ok_args.push(a?);
+                }
+                apply_function(&name, &ok_args)
             }
             Token::CellRef(r) => {
                 *pos += 1;
                 let (c, row) = exp2xy(&r);
-                self.resolve_numeric(row, c, vis)
+                self.resolve_value(row, c, vis)
             }
             Token::SheetCellRef { sheet, ref_ } => {
                 *pos += 1;
@@ -433,7 +467,7 @@ impl DataProxy {
                     // Thread the SAME visited set through (keyed by sheet name),
                     // so a cross-sheet cycle is caught instead of recursing
                     // forever (issue #4).
-                    target.resolve_numeric(row, c, vis)
+                    target.resolve_value(row, c, vis)
                 } else {
                     Err(EvalErr::Ref)
                 }
@@ -443,57 +477,75 @@ impl DataProxy {
                 // Scalar context: a named range resolves to its top-left cell;
                 // an undefined name is a #NAME? error.
                 match self.resolve_name(&n) {
-                    Some((r0, c0, _, _)) => self.resolve_numeric(r0, c0, vis),
+                    Some((r0, c0, _, _)) => self.resolve_value(r0, c0, vis),
                     None => Err(EvalErr::Name),
                 }
             }
             Token::String(s) => {
                 *pos += 1;
-                Ok(s.trim().parse::<f64>().unwrap_or(0.0))
+                Ok(Value::Text(s))
             }
             _ => Err(EvalErr::Value),
         }
     }
 
-    // Parse a comma-separated argument list (until RightParen), flattening
-    // any `A1:B3` ranges into the individual cell values they cover.
-    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Vec<f64>, EvalErr> {
+    /// Resolve a rectangular block to a row-major grid of values.
+    fn resolve_grid(
+        &self,
+        r0: usize,
+        c0: usize,
+        r1: usize,
+        c1: usize,
+        vis: &mut Visited,
+    ) -> Result<Arg, EvalErr> {
+        let mut rows = Vec::with_capacity(r1 - r0 + 1);
+        for r in r0..=r1 {
+            let mut row = Vec::with_capacity(c1 - c0 + 1);
+            for c in c0..=c1 {
+                row.push(self.resolve_value(r, c, vis)?);
+            }
+            rows.push(row);
+        }
+        Ok(Arg::Range(rows))
+    }
+
+    // Parse a comma-separated argument list (until RightParen). Scalars become
+    // `Arg::Scalar`; `A1:B3`-style ranges keep their shape as `Arg::Range`
+    // grids so SUMIF/VLOOKUP/INDEX can see rows and columns (issue #2). Each
+    // argument resolves independently — a failing one is captured as `Err`
+    // (IFERROR recovers from it; everything else propagates it) and the token
+    // cursor resyncs to the next comma / closing paren.
+    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Vec<Result<Arg, EvalErr>> {
         let mut args = Vec::new();
         if matches!(t.get(*pos), Some(Token::RightParen)) {
             *pos += 1;
-            return Ok(args);
+            return args;
         }
         loop {
             // Sheet-qualified range: `Sheet2!A1:B3` (issue #4).
-            if let Some(Token::SheetRange { sheet, from, to }) = t.get(*pos).cloned() {
-                let target = self.find_sheet(&sheet).ok_or(EvalErr::Ref)?;
-                let (c0, r0) = exp2xy(&from);
-                let (c1, r1) = exp2xy(&to);
-                let (r0, r1) = (r0.min(r1), r0.max(r1));
-                let (c0, c1) = (c0.min(c1), c0.max(c1));
-                // Thread the same sheet-keyed visited set through (issue #4).
-                for r in r0..=r1 {
-                    for c in c0..=c1 {
-                        args.push(target.resolve_numeric(r, c, vis)?);
-                    }
-                }
+            let arg: Result<Arg, EvalErr> = if let Some(Token::SheetRange { sheet, from, to }) =
+                t.get(*pos).cloned()
+            {
                 *pos += 1;
+                match self.find_sheet(&sheet) {
+                    // Thread the same sheet-keyed visited set through (issue #4).
+                    Some(target) => {
+                        let (c0, r0) = exp2xy(&from);
+                        let (c1, r1) = exp2xy(&to);
+                        target.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)
+                    }
+                    None => Err(EvalErr::Ref),
+                }
             // Range: CellRef ':' CellRef
             } else if let (Some(Token::CellRef(a)), Some(Token::Colon), Some(Token::CellRef(b))) =
                 (t.get(*pos), t.get(*pos + 1), t.get(*pos + 2))
             {
                 let (c0, r0) = exp2xy(a);
                 let (c1, r1) = exp2xy(b);
-                let (r0, r1) = (r0.min(r1), r0.max(r1));
-                let (c0, c1) = (c0.min(c1), c0.max(c1));
-                for r in r0..=r1 {
-                    for c in c0..=c1 {
-                        args.push(self.resolve_numeric(r, c, vis)?);
-                    }
-                }
                 *pos += 3;
+                self.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)
             } else if let Some(Token::Name(n)) = t.get(*pos).cloned() {
-                // A bare named range as an argument expands to its cells; a name
+                // A bare named range as an argument expands to its grid; a name
                 // inside a larger expression (e.g. `Rev*2`) falls through to the
                 // scalar handling in parse_cmp/parse_factor.
                 let bare = matches!(
@@ -501,37 +553,48 @@ impl DataProxy {
                     Some(Token::Comma) | Some(Token::RightParen) | None
                 );
                 if bare {
+                    *pos += 1;
                     match self.resolve_name(&n) {
-                        Some((r0, c0, r1, c1)) => {
-                            for r in r0..=r1 {
-                                for c in c0..=c1 {
-                                    args.push(self.resolve_numeric(r, c, vis)?);
-                                }
-                            }
-                            *pos += 1;
-                        }
-                        None => return Err(EvalErr::Name),
+                        Some((r0, c0, r1, c1)) => self.resolve_grid(r0, c0, r1, c1, vis),
+                        None => Err(EvalErr::Name),
                     }
                 } else {
-                    args.push(self.parse_cmp(t, pos, vis)?);
+                    self.parse_cmp(t, pos, vis).map(Arg::Scalar)
                 }
             } else {
-                args.push(self.parse_cmp(t, pos, vis)?);
-            }
+                self.parse_cmp(t, pos, vis).map(Arg::Scalar)
+            };
+            args.push(arg);
 
-            match t.get(*pos) {
-                Some(Token::Comma) => {
-                    *pos += 1;
+            // Resync to the next separator: on the happy path the cursor is
+            // already there; after a failed parse this skips the remainder of
+            // the argument (tracking nesting depth).
+            let mut depth = 0usize;
+            loop {
+                match t.get(*pos) {
+                    Some(Token::Comma) if depth == 0 => {
+                        *pos += 1;
+                        break; // next argument
+                    }
+                    Some(Token::RightParen) if depth == 0 => {
+                        *pos += 1;
+                        return args;
+                    }
+                    Some(Token::LeftParen) => {
+                        depth += 1;
+                        *pos += 1;
+                    }
+                    Some(Token::RightParen) => {
+                        depth -= 1;
+                        *pos += 1;
+                    }
+                    Some(_) => {
+                        *pos += 1;
+                    }
+                    None => return args,
                 }
-                Some(Token::RightParen) => {
-                    *pos += 1;
-                    break;
-                }
-                None => break,
-                _ => break,
             }
         }
-        Ok(args)
     }
 
     /// The resolved style for a cell (from the styles table), or the default.
@@ -1424,10 +1487,355 @@ impl EvalErr {
     }
 }
 
-fn apply_function(name: &str, args: &[f64]) -> Result<f64, EvalErr> {
+/// A formula value (issue #2): numbers stay `f64`; text survives the trip
+/// through the evaluator so string functions and comparisons can see it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Value {
+    Number(f64),
+    Text(String),
+}
+
+impl Value {
+    /// Numeric coercion, mirroring the engine's historic behavior: numeric
+    /// text parses, date text becomes its serial, anything else is 0.
+    fn as_number(&self) -> f64 {
+        match self {
+            Value::Number(n) => *n,
+            Value::Text(s) => {
+                let t = s.trim();
+                t.parse::<f64>()
+                    .unwrap_or_else(|_| crate::core::date::parse_date(t).unwrap_or(0.0))
+            }
+        }
+    }
+
+    /// Text coercion: numbers render the way the grid displays them.
+    fn as_text(&self) -> String {
+        match self {
+            Value::Number(n) => format_number(*n),
+            Value::Text(s) => s.clone(),
+        }
+    }
+
+    fn is_truthy(&self) -> bool {
+        self.as_number() != 0.0
+    }
+}
+
+/// One function argument: a scalar or a row-major range grid (issue #2).
+#[derive(Debug, Clone)]
+enum Arg {
+    Scalar(Value),
+    Range(Vec<Vec<Value>>),
+}
+
+impl Arg {
+    /// Scalar context: a range collapses to its top-left cell.
+    fn into_scalar(self) -> Value {
+        match self {
+            Arg::Scalar(v) => v,
+            Arg::Range(rows) => rows
+                .into_iter()
+                .flatten()
+                .next()
+                .unwrap_or(Value::Number(0.0)),
+        }
+    }
+
+    fn to_scalar(&self) -> Value {
+        self.clone().into_scalar()
+    }
+
+    /// Row-major cells; a scalar is a 1×1 range.
+    fn cells(&self) -> Vec<Value> {
+        match self {
+            Arg::Scalar(v) => vec![v.clone()],
+            Arg::Range(rows) => rows.iter().flatten().cloned().collect(),
+        }
+    }
+
+    /// The grid view (scalars are 1×1).
+    fn grid(&self) -> Vec<Vec<Value>> {
+        match self {
+            Arg::Scalar(v) => vec![vec![v.clone()]],
+            Arg::Range(rows) => rows.clone(),
+        }
+    }
+}
+
+/// Compare two values Excel-style: numbers numerically, text
+/// case-insensitively; a number never equals text (and orders before it).
+/// `None` only for NaN comparisons, where every operator yields false.
+fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y),
+        (Value::Text(x), Value::Text(y)) => Some(x.to_lowercase().cmp(&y.to_lowercase())),
+        (Value::Number(_), Value::Text(_)) => Some(Ordering::Less),
+        (Value::Text(_), Value::Number(_)) => Some(Ordering::Greater),
+    }
+}
+
+/// Flatten arguments row-major (ranges expand; scalars pass through).
+fn flatten_values(args: &[Arg]) -> Vec<Value> {
+    args.iter().flat_map(|a| a.cells()).collect()
+}
+
+/// Build a reusable matcher from a SUMIF/COUNTIF-style criterion: a leading
+/// comparator (`>= <= <> > < =`) compares numerically or as text; `*`/`?`
+/// wildcards match text; anything else is (numeric or case-insensitive)
+/// equality (issue #2).
+fn criteria_matcher(criterion: &Value) -> Box<dyn Fn(&Value) -> bool> {
+    use std::cmp::Ordering::*;
+    let c = criterion.as_text();
+    for op in [">=", "<=", "<>", ">", "<", "="] {
+        if let Some(rest) = c.strip_prefix(op) {
+            let rhs = rest
+                .trim()
+                .parse::<f64>()
+                .map(Value::Number)
+                .unwrap_or_else(|_| Value::Text(rest.trim().to_string()));
+            let op = op.to_string();
+            return Box::new(move |v| {
+                let ord = compare_values(v, &rhs);
+                match op.as_str() {
+                    "=" => ord == Some(Equal),
+                    "<>" => ord != Some(Equal),
+                    ">" => ord == Some(Greater),
+                    "<" => ord == Some(Less),
+                    ">=" => matches!(ord, Some(Greater | Equal)),
+                    "<=" => matches!(ord, Some(Less | Equal)),
+                    _ => false,
+                }
+            });
+        }
+    }
+    if c.contains('*') || c.contains('?') {
+        let mut re = String::from("(?i)^");
+        for ch in c.chars() {
+            match ch {
+                '*' => re.push_str(".*"),
+                '?' => re.push('.'),
+                _ => re.push_str(&regex::escape(&ch.to_string())),
+            }
+        }
+        re.push('$');
+        if let Ok(rx) = regex::Regex::new(&re) {
+            return Box::new(move |v| rx.is_match(&v.as_text()));
+        }
+    }
+    if let Ok(n) = c.trim().parse::<f64>() {
+        return Box::new(move |v| compare_values(v, &Value::Number(n)) == Some(Equal));
+    }
+    Box::new(move |v| v.as_text().eq_ignore_ascii_case(&c))
+}
+
+/// VLOOKUP/HLOOKUP core: search the first column/row; exact when
+/// `approx == false`, else the last key ≤ needle (assumes the keys are
+/// sorted ascending, like Excel). Missing → #N/A, bad index → #REF!.
+fn lookup(
+    needle: &Value,
+    grid: &[Vec<Value>],
+    idx: usize,
+    approx: bool,
+    vertical: bool,
+) -> Result<Value, EvalErr> {
+    use std::cmp::Ordering::*;
+    let n = if vertical { grid.len() } else { grid.first().map_or(0, Vec::len) };
+    let key = |i: usize| -> Option<&Value> {
+        if vertical {
+            grid.get(i)?.first()
+        } else {
+            grid.first()?.get(i)
+        }
+    };
+    let out = |i: usize| -> Result<Value, EvalErr> {
+        let v = if vertical {
+            grid.get(i).and_then(|r| r.get(idx))
+        } else {
+            grid.get(idx).and_then(|r| r.get(i))
+        };
+        v.cloned().ok_or(EvalErr::Ref)
+    };
+    let mut best: Option<usize> = None;
+    for i in 0..n {
+        let Some(k) = key(i) else { continue };
+        match compare_values(k, needle) {
+            Some(Equal) => return out(i),
+            Some(Less) if approx => best = Some(i),
+            _ => {}
+        }
+    }
+    match best {
+        Some(i) if approx => out(i),
+        _ => Err(EvalErr::Na),
+    }
+}
+
+/// MATCH core: 0 = exact, 1 = largest ≤ needle (ascending), -1 = smallest ≥
+/// needle (descending). 1-based position; missing → #N/A.
+fn match_position(needle: &Value, cells: &[Value], mode: f64) -> Result<Value, EvalErr> {
+    use std::cmp::Ordering::*;
+    let mut best: Option<usize> = None;
+    for (i, v) in cells.iter().enumerate() {
+        let ord = compare_values(v, needle);
+        match mode as i64 {
+            0 => {
+                if ord == Some(Equal) {
+                    return Ok(Value::Number((i + 1) as f64));
+                }
+            }
+            -1 => match ord {
+                Some(Equal) => return Ok(Value::Number((i + 1) as f64)),
+                Some(Greater) => best = Some(i),
+                _ => {}
+            },
+            _ => match ord {
+                Some(Equal) => return Ok(Value::Number((i + 1) as f64)),
+                Some(Less) => best = Some(i),
+                _ => {}
+            },
+        }
+    }
+    best.map(|i| Value::Number((i + 1) as f64)).ok_or(EvalErr::Na)
+}
+
+/// Text, criteria, and lookup functions (issue #2) — the ones that need real
+/// values or range shape. `None` means "not one of these" and the flattened
+/// numeric catalog below takes over.
+fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, EvalErr> {
+    let scalar = |i: usize| -> Value {
+        args.get(i).map(|a| a.to_scalar()).unwrap_or(Value::Number(0.0))
+    };
+    let text = |i: usize| scalar(i).as_text();
+    let num = |i: usize| scalar(i).as_number();
+
+    let v = match upper {
+        "CONCAT" | "CONCATENATE" => {
+            Value::Text(flatten_values(args).iter().map(Value::as_text).collect())
+        }
+        "LEN" => Value::Number(text(0).chars().count() as f64),
+        "UPPER" => Value::Text(text(0).to_uppercase()),
+        "LOWER" => Value::Text(text(0).to_lowercase()),
+        "TRIM" => Value::Text(text(0).trim().to_string()),
+        "LEFT" => {
+            let n = if args.len() >= 2 { num(1).max(0.0) as usize } else { 1 };
+            Value::Text(text(0).chars().take(n).collect())
+        }
+        "RIGHT" => {
+            let s: Vec<char> = text(0).chars().collect();
+            let n = if args.len() >= 2 { num(1).max(0.0) as usize } else { 1 };
+            Value::Text(s[s.len().saturating_sub(n)..].iter().collect())
+        }
+        "MID" => {
+            if args.len() < 3 {
+                return Err(EvalErr::Value);
+            }
+            let start = (num(1).max(1.0) as usize).saturating_sub(1);
+            let n = num(2).max(0.0) as usize;
+            Value::Text(text(0).chars().skip(start).take(n).collect())
+        }
+        "TEXT" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            Value::Text(crate::core::format::format_value(&text(0), &text(1)))
+        }
+        "COUNTIF" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            let matches = criteria_matcher(&scalar(1));
+            let mut n = 0usize;
+            for v in args[0].cells().iter() {
+                if matches(v) {
+                    n += 1;
+                }
+            }
+            Value::Number(n as f64)
+        }
+        "SUMIF" | "AVERAGEIF" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            let matches = criteria_matcher(&scalar(1));
+            let test = args[0].cells();
+            // The optional third argument is the range actually summed,
+            // paired positionally with the tested one (Excel semantics).
+            let pool = if args.len() >= 3 { args[2].cells() } else { test.clone() };
+            let mut sum = 0.0;
+            let mut n = 0usize;
+            for (i, probe) in test.iter().enumerate() {
+                if matches(probe) {
+                    sum += pool.get(i).map(Value::as_number).unwrap_or(0.0);
+                    n += 1;
+                }
+            }
+            if upper == "SUMIF" {
+                Value::Number(sum)
+            } else if n == 0 {
+                return Err(EvalErr::Div0);
+            } else {
+                Value::Number(sum / n as f64)
+            }
+        }
+        "VLOOKUP" | "HLOOKUP" => {
+            if args.len() < 3 {
+                return Err(EvalErr::Value);
+            }
+            let needle = scalar(0);
+            let grid = args[1].grid();
+            let idx = (num(2) as usize).saturating_sub(1);
+            let approx = if args.len() >= 4 { scalar(3).is_truthy() } else { true };
+            return lookup(&needle, &grid, idx, approx, upper == "VLOOKUP").map(Some);
+        }
+        "INDEX" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            let grid = args[0].grid();
+            let (rows, cols) = (grid.len(), grid.first().map_or(0, Vec::len));
+            let a = num(1) as usize; // 1-based
+            let (r, c) = if args.len() >= 3 {
+                (a, num(2) as usize)
+            } else if rows == 1 {
+                (1, a)
+            } else if cols == 1 {
+                (a, 1)
+            } else {
+                return Err(EvalErr::Ref);
+            };
+            if r == 0 || c == 0 || r > rows || c > cols {
+                return Err(EvalErr::Ref);
+            }
+            grid[r - 1][c - 1].clone()
+        }
+        "MATCH" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            let needle = scalar(0);
+            let cells = args[1].cells(); // a single row or column flattens cleanly
+            let mode = if args.len() >= 3 { num(2) } else { 1.0 };
+            return match_position(&needle, &cells, mode).map(Some);
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(v))
+}
+
+fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
+    let upper = name.to_uppercase();
+    // Text / criteria / lookup functions need values or range shape (issue #2).
+    if let Some(v) = apply_special_function(&upper, fargs)? {
+        return Ok(v);
+    }
+    // Everything else works on the flattened numeric view, exactly as this
+    // engine always has (numeric text coerces; other text counts as 0).
+    let args: Vec<f64> = flatten_values(fargs).iter().map(Value::as_number).collect();
+    let args: &[f64] = &args;
     let first = args.first().copied().unwrap_or(0.0);
     let second = args.get(1).copied().unwrap_or(0.0);
-    let upper = name.to_uppercase();
     let v = match upper.as_str() {
         // Aggregation
         "SUM" => args.iter().sum(),
@@ -1524,7 +1932,7 @@ fn apply_function(name: &str, args: &[f64]) -> Result<f64, EvalErr> {
     if matches!(upper.as_str(), "SQRT" | "LN" | "LOG" | "LOG10") && !v.is_finite() {
         return Err(EvalErr::Num);
     }
-    Ok(v)
+    Ok(Value::Number(v))
 }
 
 fn bool_f64(b: bool) -> f64 {
@@ -1853,6 +2261,127 @@ mod tests {
         d.sort_filter_range(0, true); // names asc reorders rows 1..=3
         assert_eq!(d.get_cell_text(1, 3), "d1", "outside column untouched");
         assert_eq!(d.get_cell_text(3, 3), "d3");
+    }
+
+    // --- Issue #2: text, criteria, and lookup functions (Value engine) ---
+
+    /// Build a sheet from `(row, col, text)` triples and evaluate `formula`
+    /// in a spare cell, returning its display value.
+    fn eval_with(cells: &[(usize, usize, &str)], formula: &str) -> String {
+        let mut d = DataProxy::new("t");
+        for (r, c, t) in cells {
+            d.set_cell_text(*r, *c, t);
+        }
+        d.set_cell_text(60, 60, formula);
+        d.cell_display_value(60, 60)
+    }
+
+    #[test]
+    fn text_functions() {
+        let cells = [(0, 0, "hello"), (0, 1, "World")];
+        assert_eq!(eval_with(&cells, "=UPPER(A1)"), "HELLO");
+        assert_eq!(eval_with(&cells, "=LOWER(B1)"), "world");
+        assert_eq!(eval_with(&cells, "=LEN(A1)"), "5");
+        assert_eq!(eval_with(&cells, "=LEFT(A1, 2)"), "he");
+        assert_eq!(eval_with(&cells, "=LEFT(A1)"), "h");
+        assert_eq!(eval_with(&cells, "=RIGHT(A1, 3)"), "llo");
+        assert_eq!(eval_with(&cells, "=MID(A1, 2, 3)"), "ell");
+        assert_eq!(eval_with(&cells, "=TRIM(\"  x  \")"), "x");
+        assert_eq!(eval_with(&cells, "=CONCAT(A1, \" \", B1)"), "hello World");
+        assert_eq!(eval_with(&cells, "=CONCATENATE(A1, B1)"), "helloWorld");
+        assert_eq!(eval_with(&cells, "=CONCAT(\"v\", 1+1)"), "v2"); // numbers coerce
+        assert_eq!(eval_with(&[], "=TEXT(1234.5, \"#,##0.00\")"), "1,234.50");
+    }
+
+    #[test]
+    fn string_comparisons_and_not_equal() {
+        let cells = [(0, 0, "apple")];
+        assert_eq!(eval_with(&cells, "=IF(A1=\"apple\", 1, 0)"), "1");
+        assert_eq!(eval_with(&cells, "=IF(A1=\"APPLE\", 1, 0)"), "1"); // case-insensitive
+        assert_eq!(eval_with(&cells, "=IF(A1<>\"pear\", 1, 0)"), "1");
+        assert_eq!(eval_with(&cells, "=IF(A1<\"banana\", 1, 0)"), "1"); // a… < b…
+        assert_eq!(eval_with(&cells, "=IF(A1=5, 1, 0)"), "0"); // text ≠ number
+        assert_eq!(eval_with(&[], "=IF(2<>2, 1, 0)"), "0"); // numeric <>
+    }
+
+    #[test]
+    fn iferror_recovers_from_errors() {
+        let cells = [(0, 0, "10"), (0, 1, "0")];
+        assert_eq!(eval_with(&cells, "=IFERROR(A1/B1, \"fallback\")"), "fallback");
+        assert_eq!(eval_with(&cells, "=IFERROR(A1/2, \"fallback\")"), "5");
+        assert_eq!(eval_with(&cells, "=IFERROR(SQRT(-1), 42)"), "42");
+    }
+
+    #[test]
+    fn countif_sumif_averageif() {
+        let cells = [
+            (0, 0, "apple"),
+            (0, 1, "10"),
+            (1, 0, "banana"),
+            (1, 1, "20"),
+            (2, 0, "apricot"),
+            (2, 1, "30"),
+            (3, 0, "banana"),
+            (3, 1, "40"),
+        ];
+        assert_eq!(eval_with(&cells, "=COUNTIF(A1:A4, \"banana\")"), "2");
+        assert_eq!(eval_with(&cells, "=COUNTIF(A1:A4, \"ap*\")"), "2"); // wildcard
+        assert_eq!(eval_with(&cells, "=COUNTIF(B1:B4, \">15\")"), "3");
+        assert_eq!(eval_with(&cells, "=SUMIF(B1:B4, \">15\")"), "90");
+        assert_eq!(eval_with(&cells, "=SUMIF(A1:A4, \"banana\", B1:B4)"), "60");
+        assert_eq!(eval_with(&cells, "=AVERAGEIF(B1:B4, \"<>10\")"), "30");
+        assert_eq!(eval_with(&cells, "=AVERAGEIF(A1:A4, \"plum\", B1:B4)"), "#DIV/0!");
+    }
+
+    #[test]
+    fn vlookup_and_hlookup() {
+        let cells = [
+            (0, 0, "1"),
+            (0, 1, "one"),
+            (1, 0, "2"),
+            (1, 1, "two"),
+            (2, 0, "3"),
+            (2, 1, "three"),
+            // HLOOKUP table at D1:E2 — keys across the top.
+            (0, 3, "x"),
+            (0, 4, "y"),
+            (1, 3, "ex"),
+            (1, 4, "why"),
+        ];
+        assert_eq!(eval_with(&cells, "=VLOOKUP(2, A1:B3, 2)"), "two");
+        assert_eq!(eval_with(&cells, "=VLOOKUP(2.7, A1:B3, 2)"), "two"); // approx: last ≤
+        assert_eq!(eval_with(&cells, "=VLOOKUP(0.5, A1:B3, 2)"), "#N/A"); // below table
+        assert_eq!(eval_with(&cells, "=VLOOKUP(2.7, A1:B3, 2, 0)"), "#N/A"); // exact mode
+        assert_eq!(eval_with(&cells, "=HLOOKUP(\"y\", D1:E2, 2)"), "why");
+    }
+
+    #[test]
+    fn index_and_match() {
+        let cells = [
+            (0, 0, "a"),
+            (0, 1, "b"),
+            (1, 0, "c"),
+            (1, 1, "d"),
+            (4, 0, "10"),
+            (5, 0, "20"),
+            (6, 0, "30"),
+        ];
+        assert_eq!(eval_with(&cells, "=INDEX(A1:B2, 2, 1)"), "c");
+        assert_eq!(eval_with(&cells, "=INDEX(A5:A7, 3)"), "30"); // single column
+        assert_eq!(eval_with(&cells, "=INDEX(A1:B2, 5, 1)"), "#REF!");
+        assert_eq!(eval_with(&cells, "=MATCH(\"d\", A2:B2, 0)"), "2");
+        assert_eq!(eval_with(&cells, "=MATCH(25, A5:A7, 1)"), "2"); // largest ≤ 25
+        assert_eq!(eval_with(&cells, "=MATCH(99, A5:A7, 0)"), "#N/A");
+    }
+
+    #[test]
+    fn formulas_returning_text_display_and_nest() {
+        let cells = [(0, 0, "abc"), (1, 0, "=UPPER(A1)")];
+        // A formula's text result feeds other formulas (carried as text).
+        assert_eq!(eval_with(&cells, "=LEN(A2)"), "3");
+        assert_eq!(eval_with(&cells, "=IF(A2=\"ABC\", 1, 0)"), "1");
+        // SUM over a text cell still treats it as 0 (historic behavior).
+        assert_eq!(eval_with(&cells, "=SUM(A1, 5)"), "5");
     }
 
     #[test]
