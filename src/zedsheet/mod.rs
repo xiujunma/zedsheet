@@ -70,6 +70,8 @@ pub(crate) type OpenHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 pub(crate) type GetDataFn = Rc<dyn Fn() -> String>;
 /// Replaces the whole workbook from a JSON string and re-renders (issue #20).
 pub(crate) type LoadDataFn = Rc<dyn Fn(&str)>;
+/// Snapshot of the live active sheet (issue #15: CSV exports the active sheet).
+pub(crate) type ActiveSheetFn = Rc<dyn Fn() -> DataProxy>;
 
 /// Top-level spreadsheet. Builds the DOM shell (toolbar + sheet canvas + bottom
 /// bar), owns the shared renderer, and wires pointer/keyboard interaction.
@@ -77,6 +79,7 @@ pub struct ZedSheet {
     renderer: SharedRenderer,
     get_data: GetDataFn,
     load_data: LoadDataFn,
+    active_sheet: ActiveSheetFn,
 }
 
 impl ZedSheet {
@@ -663,6 +666,10 @@ impl ZedSheet {
             let active = active.clone();
             Rc::new(move || current_workbook_json(&renderer, &sheets, &active))
         };
+        let active_sheet: ActiveSheetFn = {
+            let renderer = renderer.clone();
+            Rc::new(move || renderer.borrow().data_clone())
+        };
         let load_data: LoadDataFn = {
             let renderer = renderer.clone();
             let sheets = sheets.clone();
@@ -700,6 +707,7 @@ impl ZedSheet {
             renderer,
             get_data,
             load_data,
+            active_sheet,
         }
     }
 
@@ -716,6 +724,11 @@ impl ZedSheet {
     /// refreshing the sheet tabs (issue #20).
     pub(crate) fn load_data_fn(&self) -> LoadDataFn {
         self.load_data.clone()
+    }
+
+    /// Closure that snapshots the live active sheet (issue #15).
+    pub(crate) fn active_sheet_fn(&self) -> ActiveSheetFn {
+        self.active_sheet.clone()
     }
 
     /// The workbook-wide sheets registry, so the host can toggle per-sheet

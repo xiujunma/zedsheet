@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use gloo::utils::window;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;

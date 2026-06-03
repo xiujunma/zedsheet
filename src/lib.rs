@@ -24,7 +24,7 @@ mod persist;
 use core::data_proxy::{DataProxy, Style, SheetsRegistry};
 use core::cell_range::CellRange;
 use component::options::Options;
-use zedsheet::{GetDataFn, LoadDataFn, ZedSheet};
+use zedsheet::{ActiveSheetFn, GetDataFn, LoadDataFn, ZedSheet};
 
 /// Everything `lib` needs to keep about a mounted workbook: the get/load
 /// closures backing the public JS API (issue #20) and the sheet registry used
@@ -32,6 +32,7 @@ use zedsheet::{GetDataFn, LoadDataFn, ZedSheet};
 struct MountHandle {
     get_data: GetDataFn,
     load_data: LoadDataFn,
+    active_sheet: ActiveSheetFn,
     sheets: Option<SheetsRegistry>,
 }
 
@@ -100,6 +101,7 @@ fn mount_into(selector: &str, data: DataProxy) {
     let handle = MountHandle {
         get_data: sheet.get_data_fn(),
         load_data: sheet.load_data_fn(),
+        active_sheet: sheet.active_sheet_fn(),
         sheets: sheet.sheets_registry(),
     };
     MOUNTS.with(|m| {
@@ -180,6 +182,55 @@ pub fn load_data(selector: &str, json: &str) {
 #[wasm_bindgen]
 pub fn on_change(selector: &str, callback: js_sys::Function) {
     persist::set_on_change(selector, Some(callback));
+}
+
+/// Export the mounted workbook's ACTIVE sheet as CSV (CSV is single-sheet).
+/// Formula cells export their computed values. `None` for an unmounted
+/// selector (issue #15).
+#[wasm_bindgen]
+pub fn export_csv(selector: &str) -> Option<String> {
+    MOUNTS.with(|m| {
+        m.borrow()
+            .get(selector)
+            .map(|h| core::csv::to_csv(&(h.active_sheet)()))
+    })
+}
+
+/// Replace the mounted workbook with the parsed CSV as a single sheet —
+/// "opening" semantics, like Excel opening a .csv file (issue #15).
+#[wasm_bindgen]
+pub fn import_csv(selector: &str, text: &str) {
+    let sheet = core::csv::from_csv("sheet1", text);
+    let json = core::workbook::serialize(&[sheet]);
+    load_data(selector, &json);
+}
+
+/// Export the whole mounted workbook (every sheet, values + live formulas)
+/// as `.xlsx` bytes, ready for a Blob download. `None` for an unmounted
+/// selector or a write failure (issue #15).
+#[wasm_bindgen]
+pub fn export_xlsx(selector: &str) -> Option<Vec<u8>> {
+    MOUNTS.with(|m| {
+        m.borrow().get(selector).and_then(|h| {
+            let sheets = core::workbook::deserialize(&(h.get_data)());
+            core::xlsx::to_xlsx(&sheets).ok()
+        })
+    })
+}
+
+/// Replace the mounted workbook with the parsed `.xlsx` (all sheets; stored
+/// formulas stay live). Returns `false` when the bytes don't parse
+/// (issue #15).
+#[wasm_bindgen]
+pub fn import_xlsx(selector: &str, bytes: &[u8]) -> bool {
+    match core::xlsx::from_xlsx(bytes) {
+        Ok(sheets) => {
+            let json = core::workbook::serialize(&sheets);
+            load_data(selector, &json);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Sample data for the standalone demo.
