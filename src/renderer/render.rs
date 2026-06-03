@@ -773,6 +773,10 @@ pub fn render(renderer: &TableRenderer) {
         if fcol > 0 { render_body(&canvas, area3, renderer); }
         if frow > 0 && fcol > 0 { render_body(&canvas, area2, renderer); }
 
+        // Charts float over the body (issue #16); headers drawn after this
+        // naturally cover any overflow at the grid edges.
+        crate::renderer::chart_render::draw_charts(&canvas, renderer);
+
         // Column headers span the frozen + body columns; row headers span the
         // frozen + body rows. area4 covers the common (no-freeze) case.
         render_col_headers(&canvas, area4, renderer);

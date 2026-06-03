@@ -25,6 +25,7 @@ mod toolbar;
 mod context_menu;
 mod data_validation;
 mod cond_format_modal;
+mod chart_modal;
 mod filter_menu;
 mod print;
 mod find_replace;
@@ -37,6 +38,7 @@ pub(crate) use toolbar::*;
 pub(crate) use context_menu::*;
 pub(crate) use data_validation::*;
 pub(crate) use cond_format_modal::*;
+pub(crate) use chart_modal::*;
 pub(crate) use filter_menu::*;
 pub(crate) use print::*;
 pub(crate) use find_replace::*;
@@ -438,6 +440,8 @@ impl ZedSheet {
         let dv_open: OpenHandle = Rc::new(RefCell::new(None));
         // Same pattern for the Conditional Formatting dialog (issue #11).
         let cf_open: OpenHandle = Rc::new(RefCell::new(None));
+        // …and the Charts dialog (issue #16).
+        let chart_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -564,7 +568,7 @@ impl ZedSheet {
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone(), cf_open.clone());
+            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
             wire_formula_bar(fb, &renderer, &sync, fx_menu_node, toast_node);
@@ -649,6 +653,26 @@ impl ZedSheet {
             let renderer_for_open = renderer.clone();
             *cf_open.borrow_mut() = Some(Rc::new(move || {
                 open_cf_modal(&inner, &renderer_for_open);
+            }));
+        }
+
+        // Charts modal (issue #16): mounted hidden at root, opened by the
+        // right-click context menu via `chart_open`.
+        let mut chart_modal = h("div", Some("zs-chart-modal-root"));
+        chart_modal.set_inner_html(chart_modal_html());
+        let chart_modal_node: Option<web_sys::Element> =
+            chart_modal.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut chart_modal);
+        if let Some(ref node) = chart_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-chart-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_chart_modal(inner.clone(), &renderer, &sync);
+            let renderer_for_open = renderer.clone();
+            *chart_open.borrow_mut() = Some(Rc::new(move || {
+                open_chart_modal(&inner, &renderer_for_open);
             }));
         }
 

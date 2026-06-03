@@ -15,3 +15,4 @@ pub mod workbook;
 pub mod cond_format;
 pub mod csv;
 pub mod xlsx;
+pub mod chart;

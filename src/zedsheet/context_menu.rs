@@ -44,6 +44,8 @@ pub(crate) fn context_menu_html() -> String {
         item("validation", "Data Validation…"),
         // Issue #11: conditional formatting rules dialog.
         item("condfmt", "Conditional formatting…"),
+        // Issue #16: charts dialog.
+        item("chart", "Insert chart…"),
         // Text alignment helpers (issue #25). The "set_rotation" /
         // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
         // `wire_context_menu`.
@@ -68,6 +70,7 @@ pub(crate) fn wire_context_menu(
     sync: &SyncFn,
     dv_open: OpenHandle,
     cf_open: OpenHandle,
+    chart_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -134,6 +137,15 @@ pub(crate) fn wire_context_menu(
                     // set_selection_link normalizes the URL; blank input clears it.
                     r.set_selection_link(if text.trim().is_empty() { None } else { Some(text) });
                     r.render();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // Charts dialog (issue #16): same open-handle pattern.
+            if cmd == "chart" {
+                if let Some(open) = chart_open.borrow().as_ref() {
+                    open();
                 }
                 let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
                 return;

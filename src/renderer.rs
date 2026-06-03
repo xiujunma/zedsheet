@@ -1,4 +1,5 @@
 pub mod canvas;
+pub mod chart_render;
 pub mod area;
 pub mod alphabets;
 pub mod range;

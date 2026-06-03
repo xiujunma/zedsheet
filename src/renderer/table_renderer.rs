@@ -614,11 +614,11 @@ impl TableRenderer {
     }
 
     /// First body column/row currently scrolled into view.
-    fn body_start_col(&self) -> usize {
+    pub(crate) fn body_start_col(&self) -> usize {
         self.freeze.1 + self.scroll_cols
     }
 
-    fn body_start_row(&self) -> usize {
+    pub(crate) fn body_start_row(&self) -> usize {
         self.freeze.0 + self.scroll_rows
     }
 
@@ -1554,6 +1554,27 @@ impl TableRenderer {
         }
         self.snapshot();
         self.data.cond_formats.remove(idx);
+    }
+
+    /// Append a chart (issue #16).
+    pub fn add_chart(&mut self, chart: crate::core::chart::Chart) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        self.data.charts.push(chart);
+    }
+
+    /// Remove the chart at `idx` (issue #16).
+    pub fn remove_chart(&mut self, idx: usize) {
+        if self.data.is_read_only() {
+            return;
+        }
+        if idx >= self.data.charts.len() {
+            return;
+        }
+        self.snapshot();
+        self.data.charts.remove(idx);
     }
 
     /// If `(x, y)` hits the dropdown glyph on an AutoFilter header cell, the

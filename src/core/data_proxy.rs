@@ -14,6 +14,7 @@ use crate::core::state::{Selector, Scroll, Clipboard, History};
 use crate::core::validation::{Validation, Validations};
 use crate::core::auto_filter::AutoFilter;
 use crate::core::cond_format::{lerp_hex, CondRule};
+use crate::core::chart::Chart;
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
 /// referenced by every `DataProxy` so cross-sheet formulas can resolve
@@ -109,6 +110,8 @@ pub struct DataProxy {
     pub auto_filter: AutoFilter,
     /// Conditional-formatting rules, evaluated at render time (issue #11).
     pub cond_formats: Vec<CondRule>,
+    /// Charts floating over the grid, anchored at cells (issue #16).
+    pub charts: Vec<Chart>,
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
     /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
     pub named_ranges: HashMap<String, String>,
@@ -147,6 +150,7 @@ impl Default for DataProxy {
             clipboard: Clipboard::new(),
             auto_filter: AutoFilter::new(),
             cond_formats: Vec::new(),
+            charts: Vec::new(),
             named_ranges: HashMap::new(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
@@ -1247,6 +1251,7 @@ impl DataProxy {
             "autofilter": self.auto_filter.get_data(),
             "namedRanges": serde_json::to_value(&self.named_ranges).unwrap_or_default(),
             "condfmts": serde_json::to_value(&self.cond_formats).unwrap_or_default(),
+            "charts": serde_json::to_value(&self.charts).unwrap_or_default(),
         })
     }
 
@@ -1300,6 +1305,12 @@ impl DataProxy {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.cond_formats = cf;
+        }
+        if let Some(ch) = data
+            .get("charts")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.charts = ch;
         }
     }
 
