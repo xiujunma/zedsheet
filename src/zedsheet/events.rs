@@ -372,15 +372,16 @@ pub(crate) fn wire_events(
             let ke: KeyboardEvent = event.dyn_into().unwrap();
             let key = ke.key();
 
-            // Ctrl/Cmd shortcuts: clipboard + style toggles.
+            // Ctrl/Cmd shortcuts: style toggles + undo/redo. Copy/cut/paste are
+            // handled by the native clipboard events in `system_clipboard` so
+            // they also reach Excel and other apps — they are intentionally not
+            // intercepted here (no `prevent_default`, so the browser dispatches
+            // the `copy`/`cut`/`paste` events we listen for).
             if ke.ctrl_key() || ke.meta_key() {
                 let mut handled = true;
                 {
                     let mut r = renderer.borrow_mut();
                     match key.to_lowercase().as_str() {
-                        "c" => { if !r.copy_selection() { noncontiguous_copy_toast(); } }
-                        "x" => { if !r.cut_selection() { noncontiguous_copy_toast(); } }
-                        "v" => r.paste(),
                         "b" => r.toggle_bold(),
                         "i" => r.toggle_italic(),
                         "u" => r.toggle_underline(),
@@ -519,6 +520,10 @@ pub(crate) fn wire_events(
             .unwrap();
         cb.forget();
     }
+
+    // System-clipboard glue: copy/cut/paste between the grid and other apps
+    // (Excel, Google Sheets) plus lossless in-app round-trips.
+    system_clipboard::install(canvas_el, renderer, editing, sync);
 }
 
 /// Map a scrollbar pointer position to a scroll fraction and apply it.

@@ -31,6 +31,7 @@ mod print;
 mod find_replace;
 mod bottom_bar;
 mod events;
+mod system_clipboard;
 
 pub(crate) use util::*;
 pub(crate) use formula_bar::*;

@@ -6,54 +6,10 @@
 
 use wasm_bindgen::JsCast;
 use web_sys::HtmlIFrameElement;
-use crate::core::data_proxy::{DataProxy, Style};
+use crate::core::data_proxy::DataProxy;
+use crate::core::html_util::{esc, td_style};
 #[allow(unused_imports)]
 use super::*;
-
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// Inline CSS for one cell, from its resolved style (conditional formats
-/// already applied by the caller).
-fn td_style(s: &Style) -> String {
-    let mut css = String::new();
-    // Skip the defaults (white fill, near-black text, left align) so a plain
-    // cell prints with an empty style attribute.
-    if let Some(bg) = &s.bgcolor {
-        if !matches!(bg.to_lowercase().as_str(), "#ffffff" | "#fff" | "white") {
-            css.push_str(&format!("background:{};", esc(bg)));
-        }
-    }
-    if !s.color.is_empty() && s.color != "#0a0a0a" {
-        css.push_str(&format!("color:{};", esc(&s.color)));
-    }
-    if s.bold {
-        css.push_str("font-weight:bold;");
-    }
-    if s.italic {
-        css.push_str("font-style:italic;");
-    }
-    if s.underline {
-        css.push_str("text-decoration:underline;");
-    }
-    if s.strike {
-        css.push_str("text-decoration:line-through;");
-    }
-    if !s.align.is_empty() && s.align != "left" {
-        css.push_str(&format!("text-align:{};", esc(&s.align)));
-    }
-    if s.text_wrap {
-        css.push_str("white-space:normal;word-break:break-word;");
-    }
-    if s.font_size != 10 {
-        css.push_str(&format!("font-size:{}px;", s.font_size + 2));
-    }
-    css
-}
 
 /// Build a standalone HTML document of the sheet's used extent: a fixed-layout
 /// table with the grid's column widths and row heights, merged cells as
@@ -153,6 +109,7 @@ pub(crate) fn open_print(renderer: &SharedRenderer) {
 mod tests {
     use super::*;
     use crate::core::cell_range::CellRange;
+    use crate::core::data_proxy::Style;
 
     #[test]
     fn print_html_contains_formatted_values_and_escapes() {

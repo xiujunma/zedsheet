@@ -1202,19 +1202,29 @@ impl DataProxy {
         if self.is_single_selected() {
             return;
         }
-        let (rn, cn) = self.selector.size();
-        if rn > 1 || cn > 1 {
-            let sri = self.selector.range.sri;
-            let sci = self.selector.range.sci;
-            let cell = self.get_cell_or_new(sri, sci);
-            cell.merge = Some((rn - 1, cn - 1));
-            self.merges.add(self.selector.range.clone());
-            for ri in self.selector.range.sri..=self.selector.range.eri {
-                for ci in self.selector.range.sci..=self.selector.range.eci {
-                    if ri != sri || ci != sci {
-                        if let Some(row) = self.rows.get_mut(&ri) {
-                            row.delete_cell(ci);
-                        }
+        self.merge_range(self.selector.range.clone());
+    }
+
+    /// Merge `range` into a single cell: its top-left becomes the anchor
+    /// (carrying the `(extra_rows, extra_cols)` span) and the cells it covers
+    /// are cleared. A 1×1 range is a no-op. Used both by the interactive merge
+    /// (the current selection) and by clipboard paste re-applying merges from
+    /// pasted HTML.
+    pub fn merge_range(&mut self, range: CellRange) {
+        let rn = range.eri.saturating_sub(range.sri) + 1;
+        let cn = range.eci.saturating_sub(range.sci) + 1;
+        if rn <= 1 && cn <= 1 {
+            return;
+        }
+        let (sri, sci) = (range.sri, range.sci);
+        let cell = self.get_cell_or_new(sri, sci);
+        cell.merge = Some((rn - 1, cn - 1));
+        self.merges.add(range.clone());
+        for ri in range.sri..=range.eri {
+            for ci in range.sci..=range.eci {
+                if ri != sri || ci != sci {
+                    if let Some(row) = self.rows.get_mut(&ri) {
+                        row.delete_cell(ci);
                     }
                 }
             }
@@ -1231,6 +1241,30 @@ impl DataProxy {
             row.delete_cell(sci);
         }
         self.merges.delete_within(&self.selector.range);
+    }
+
+    /// Remove every merge that intersects `range`, clearing each affected
+    /// anchor's per-cell `merge` marker too. Used by clipboard paste, which
+    /// overwrites a region and must not leave a merge straddling it — pasting
+    /// over any part of a merge unmerges the whole thing (matching Excel).
+    /// Unlike `Merges::add`'s `delete_within`, this also drops merges that only
+    /// partially overlap.
+    pub fn unmerge_intersecting(&mut self, range: &CellRange) {
+        let anchors: Vec<(usize, usize)> = {
+            let mut v = Vec::new();
+            self.merges.for_each(|m| {
+                if m.intersects(range) {
+                    v.push((m.sri, m.sci));
+                }
+            });
+            v
+        };
+        for (ar, ac) in anchors {
+            if let Some(cell) = self.get_cell_mut(ar, ac) {
+                cell.merge = None;
+            }
+        }
+        self.merges.delete_intersecting(range);
     }
 
     pub fn get_data(&self) -> serde_json::Value {
@@ -2254,6 +2288,43 @@ mod tests {
             d.cell_merge(0, 0).is_none(),
             "a merge overlapping the inserted band should be dropped"
         );
+    }
+
+    #[test]
+    fn merge_range_sets_anchor_span_and_clears_covered() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "anchor");
+        d.set_cell_text(0, 1, "gone");
+        d.set_cell_text(1, 1, "gone2");
+        d.merge_range(CellRange::new(0, 0, 1, 1)); // A1:B2
+        // Anchor keeps its text and a (1,1) extra-span; covered cells cleared.
+        assert_eq!(d.get_cell_text(0, 0), "anchor");
+        assert_eq!(d.get_cell(0, 0).unwrap().merge, Some((1, 1)));
+        assert_eq!(d.get_cell_text(0, 1), "");
+        assert_eq!(d.get_cell_text(1, 1), "");
+        assert!(d.cell_merge(1, 1).is_some(), "covered cell reports the merge");
+    }
+
+    #[test]
+    fn merge_range_is_a_noop_for_single_cell() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "x");
+        d.merge_range(CellRange::new(0, 0, 0, 0));
+        assert_eq!(d.get_cell(0, 0).unwrap().merge, None);
+        assert!(d.cell_merge(0, 0).is_none());
+    }
+
+    #[test]
+    fn unmerge_intersecting_drops_partially_overlapping_merges_and_clears_anchor() {
+        let mut d = DataProxy::new("t");
+        d.merge_range(CellRange::new(0, 0, 1, 1)); // A1:B2
+        d.merge_range(CellRange::new(5, 5, 5, 6)); // F6:G6 (untouched)
+        assert!(d.cell_merge(0, 0).is_some());
+        // A range that only partially overlaps A1:B2 (shares B2 only).
+        d.unmerge_intersecting(&CellRange::new(1, 1, 3, 3));
+        assert!(d.cell_merge(0, 0).is_none(), "partially-overlapping merge removed");
+        assert_eq!(d.get_cell(0, 0).and_then(|c| c.merge), None, "anchor marker cleared");
+        assert!(d.cell_merge(5, 5).is_some(), "non-intersecting merge survives");
     }
 
     #[test]

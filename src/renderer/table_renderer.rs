@@ -13,6 +13,7 @@ use super::viewport::Viewport;
 use crate::core::data_proxy::{DataProxy, Style as CellStyle, Border as CellBorder};
 use crate::core::cell_range::CellRange;
 use crate::core::cell::Cell as DataCell;
+use crate::core::clipboard_io::ParsedGrid;
 
 /// A snapshot of cells held for copy/cut/paste.
 #[derive(Clone)]
@@ -1346,6 +1347,67 @@ impl TableRenderer {
             }
         } else {
             self.clipboard = Some(cb); // keep for repeated paste
+        }
+    }
+
+    /// Whether the in-app clipboard currently holds a snapshot. The system
+    /// clipboard glue checks this to decide between a lossless internal paste
+    /// and parsing external clipboard content.
+    pub fn has_clipboard(&self) -> bool {
+        self.clipboard.is_some()
+    }
+
+    /// The current selection as a single rectangular range, or `None` for a
+    /// non-contiguous (Ctrl+click) multi-range selection that can't be copied
+    /// to the system clipboard as one block.
+    pub fn contiguous_selection(&self) -> Option<CellRange> {
+        if self.multi_range.is_active() {
+            return None;
+        }
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        Some(CellRange::new(r0, c0, r1, c1))
+    }
+
+    /// Paste a grid parsed from external clipboard content (Excel, Sheets, …)
+    /// at the selection's top-left. Writes each cell's text (formulas land as
+    /// formulas) honoring per-cell editability, then re-applies merges from the
+    /// pasted spans. Snapshots first so the paste is a single undo step.
+    pub fn paste_external(&mut self, grid: ParsedGrid) {
+        if self.data.is_read_only() || grid.is_empty() {
+            return;
+        }
+        self.snapshot();
+        let (r0, c0, _, _) = self.selection_bounds();
+        // Clear any existing merge straddling the destination first — pasting
+        // over part of a merge must unmerge it, never leave it half-overwritten.
+        let width = grid.cells.iter().map(|row| row.len()).max().unwrap_or(0);
+        if width > 0 {
+            let extent = CellRange::new(
+                r0,
+                c0,
+                r0 + grid.rows().saturating_sub(1),
+                c0 + width - 1,
+            );
+            self.data.unmerge_intersecting(&extent);
+        }
+        // First pass: text. Second pass: merges (which clear covered cells, so
+        // they must run after every anchor's text is in place).
+        for (i, row) in grid.cells.iter().enumerate() {
+            for (j, pc) in row.iter().enumerate() {
+                let (r, c) = (r0 + i, c0 + j);
+                if self.data.is_cell_editable(r, c) {
+                    self.data.set_cell_text(r, c, &pc.text);
+                }
+            }
+        }
+        for (i, row) in grid.cells.iter().enumerate() {
+            for (j, pc) in row.iter().enumerate() {
+                if pc.is_merged() {
+                    let (r, c) = (r0 + i, c0 + j);
+                    let range = CellRange::new(r, c, r + pc.row_span - 1, c + pc.col_span - 1);
+                    self.data.merge_range(range);
+                }
+            }
         }
     }
 
