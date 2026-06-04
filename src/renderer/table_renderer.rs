@@ -623,7 +623,9 @@ impl TableRenderer {
     }
 
     /// Map a canvas pixel position to a (row, col) cell index. Returns None for
-    /// the header gutters. Handles the scrolled body (no-freeze) case.
+    /// the header gutters. Frozen panes are handled: clicks land on the pinned
+    /// rows/columns or the scrolled body depending on where the frozen band
+    /// ends (see [`track_at`]).
     pub fn cell_at(&self, x: f64, y: f64) -> Option<(usize, usize)> {
         let tx = self.row_header.width;
         let ty = self.col_header.height;
@@ -637,47 +639,48 @@ impl TableRenderer {
             return None;
         }
 
-        let mut cx = tx;
-        let mut ci = self.body_start_col();
-        while ci < total_cols {
-            let w = self.col_width_at(ci);
-            if x < cx + w {
-                break;
-            }
-            cx += w;
-            ci += 1;
-        }
-        if ci >= total_cols {
-            ci = total_cols - 1;
-        }
-
-        let mut cy = ty;
-        let mut ri = self.body_start_row();
-        while ri < total_rows {
-            let h = self.row_height_at(ri);
-            if y < cy + h {
-                break;
-            }
-            cy += h;
-            ri += 1;
-        }
-        if ri >= total_rows {
-            ri = total_rows - 1;
-        }
+        let ci = track_at(
+            x,
+            tx,
+            self.start_col,
+            self.freeze.1,
+            self.body_start_col(),
+            total_cols,
+            |c| self.col_width_at(c),
+        );
+        let ri = track_at(
+            y,
+            ty,
+            self.start_row,
+            self.freeze.0,
+            self.body_start_row(),
+            total_rows,
+            |r| self.row_height_at(r),
+        );
 
         Some((ri, ci))
     }
 
-    /// On-screen rect (canvas pixels) of a cell currently in the body viewport.
+    /// On-screen rect (canvas pixels) of a cell currently in view. Frozen-pane
+    /// aware so the drawn rect (and the editor positioned over it) lines up with
+    /// where [`cell_at`] hit-tests the same cell.
     pub fn cell_screen_rect(&self, ri: usize, ci: usize) -> Rect {
-        let mut x = self.row_header.width;
-        for c in self.body_start_col()..ci {
-            x += self.col_width_at(c);
-        }
-        let mut y = self.col_header.height;
-        for r in self.body_start_row()..ri {
-            y += self.row_height_at(r);
-        }
+        let x = track_offset(
+            ci,
+            self.row_header.width,
+            self.start_col,
+            self.freeze.1,
+            self.body_start_col(),
+            |c| self.col_width_at(c),
+        );
+        let y = track_offset(
+            ri,
+            self.col_header.height,
+            self.start_row,
+            self.freeze.0,
+            self.body_start_row(),
+            |r| self.row_height_at(r),
+        );
         Rect {
             x,
             y,
@@ -1897,6 +1900,82 @@ fn lc(c: char) -> char {
     c.to_lowercase().next().unwrap_or(c)
 }
 
+/// Map a canvas pixel `p` (already past the `header` gutter) to a track
+/// (row or column) index, accounting for frozen panes.
+///
+/// Frozen panes split an axis the way [`Viewport`] lays its areas out: the
+/// pinned band `[start, frozen)` is rendered flush against `header`, and the
+/// scrolled body (`body_start..total`) is rendered immediately *after* the
+/// pinned band's total extent. Hit-testing therefore has to walk the pinned
+/// band first and only step into the body once `p` is past it — walking the
+/// body straight from `header` (ignoring the pinned extent) is what made every
+/// body click land one frozen row/column too far (the frozen-header off-by-one).
+///
+/// `size(i)` returns track `i`'s height/width (0 for hidden tracks, which are
+/// skipped naturally). The result is clamped to the last valid index.
+fn track_at(
+    p: f64,
+    header: f64,
+    start: usize,
+    frozen: usize,
+    body_start: usize,
+    total: usize,
+    size: impl Fn(usize) -> f64,
+) -> usize {
+    let frozen_end = frozen.max(start);
+    let mut frozen_extent = 0f64;
+    for i in start..frozen_end {
+        frozen_extent += size(i);
+    }
+
+    // Pinned band when `p` falls within the frozen extent, otherwise the body.
+    let (mut pos, mut idx, end) = if p < header + frozen_extent {
+        (header, start, frozen_end)
+    } else {
+        (header + frozen_extent, body_start, total)
+    };
+
+    while idx < end {
+        let s = size(idx);
+        if p < pos + s {
+            break;
+        }
+        pos += s;
+        idx += 1;
+    }
+    idx.min(total.saturating_sub(1))
+}
+
+/// Leading-edge pixel offset of track `idx` along one axis — the inverse of
+/// [`track_at`], using the same frozen-pane layout so a cell's drawn rect and
+/// its hit-test agree under freeze.
+fn track_offset(
+    idx: usize,
+    header: f64,
+    start: usize,
+    frozen: usize,
+    body_start: usize,
+    size: impl Fn(usize) -> f64,
+) -> f64 {
+    let frozen_end = frozen.max(start);
+    if idx < frozen_end {
+        let mut pos = header;
+        for i in start..idx {
+            pos += size(i);
+        }
+        pos
+    } else {
+        let mut pos = header;
+        for i in start..frozen_end {
+            pos += size(i);
+        }
+        for i in body_start..idx {
+            pos += size(i);
+        }
+        pos
+    }
+}
+
 /// Case-insensitive replace of all (non-overlapping) occurrences of `find`.
 fn replace_ci(haystack: &str, find: &str, replace: &str) -> String {
     let hs: Vec<char> = haystack.chars().collect();
@@ -1921,7 +2000,7 @@ fn replace_ci(haystack: &str, find: &str, replace: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::replace_ci;
+    use super::{replace_ci, track_at, track_offset};
 
     #[test]
     fn case_insensitive_replace() {
@@ -1929,5 +2008,69 @@ mod tests {
         assert_eq!(replace_ci("abcabc", "bc", "X"), "aXaX");
         assert_eq!(replace_ci("nothing", "zzz", "Y"), "nothing");
         assert_eq!(replace_ci("keep", "", "x"), "keep");
+    }
+
+    // Geometry for the cases below: 20px header, uniform 25px tracks, 100 total.
+    const HDR: f64 = 20.0;
+    fn sz(_: usize) -> f64 {
+        25.0
+    }
+
+    #[test]
+    fn track_at_no_freeze() {
+        // body starts flush against the header.
+        let at = |p: f64| track_at(p, HDR, 0, 0, 0, 100, sz);
+        assert_eq!(at(20.0), 0); // top edge of row 0
+        assert_eq!(at(30.0), 0);
+        assert_eq!(at(44.9), 0);
+        assert_eq!(at(45.0), 1); // top edge of row 1
+        assert_eq!(at(506.0), 19);
+        assert_eq!(at(99999.0), 99); // clamps to last
+    }
+
+    #[test]
+    fn track_at_one_frozen_row() {
+        // freeze=1: pinned row 0 occupies [20,45); body (row 1+) starts at 45.
+        // Regression: before the fix these all returned one row too far.
+        let at = |p: f64| track_at(p, HDR, 0, 1, 1, 100, sz);
+        assert_eq!(at(30.0), 0); // inside the pinned row -> row 0
+        assert_eq!(at(44.9), 0);
+        assert_eq!(at(45.0), 1); // first body row, NOT row 2
+        assert_eq!(at(55.0), 1);
+        assert_eq!(at(80.0), 2);
+        assert_eq!(at(506.0), 19); // was 20 before the fix
+    }
+
+    #[test]
+    fn track_at_two_frozen_rows() {
+        // freeze=2: pinned rows 0,1 occupy [20,70); body (row 2+) starts at 70.
+        let at = |p: f64| track_at(p, HDR, 0, 2, 2, 100, sz);
+        assert_eq!(at(30.0), 0);
+        assert_eq!(at(60.0), 1);
+        assert_eq!(at(70.0), 2); // first body row
+        assert_eq!(at(95.0), 3);
+    }
+
+    #[test]
+    fn track_offset_inverts_track_at_under_freeze() {
+        // A cell's drawn offset must match where track_at maps its top edge.
+        for &(frozen, body_start) in &[(0usize, 0usize), (1, 1), (2, 2)] {
+            for idx in 0..40usize {
+                let off = track_offset(idx, HDR, 0, frozen, body_start, sz);
+                assert_eq!(
+                    track_at(off, HDR, 0, frozen, body_start, 100, sz),
+                    idx,
+                    "freeze={frozen} idx={idx} off={off}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn track_offset_frozen_row_layout() {
+        // freeze=1: body row 5 is drawn at 20 + 25(frozen) + 4*25 = 145.
+        assert_eq!(track_offset(5, HDR, 0, 1, 1, sz), 145.0);
+        // the pinned row itself sits right under the header.
+        assert_eq!(track_offset(0, HDR, 0, 1, 1, sz), 20.0);
     }
 }
