@@ -438,9 +438,12 @@ impl TableRenderer {
                 padding: None,
             },
             freeze: (0usize, 0usize),
+            // The frozen-pane divider is a heavier, darker line than the normal
+            // gridlines (which are 1px #e6e6e6) so the freeze boundary reads as a
+            // distinct edge — matching Excel's frozen-pane border.
             freeze_gridline: Gridline {
                 width: 1f64,
-                color: String::from("#e6e6e6"),
+                color: String::from("#a6a6a6"),
                 style: None,
             },
             viewport: None,

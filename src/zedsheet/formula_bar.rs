@@ -297,6 +297,12 @@ pub(crate) fn init_editor_style(ta: &HtmlTextAreaElement) {
     let _ = style.set_property("resize", "none");
     let _ = style.set_property("overflow", "hidden");
     let _ = style.set_property("font", "13px Arial, sans-serif");
+    // Opaque background + explicit text colour so the editor fully covers the
+    // cell underneath. Required because some host resets (e.g. Tailwind's
+    // Preflight) set `textarea { background-color: transparent; color: inherit }`,
+    // which would otherwise let the rendered cell value bleed through the editor.
+    let _ = style.set_property("background-color", "#ffffff");
+    let _ = style.set_property("color", "#0a0a0a");
     let _ = style.set_property("z-index", "100");
 }
 
