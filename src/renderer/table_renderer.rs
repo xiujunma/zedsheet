@@ -501,7 +501,9 @@ impl TableRenderer {
                 style: None,
             },
             header_style: Style {
-                bgcolor: None,
+                // Light-gray fill so the row/column headers read as a distinct
+                // gutter, not part of the data area (x-spreadsheet uses this).
+                bgcolor: Some(String::from("#f4f5f8")),
                 color: String::from("#000000"),
                 align: Align::Left,
                 valign: VerticalAlign::Middle,
