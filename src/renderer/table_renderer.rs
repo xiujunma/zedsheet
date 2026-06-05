@@ -72,6 +72,36 @@ fn paste_cell_plan(mode: PasteMode, cell: &DataCell, value: &str, src_ref: &str)
     }
 }
 
+/// What the Merge toolbar button should do for the current selection.
+#[derive(Debug, PartialEq, Eq)]
+enum MergeAction {
+    Merge,
+    Unmerge,
+    NoOp,
+}
+
+/// Decide the Merge button's action. `merge_at_origin` is the bounds
+/// `(sri, sci, eri, eci)` of an existing merge anchored at the selection's
+/// top-left, if any. Pure so it can be unit-tested.
+///
+/// Selecting a merged cell auto-expands the selection to cover the whole merge
+/// (see `select_cell`), so "the selection exactly equals an existing merge" is
+/// the signal to toggle it off. Without this, unmerge is unreachable from the
+/// UI: a single-cell check never matches because the click already expanded
+/// the selection to the full (multi-cell) merge range.
+fn merge_toggle_action(
+    sel: (usize, usize, usize, usize),
+    merge_at_origin: Option<(usize, usize, usize, usize)>,
+) -> MergeAction {
+    if merge_at_origin == Some(sel) {
+        MergeAction::Unmerge
+    } else if sel.0 == sel.2 && sel.1 == sel.3 {
+        MergeAction::NoOp
+    } else {
+        MergeAction::Merge
+    }
+}
+
 /// Transpose a clipboard block (swap rows/columns), including each cell's merge
 /// span `(extra_rows, extra_cols)`. Pure so it can be unit-tested.
 fn transpose_clipboard(cb: &ClipboardData) -> ClipboardData {
@@ -1378,20 +1408,29 @@ impl TableRenderer {
         }
     }
 
-    /// Merge the selection (or unmerge when a single merged cell is selected).
+    /// Merge the selection, or unmerge it when the selection exactly covers an
+    /// existing merge (clicking a merged cell expands the selection to the whole
+    /// merge, so a second click toggles it off).
     pub fn merge_selection(&mut self) {
         if self.data.is_read_only() {
             return;
         }
         self.snapshot();
         let (r0, c0, r1, c1) = self.selection_bounds();
-        if r0 == r1 && c0 == c1 {
-            if let Some(m) = self.data.cell_merge(r0, c0) {
-                self.data.merges.delete(m.sri, m.sci);
+        let merge_at_origin = self
+            .data
+            .cell_merge(r0, c0)
+            .filter(|m| m.sri == r0 && m.sci == c0)
+            .map(|m| (m.sri, m.sci, m.eri, m.eci));
+        match merge_toggle_action((r0, c0, r1, c1), merge_at_origin) {
+            MergeAction::Unmerge => {
+                self.data.merges.delete(r0, c0);
             }
-            return;
+            MergeAction::Merge => {
+                self.data.merges.add(CellRange::new(r0, c0, r1, c1));
+            }
+            MergeAction::NoOp => {}
         }
-        self.data.merges.add(CellRange::new(r0, c0, r1, c1));
     }
 
     /// Capture the selection into the clipboard. Returns `false` (without
@@ -2266,6 +2305,27 @@ mod tests {
         assert_eq!(t.cells[2][1].text, "r1c2"); // [1][2] → [2][1]
         assert_eq!(t.values[2][1], "v12");
         assert_eq!(t.cells[0][0].merge, Some((2, 1))); // span swapped
+    }
+
+    #[test]
+    fn merge_button_toggles_existing_merge() {
+        use super::{merge_toggle_action, MergeAction};
+        // Multi-cell selection, no merge at its origin → merge it.
+        assert_eq!(merge_toggle_action((1, 7, 2, 8), None), MergeAction::Merge);
+        // Clicking a merged cell expands the selection to the merge bounds, so
+        // selection == merge → unmerge (the bug: this was previously a no-op).
+        assert_eq!(
+            merge_toggle_action((1, 7, 2, 8), Some((1, 7, 2, 8))),
+            MergeAction::Unmerge
+        );
+        // Single non-merged cell → nothing to do.
+        assert_eq!(merge_toggle_action((3, 3, 3, 3), None), MergeAction::NoOp);
+        // Selection larger than a merge anchored at its origin → grow (merge),
+        // not unmerge.
+        assert_eq!(
+            merge_toggle_action((0, 0, 3, 3), Some((0, 0, 1, 1))),
+            MergeAction::Merge
+        );
     }
 
     #[test]
