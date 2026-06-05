@@ -4,6 +4,7 @@ use wasm_bindgen::JsCast;
 use web_sys::MouseEvent;
 use crate::component::element::Element;
 use crate::config::CSS_PREFIX;
+use crate::renderer::table_renderer::PasteMode;
 #[allow(unused_imports)]
 use super::*;
 
@@ -16,6 +17,12 @@ pub(crate) fn context_menu_html() -> String {
         item("copy", "Copy"),
         item("cut", "Cut"),
         item("paste", "Paste"),
+        // Paste Special (issue #28).
+        item("paste-values", "Paste values only"),
+        item("paste-formulas", "Paste formulas only"),
+        item("paste-formats", "Paste formats only"),
+        item("paste-transpose", "Paste transposed"),
+        item("paste-link", "Paste link"),
         divider.clone(),
         item("insert-row", "Insert row"),
         item("insert-col", "Insert column"),
@@ -180,6 +187,11 @@ pub(crate) fn wire_context_menu(
                     "copy" => { if !r.copy_selection() { noncontiguous_copy_toast(); } }
                     "cut" if !read_only => { if !r.cut_selection() { noncontiguous_copy_toast(); } }
                     "paste" if !read_only => r.paste(),
+                    "paste-values" if !read_only => r.paste_special(PasteMode::Values),
+                    "paste-formulas" if !read_only => r.paste_special(PasteMode::Formulas),
+                    "paste-formats" if !read_only => r.paste_special(PasteMode::Formats),
+                    "paste-transpose" if !read_only => r.paste_special(PasteMode::Transpose),
+                    "paste-link" if !read_only => r.paste_special(PasteMode::Link),
                     "insert-row" if !read_only => r.insert_row_at_selection(),
                     "insert-col" if !read_only => r.insert_col_at_selection(),
                     "delete-row" if !read_only => r.delete_rows_at_selection(),

@@ -5,7 +5,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlTextAreaElement, KeyboardEvent, MouseEvent, WheelEvent};
 use crate::component::element::Element;
-use crate::renderer::table_renderer::DragKind;
+use crate::renderer::table_renderer::{DragKind, PasteMode};
 #[allow(unused_imports)]
 use super::*;
 
@@ -385,6 +385,10 @@ pub(crate) fn wire_events(
                         "b" => r.toggle_bold(),
                         "i" => r.toggle_italic(),
                         "u" => r.toggle_underline(),
+                        // Ctrl/Cmd+Shift+V pastes values only (Google Sheets
+                        // convention, issue #28). Plain Ctrl/Cmd+V is left to the
+                        // native paste event in `system_clipboard`.
+                        "v" if ke.shift_key() => r.paste_special(PasteMode::Values),
                         // Ctrl/Cmd+Z undo; Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redo.
                         "z" if ke.shift_key() => r.redo(),
                         "z" => r.undo(),

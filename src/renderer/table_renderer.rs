@@ -23,7 +23,81 @@ pub struct ClipboardData {
     pub r1: usize,
     pub c1: usize,
     pub cells: Vec<Vec<DataCell>>,
+    /// Computed values captured at copy time (row-major, parallel to `cells`),
+    /// so "Paste Values" can drop formulas that wouldn't re-evaluate detached
+    /// from their source sheet (issue #28).
+    pub values: Vec<Vec<String>>,
     pub is_cut: bool,
+}
+
+/// What a paste applies to the destination (issue #28). `All` is the ordinary
+/// full-fidelity paste; the rest are Paste Special variants.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PasteMode {
+    All,
+    Values,
+    Formulas,
+    Formats,
+    Transpose,
+    Link,
+}
+
+/// The single write a paste makes to one destination cell, decided purely from
+/// the source cell and mode so it can be unit-tested without a renderer.
+#[derive(Clone, Debug)]
+pub enum CellWrite {
+    /// Replace the whole cell (full fidelity).
+    Full(DataCell),
+    /// Set only the cell's text/formula, keeping the destination's formatting.
+    Text(String),
+    /// Apply only a style index, keeping the destination's content.
+    Style(usize),
+    /// Leave the destination cell untouched.
+    Skip,
+}
+
+/// Decide what a paste writes to one cell. `value` is the source's captured
+/// computed value (for `Values`); `src_ref` is the source cell's A1 reference
+/// (for `Link`).
+fn paste_cell_plan(mode: PasteMode, cell: &DataCell, value: &str, src_ref: &str) -> CellWrite {
+    match mode {
+        PasteMode::All | PasteMode::Transpose => CellWrite::Full(cell.clone()),
+        PasteMode::Values => CellWrite::Text(value.to_string()),
+        PasteMode::Formulas => CellWrite::Text(cell.text.clone()),
+        PasteMode::Formats => match cell.style {
+            Some(idx) => CellWrite::Style(idx),
+            None => CellWrite::Skip,
+        },
+        PasteMode::Link => CellWrite::Text(format!("={src_ref}")),
+    }
+}
+
+/// Transpose a clipboard block (swap rows/columns), including each cell's merge
+/// span `(extra_rows, extra_cols)`. Pure so it can be unit-tested.
+fn transpose_clipboard(cb: &ClipboardData) -> ClipboardData {
+    let rows = cb.cells.len();
+    let cols = cb.cells.first().map_or(0, Vec::len);
+    let mut cells: Vec<Vec<DataCell>> = (0..cols).map(|_| Vec::with_capacity(rows)).collect();
+    let mut values: Vec<Vec<String>> = (0..cols).map(|_| Vec::with_capacity(rows)).collect();
+    for i in 0..rows {
+        for j in 0..cols {
+            let mut cell = cb.cells[i][j].clone();
+            if let Some((rs, cs)) = cell.merge {
+                cell.merge = Some((cs, rs));
+            }
+            cells[j].push(cell);
+            values[j].push(cb.values.get(i).and_then(|r| r.get(j)).cloned().unwrap_or_default());
+        }
+    }
+    ClipboardData {
+        r0: cb.r0,
+        c0: cb.c0,
+        r1: cb.r0 + cols.saturating_sub(1),
+        c1: cb.c0 + rows.saturating_sub(1),
+        cells,
+        values,
+        is_cut: false,
+    }
 }
 
 /// An in-progress pointer drag on the headers or scrollbars.
@@ -1285,14 +1359,20 @@ impl TableRenderer {
         }
         let (r0, c0, r1, c1) = self.selection_bounds();
         let mut cells = Vec::new();
+        let mut values = Vec::new();
         for ri in r0..=r1 {
             let mut row = Vec::new();
+            let mut vrow = Vec::new();
             for ci in c0..=c1 {
                 row.push(self.data.get_cell(ri, ci).cloned().unwrap_or_default());
+                // Capture the computed value now — a copied formula can't be
+                // re-evaluated detached from its source sheet (issue #28).
+                vrow.push(self.data.cell_raw_value(ri, ci));
             }
             cells.push(row);
+            values.push(vrow);
         }
-        self.clipboard = Some(ClipboardData { r0, c0, r1, c1, cells, is_cut });
+        self.clipboard = Some(ClipboardData { r0, c0, r1, c1, cells, values, is_cut });
         true
     }
 
@@ -1313,30 +1393,49 @@ impl TableRenderer {
     /// selection (issue #19), the clipboard lands at the top-left of every
     /// range. A cut clears the source cells afterwards.
     pub fn paste(&mut self) {
-        if self.clipboard.is_none() {
-            return;
-        }
-        // Read-only sheets can't accept a paste (issue #24).
-        if self.data.is_read_only() {
+        self.paste_special(PasteMode::All);
+    }
+
+    /// Paste the clipboard with a specific mode (issue #28). `All` is the
+    /// ordinary full-fidelity paste; `Values`/`Formulas`/`Formats` write only a
+    /// facet (keeping the destination's other attributes); `Transpose` swaps
+    /// rows/columns; `Link` writes `=SourceCell` references. Only `All` consumes
+    /// a cut (clears the source); the special modes behave like a copy.
+    pub fn paste_special(&mut self, mode: PasteMode) {
+        if self.clipboard.is_none() || self.data.is_read_only() {
             return;
         }
         self.snapshot();
         let Some(cb) = self.clipboard.take() else { return };
-        let destinations: Vec<(usize, usize)> = self.selection_ranges()
+        let src = if mode == PasteMode::Transpose {
+            transpose_clipboard(&cb)
+        } else {
+            cb.clone()
+        };
+        let destinations: Vec<(usize, usize)> = self
+            .selection_ranges()
             .into_iter()
             .map(|(r0, c0, _, _)| (r0, c0))
             .collect();
         for (dr0, dc0) in destinations {
-            for (i, row) in cb.cells.iter().enumerate() {
+            for (i, row) in src.cells.iter().enumerate() {
                 for (j, cell) in row.iter().enumerate() {
                     let (r, c) = (dr0 + i, dc0 + j);
-                    if self.data.is_cell_editable(r, c) {
-                        self.data.set_cell(r, c, cell.clone());
+                    if !self.data.is_cell_editable(r, c) {
+                        continue;
+                    }
+                    let value = src.values.get(i).and_then(|v| v.get(j)).map_or("", |s| s.as_str());
+                    let src_ref = crate::renderer::alphabets::xy2expr(src.c0 + j, src.r0 + i);
+                    match paste_cell_plan(mode, cell, value, &src_ref) {
+                        CellWrite::Full(c2) => self.data.set_cell(r, c, c2),
+                        CellWrite::Text(t) => self.data.set_cell_text(r, c, &t),
+                        CellWrite::Style(idx) => self.data.set_cell_style(r, c, idx),
+                        CellWrite::Skip => {}
                     }
                 }
             }
         }
-        if cb.is_cut {
+        if cb.is_cut && mode == PasteMode::All {
             for ri in cb.r0..=cb.r1 {
                 for ci in cb.c0..=cb.c1 {
                     // Don't clear locked source cells (issue #24).
@@ -2065,7 +2164,65 @@ fn replace_ci(haystack: &str, find: &str, replace: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{replace_ci, track_at, track_offset};
+    use super::{
+        paste_cell_plan, replace_ci, track_at, track_offset, transpose_clipboard, CellWrite,
+        ClipboardData, DataCell, PasteMode,
+    };
+
+    #[test]
+    fn paste_cell_plan_picks_the_right_write_per_mode() {
+        let mut cell = DataCell::with_text("=A1+1");
+        cell.style = Some(3);
+        assert!(matches!(paste_cell_plan(PasteMode::All, &cell, "42", "A1"), CellWrite::Full(_)));
+        assert!(matches!(paste_cell_plan(PasteMode::Transpose, &cell, "42", "A1"), CellWrite::Full(_)));
+        match paste_cell_plan(PasteMode::Values, &cell, "42", "A1") {
+            CellWrite::Text(t) => assert_eq!(t, "42"), // computed value, not the formula
+            w => panic!("{w:?}"),
+        }
+        match paste_cell_plan(PasteMode::Formulas, &cell, "42", "A1") {
+            CellWrite::Text(t) => assert_eq!(t, "=A1+1"),
+            w => panic!("{w:?}"),
+        }
+        match paste_cell_plan(PasteMode::Formats, &cell, "42", "A1") {
+            CellWrite::Style(idx) => assert_eq!(idx, 3),
+            w => panic!("{w:?}"),
+        }
+        match paste_cell_plan(PasteMode::Link, &cell, "42", "B7") {
+            CellWrite::Text(t) => assert_eq!(t, "=B7"),
+            w => panic!("{w:?}"),
+        }
+        // Formats with no source style leaves the destination untouched.
+        let plain = DataCell::with_text("x");
+        assert!(matches!(paste_cell_plan(PasteMode::Formats, &plain, "", ""), CellWrite::Skip));
+    }
+
+    #[test]
+    fn transpose_clipboard_swaps_grid_and_merge_spans() {
+        // 2 rows × 3 cols; anchor (0,0) is a 2×3 merge → span (extra_rows=1, extra_cols=2).
+        let mut cells = Vec::new();
+        let mut values = Vec::new();
+        for i in 0..2 {
+            let mut row = Vec::new();
+            let mut vrow = Vec::new();
+            for j in 0..3 {
+                let mut c = DataCell::with_text(&format!("r{i}c{j}"));
+                if i == 0 && j == 0 {
+                    c.merge = Some((1, 2));
+                }
+                row.push(c);
+                vrow.push(format!("v{i}{j}"));
+            }
+            cells.push(row);
+            values.push(vrow);
+        }
+        let cb = ClipboardData { r0: 0, c0: 0, r1: 1, c1: 2, cells, values, is_cut: false };
+        let t = transpose_clipboard(&cb);
+        assert_eq!(t.cells.len(), 3); // 3 rows now
+        assert_eq!(t.cells[0].len(), 2); // 2 cols now
+        assert_eq!(t.cells[2][1].text, "r1c2"); // [1][2] → [2][1]
+        assert_eq!(t.values[2][1], "v12");
+        assert_eq!(t.cells[0][0].merge, Some((2, 1))); // span swapped
+    }
 
     #[test]
     fn case_insensitive_replace() {
