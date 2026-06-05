@@ -277,6 +277,18 @@ impl ZedSheet {
         let valign_menu_node = valign_menu.el.clone();
         root.append_child(&mut valign_menu);
 
+        // Horizontal-align dropdown menu (opened by the toolbar halign button).
+        let mut halign_menu = h("div", Some(&format!("{}-dropdown-menu", CSS_PREFIX)));
+        halign_menu.set_inner_html(halign_menu_html());
+        let _ = halign_menu.el.as_ref().map(|e| {
+            let _ = e.set_attribute(
+                "style",
+                "display:none;position:absolute;z-index:200;background:#fff;border:1px solid #ccc;box-shadow:1px 2px 5px 2px rgba(51,51,51,0.15);width:120px;",
+            );
+        });
+        let halign_menu_node = halign_menu.el.clone();
+        root.append_child(&mut halign_menu);
+
         // Toolbar tooltip (shown on hover over a button).
         let mut tooltip_el = h("div", Some(&format!("{}-tooltip", CSS_PREFIX)));
         let _ = tooltip_el.el.as_ref().map(|e| {
@@ -612,6 +624,9 @@ impl ZedSheet {
         if let Some(vm) = valign_menu_node.clone() {
             menus.push(("valign".to_string(), vm));
         }
+        if let Some(hm) = halign_menu_node.clone() {
+            menus.push(("halign".to_string(), hm));
+        }
         // The toolbar Σ button opens the same function picker as the formula bar.
         if let Some(fx) = fx_menu_node.clone() {
             menus.push(("formula".to_string(), fx));
@@ -628,6 +643,9 @@ impl ZedSheet {
         }
         if let Some(vm) = valign_menu_node {
             wire_valign_menu(vm, &renderer, &sync);
+        }
+        if let Some(hm) = halign_menu_node {
+            wire_halign_menu(hm, &renderer, &sync);
         }
         if let (Some(tb), Some(tip)) = (toolbar_node.clone(), tooltip_node) {
             wire_tooltip(tb, tip);

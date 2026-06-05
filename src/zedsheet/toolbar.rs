@@ -89,9 +89,21 @@ pub(crate) fn wire_toolbar(
         let Some(button) = button else { return };
         let Some(action) = button.get_attribute("data-action") else { return };
 
+        // Opening any toolbar popup closes the others (issue: x-spreadsheet
+        // parity — dropdowns are mutually exclusive).
+        let close_other_popups = || {
+            for (_, m) in &menus {
+                hide_palette(m);
+            }
+            if let Some(pal) = &palette {
+                hide_palette(pal);
+            }
+        };
+
         // Color buttons open the shared palette positioned under the button.
         if action == "color" || action == "bgcolor" {
             if let Some(pal) = &palette {
+                close_other_popups();
                 *palette_mode.borrow_mut() = action.clone();
                 show_palette_under(pal, &button);
             }
@@ -107,6 +119,7 @@ pub(crate) fn wire_toolbar(
 
         // Dropdown buttons open their registered menu under the button.
         if let Some((_, menu)) = menus.iter().find(|(a, _)| *a == action) {
+            close_other_popups();
             show_palette_under(menu, &button);
             return;
         }
@@ -133,11 +146,8 @@ pub(crate) fn wire_toolbar(
             "clearformat" => r.clear_format(),
             // "freeze" opens a dropdown (registered in `menus`), handled above.
             "autofilter" => r.toggle_autofilter(),
-            "align-left" => r.set_align("left"),
-            "align-center" => r.set_align("center"),
-            "align-right" => r.set_align("right"),
-            // Vertical align (top/middle/bottom) is a dropdown — its items are
-            // handled by `wire_valign_menu`, not here.
+            // Horizontal and vertical align are dropdowns — their items are
+            // handled by wire_halign_menu / wire_valign_menu, not here.
             _ => return,
         }
         r.render();
@@ -353,6 +363,48 @@ pub(crate) fn wire_valign_menu(menu: web_sys::Element, renderer: &SharedRenderer
         {
             let mut r = renderer.borrow_mut();
             r.set_valign(&mode);
+            r.render();
+        }
+        sync();
+        hide_palette(&menu_for_hide);
+    });
+}
+
+/// Items for the horizontal-align dropdown (left/center/right); `data-align`
+/// carries the value.
+pub(crate) fn halign_menu_html() -> String {
+    let items = [("left", "Left"), ("center", "Center"), ("right", "Right")];
+    let mut s = String::new();
+    for (mode, label) in items {
+        s.push_str(&format!(
+            "<div class=\"{p}-item\" data-align=\"{mode}\" style=\"cursor:pointer;display:flex;align-items:center;gap:6px;\">\
+               <div class=\"{p}-icon\"><div class=\"{p}-icon-img align-{mode}\"></div></div>{label}\
+             </div>",
+            p = CSS_PREFIX, mode = mode, label = label
+        ));
+    }
+    s
+}
+
+/// Wire the horizontal-align dropdown: clicking an item applies it via
+/// `set_align` and closes the menu.
+pub(crate) fn wire_halign_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    let renderer = renderer.clone();
+    let sync = sync.clone();
+    let menu_for_hide = menu.clone();
+    let mut el: Element = menu.into();
+    el.add_event_listener("click", move |event: web_sys::Event| {
+        let Some(target) = event.target() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let item = elx
+            .get_attribute("data-align")
+            .map(|_| elx.clone())
+            .or_else(|| elx.closest("[data-align]").ok().flatten());
+        let Some(item) = item else { return };
+        let Some(mode) = item.get_attribute("data-align") else { return };
+        {
+            let mut r = renderer.borrow_mut();
+            r.set_align(&mode);
             r.render();
         }
         sync();

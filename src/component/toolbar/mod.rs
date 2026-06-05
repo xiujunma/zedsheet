@@ -86,11 +86,9 @@ impl Toolbar {
             Some(("merge", "merge")),
             Some(("borders", "border-all")),
             None,
-            Some(("align-left", "align-left")),
-            Some(("align-center", "align-center")),
-            Some(("align-right", "align-right")),
-            // Vertical align is a dropdown (top/middle/bottom), matching
-            // x-spreadsheet; the menu is registered in `zedsheet`.
+            // Horizontal and vertical align are both dropdowns, matching
+            // x-spreadsheet; their menus are registered in `zedsheet`.
+            Some(("halign", "align-left")),
             Some(("valign", "align-middle")),
             Some(("textwrap", "textwrap")),
             None,
@@ -194,9 +192,7 @@ fn tip_for(action: &str) -> &'static str {
         "bgcolor" => "Fill color",
         "merge" => "Merge cells",
         "borders" => "Borders",
-        "align-left" => "Align left",
-        "align-center" => "Align center",
-        "align-right" => "Align right",
+        "halign" => "Horizontal align",
         "valign" => "Vertical align",
         "textwrap" => "Text wrap",
         "freeze" => "Freeze",
