@@ -265,6 +265,18 @@ impl ZedSheet {
         let freeze_menu_node = freeze_menu.el.clone();
         root.append_child(&mut freeze_menu);
 
+        // Vertical-align dropdown menu (opened by the toolbar valign button).
+        let mut valign_menu = h("div", Some(&format!("{}-dropdown-menu", CSS_PREFIX)));
+        valign_menu.set_inner_html(valign_menu_html());
+        let _ = valign_menu.el.as_ref().map(|e| {
+            let _ = e.set_attribute(
+                "style",
+                "display:none;position:absolute;z-index:200;background:#fff;border:1px solid #ccc;box-shadow:1px 2px 5px 2px rgba(51,51,51,0.15);width:120px;",
+            );
+        });
+        let valign_menu_node = valign_menu.el.clone();
+        root.append_child(&mut valign_menu);
+
         // Toolbar tooltip (shown on hover over a button).
         let mut tooltip_el = h("div", Some(&format!("{}-tooltip", CSS_PREFIX)));
         let _ = tooltip_el.el.as_ref().map(|e| {
@@ -582,7 +594,7 @@ impl ZedSheet {
                 editor_error_node.clone(),
                 &editing,
                 &sync,
-                fx_menu_node,
+                fx_menu_node.clone(),
                 toast_node,
             );
         }
@@ -597,6 +609,13 @@ impl ZedSheet {
         if let Some(fm) = freeze_menu_node.clone() {
             menus.push(("freeze".to_string(), fm));
         }
+        if let Some(vm) = valign_menu_node.clone() {
+            menus.push(("valign".to_string(), vm));
+        }
+        // The toolbar Σ button opens the same function picker as the formula bar.
+        if let Some(fx) = fx_menu_node.clone() {
+            menus.push(("formula".to_string(), fx));
+        }
 
         if let Some(mut tb) = toolbar_el {
             wire_toolbar(&mut tb, &renderer, palette_node.clone(), &palette_mode, menus, &sync);
@@ -606,6 +625,9 @@ impl ZedSheet {
         }
         if let Some(fm) = freeze_menu_node {
             wire_freeze_menu(fm, &renderer, &sync);
+        }
+        if let Some(vm) = valign_menu_node {
+            wire_valign_menu(vm, &renderer, &sync);
         }
         if let (Some(tb), Some(tip)) = (toolbar_node.clone(), tooltip_node) {
             wire_tooltip(tb, tip);

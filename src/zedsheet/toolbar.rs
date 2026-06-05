@@ -136,9 +136,8 @@ pub(crate) fn wire_toolbar(
             "align-left" => r.set_align("left"),
             "align-center" => r.set_align("center"),
             "align-right" => r.set_align("right"),
-            "align-top" => r.set_valign("top"),
-            "align-middle" => r.set_valign("middle"),
-            "align-bottom" => r.set_valign("bottom"),
+            // Vertical align (top/middle/bottom) is a dropdown — its items are
+            // handled by `wire_valign_menu`, not here.
             _ => return,
         }
         r.render();
@@ -312,6 +311,48 @@ pub(crate) fn wire_freeze_menu(menu: web_sys::Element, renderer: &SharedRenderer
                     return;
                 }
             }
+            r.render();
+        }
+        sync();
+        hide_palette(&menu_for_hide);
+    });
+}
+
+/// Items for the vertical-align dropdown (x-spreadsheet parity). Each shows the
+/// align sprite icon plus a label; `data-valign` carries the value.
+pub(crate) fn valign_menu_html() -> String {
+    let items = [("top", "Top"), ("middle", "Middle"), ("bottom", "Bottom")];
+    let mut s = String::new();
+    for (mode, label) in items {
+        s.push_str(&format!(
+            "<div class=\"{p}-item\" data-valign=\"{mode}\" style=\"cursor:pointer;display:flex;align-items:center;gap:6px;\">\
+               <div class=\"{p}-icon\"><div class=\"{p}-icon-img align-{mode}\"></div></div>{label}\
+             </div>",
+            p = CSS_PREFIX, mode = mode, label = label
+        ));
+    }
+    s
+}
+
+/// Wire the vertical-align dropdown: clicking an item applies it to the
+/// selection via `set_valign` and closes the menu.
+pub(crate) fn wire_valign_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    let renderer = renderer.clone();
+    let sync = sync.clone();
+    let menu_for_hide = menu.clone();
+    let mut el: Element = menu.into();
+    el.add_event_listener("click", move |event: web_sys::Event| {
+        let Some(target) = event.target() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let item = elx
+            .get_attribute("data-valign")
+            .map(|_| elx.clone())
+            .or_else(|| elx.closest("[data-valign]").ok().flatten());
+        let Some(item) = item else { return };
+        let Some(mode) = item.get_attribute("data-valign") else { return };
+        {
+            let mut r = renderer.borrow_mut();
+            r.set_valign(&mode);
             r.render();
         }
         sync();

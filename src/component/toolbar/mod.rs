@@ -89,9 +89,9 @@ impl Toolbar {
             Some(("align-left", "align-left")),
             Some(("align-center", "align-center")),
             Some(("align-right", "align-right")),
-            Some(("align-top", "align-top")),
-            Some(("align-middle", "align-middle")),
-            Some(("align-bottom", "align-bottom")),
+            // Vertical align is a dropdown (top/middle/bottom), matching
+            // x-spreadsheet; the menu is registered in `zedsheet`.
+            Some(("valign", "align-middle")),
             Some(("textwrap", "textwrap")),
             None,
             Some(("freeze", "freeze")),
@@ -197,9 +197,7 @@ fn tip_for(action: &str) -> &'static str {
         "align-left" => "Align left",
         "align-center" => "Align center",
         "align-right" => "Align right",
-        "align-top" => "Align top",
-        "align-middle" => "Align middle",
-        "align-bottom" => "Align bottom",
+        "valign" => "Vertical align",
         "textwrap" => "Text wrap",
         "freeze" => "Freeze",
         "autofilter" => "Filter",
