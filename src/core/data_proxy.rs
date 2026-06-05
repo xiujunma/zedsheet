@@ -61,7 +61,7 @@ pub struct Style {
     pub indent: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Border {
     pub left: Option<(String, String)>,
     pub right: Option<(String, String)>,
@@ -1177,6 +1177,10 @@ impl DataProxy {
         self.styles.len() - 1
     }
 
+    // Dedup key for `add_style`. EVERY `Style` field must be compared here:
+    // any omitted field makes two visually-distinct styles collapse into one,
+    // silently discarding that attribute (this is how the borders bug shipped —
+    // `border` was missing). When adding a field to `Style`, add it here too.
     fn styles_equal(a: &Style, b: &Style) -> bool {
         a.bgcolor == b.bgcolor
             && a.color == b.color
@@ -1193,6 +1197,7 @@ impl DataProxy {
             && a.rotation == b.rotation
             && a.shrink_to_fit == b.shrink_to_fit
             && a.indent == b.indent
+            && a.border == b.border
     }
 
     pub fn merge(&mut self) {
@@ -2483,6 +2488,59 @@ mod tests {
                 "{label}: freeze_is_active mismatch after roundtrip"
             );
         }
+    }
+
+    // --- Style interning must respect the border field ---
+    //
+    // `add_style` deduplicates identical styles via `styles_equal`. That
+    // comparison originally omitted `border`, so a bordered style collapsed
+    // into an existing borderless one, `set_cell_style` pointed the cell back
+    // at the borderless entry, and the borders dropdown had no visible effect.
+
+    #[test]
+    fn add_style_distinguishes_border() {
+        let mut d = DataProxy::new("t");
+        let plain_idx = d.add_style(Style::default());
+        let mut bordered = Style::default();
+        bordered.border = Some(Border {
+            left: None,
+            right: None,
+            top: Some(("thin".to_string(), "#000000".to_string())),
+            bottom: None,
+        });
+        let bordered_idx = d.add_style(bordered);
+        assert_ne!(
+            plain_idx, bordered_idx,
+            "a bordered style must not be interned as equal to a borderless one"
+        );
+        assert!(d.styles[bordered_idx].border.is_some());
+    }
+
+    #[test]
+    fn border_survives_style_interning() {
+        // End-to-end of the set_borders mechanism: seed a borderless style (as
+        // any prior formatting or the default baseline would), then apply a
+        // border to that cell and confirm get_cell_style still reports it.
+        let mut d = DataProxy::new("t");
+        let idx0 = d.add_style(Style::default());
+        d.set_cell_style(0, 0, idx0);
+
+        let mut style = d.get_cell_style(0, 0);
+        let mut b = style.border.clone().unwrap_or(Border {
+            left: None,
+            right: None,
+            top: None,
+            bottom: None,
+        });
+        b.top = Some(("thin".to_string(), "#000000".to_string()));
+        style.border = Some(b);
+        let idx = d.add_style(style);
+        d.set_cell_style(0, 0, idx);
+
+        assert!(
+            d.get_cell_style(0, 0).border.and_then(|b| b.top).is_some(),
+            "top border must persist after style interning"
+        );
     }
 
     // --- Hide / unhide + cell shift (issue #14) ---

@@ -123,7 +123,13 @@ impl Canvas {
     }
 
     pub fn line(&self, x1: f64, y1: f64, x2: f64, y2: f64) -> &Self {
-        self.move_to(x1, y1)
+        // begin_path() is essential: ctx state carries the accumulated path
+        // across calls, and stroke() re-strokes the WHOLE path in the current
+        // color. Without resetting, a later gray gridline stroke would re-paint
+        // earlier subpaths (e.g. a cell's black borders) gray. Each line() is a
+        // self-contained segment, so it must start its own path.
+        self.begin_path()
+            .move_to(x1, y1)
             .line_to(x2, y2)
             .stroke();
         return self
