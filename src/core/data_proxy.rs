@@ -496,18 +496,12 @@ impl DataProxy {
                     *pos += 1;
                 }
                 let args = self.parse_args(t, pos, vis);
-                // IFERROR sees per-argument results: the first argument's
-                // error selects the fallback instead of propagating (issue #2).
-                if name.eq_ignore_ascii_case("IFERROR") {
-                    let mut it = args.into_iter();
-                    return match it.next() {
-                        Some(Ok(a)) => Ok(a.into_scalar()),
-                        Some(Err(_)) | None => match it.next() {
-                            Some(Ok(a)) => Ok(a.into_scalar()),
-                            Some(Err(e)) => Err(e),
-                            None => Ok(Value::Number(0.0)),
-                        },
-                    };
+                // Functions that must observe a *failed* or typed argument
+                // (IFERROR, IFNA, IS*) are resolved here, where the per-argument
+                // results — including evaluation errors — are still visible
+                // (issue #2/#27).
+                if let Some(res) = apply_info_function(&name, &args) {
+                    return res;
                 }
                 // Every other function propagates the first failing argument,
                 // preserving the engine's historic error behavior.
@@ -1812,6 +1806,68 @@ fn match_position(needle: &Value, cells: &[Value], mode: f64) -> Result<Value, E
     best.map(|i| Value::Number((i + 1) as f64)).ok_or(EvalErr::Na)
 }
 
+/// Functions that must observe a *failed* or specifically-typed argument
+/// rather than just its coerced value: `IFERROR`/`IFNA` swap in a fallback,
+/// and the `IS*` predicates test a condition. They are handled here — before
+/// arguments are unwrapped in `eval_expr` — because a computed error short-
+/// circuits the normal argument path (issue #27). `None` means "not one of
+/// these", so the regular dispatch takes over.
+fn apply_info_function(
+    name: &str,
+    args: &[Result<Arg, EvalErr>],
+) -> Option<Result<Value, EvalErr>> {
+    // The error carried by an argument: a computed `Err`, or a literal error
+    // value (`#REF!`, …) sitting in a referenced cell.
+    let arg_error = |a: Option<&Result<Arg, EvalErr>>| -> Option<EvalErr> {
+        match a {
+            Some(Err(e)) => Some(*e),
+            Some(Ok(arg)) => EvalErr::from_literal(&arg.to_scalar().as_text()),
+            None => None,
+        }
+    };
+    // Pass an argument through as a scalar (or propagate its error).
+    let passthrough = |a: Option<&Result<Arg, EvalErr>>| -> Result<Value, EvalErr> {
+        match a {
+            Some(Ok(arg)) => Ok(arg.clone().into_scalar()),
+            Some(Err(e)) => Err(*e),
+            None => Ok(Value::Number(0.0)),
+        }
+    };
+    let bool_v = |b: bool| Ok(Value::Number(if b { 1.0 } else { 0.0 }));
+    let is_kind = |want_text: bool| -> bool {
+        arg_error(args.first()).is_none()
+            && matches!(
+                args.first(),
+                Some(Ok(a)) if matches!(a.to_scalar(), Value::Text(_)) == want_text
+            )
+    };
+    let err0 = arg_error(args.first());
+
+    let v = match name.to_uppercase().as_str() {
+        "IFERROR" => {
+            if err0.is_some() {
+                passthrough(args.get(1))
+            } else {
+                passthrough(args.first())
+            }
+        }
+        "IFNA" => {
+            if err0 == Some(EvalErr::Na) {
+                passthrough(args.get(1))
+            } else {
+                passthrough(args.first())
+            }
+        }
+        "ISERROR" => bool_v(err0.is_some()),
+        "ISNA" => bool_v(err0 == Some(EvalErr::Na)),
+        "ISERR" => bool_v(matches!(err0, Some(e) if e != EvalErr::Na)),
+        "ISNUMBER" => bool_v(is_kind(false)),
+        "ISTEXT" => bool_v(is_kind(true)),
+        _ => return None,
+    };
+    Some(v)
+}
+
 /// Text, criteria, and lookup functions (issue #2) — the ones that need real
 /// values or range shape. `None` means "not one of these" and the flattened
 /// numeric catalog below takes over.
@@ -1931,9 +1987,208 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             let mode = if args.len() >= 3 { num(2) } else { 1.0 };
             return match_position(&needle, &cells, mode).map(Some);
         }
+
+        // Multi-criteria aggregates. COUNTIFS is all (range, criterion) pairs;
+        // SUMIFS/AVERAGEIFS reserve arg 0 for the summed range, pairs from 1.
+        "COUNTIFS" | "SUMIFS" | "AVERAGEIFS" => {
+            let pairs_from = if upper == "COUNTIFS" { 0 } else { 1 };
+            if args.len() <= pairs_from || (args.len() - pairs_from) % 2 != 0 {
+                return Err(EvalErr::Value);
+            }
+            let pairs: Vec<(Vec<Value>, Box<dyn Fn(&Value) -> bool>)> = (pairs_from..args.len())
+                .step_by(2)
+                .map(|k| (args[k].cells(), criteria_matcher(&scalar(k + 1))))
+                .collect();
+            let n = pairs.first().map_or(0, |(cells, _)| cells.len());
+            let pool = if upper == "COUNTIFS" { Vec::new() } else { args[0].cells() };
+            let (mut sum, mut count) = (0.0, 0usize);
+            for i in 0..n {
+                if pairs.iter().all(|(cells, m)| cells.get(i).map_or(false, |v| m(v))) {
+                    count += 1;
+                    if upper != "COUNTIFS" {
+                        sum += pool.get(i).map(Value::as_number).unwrap_or(0.0);
+                    }
+                }
+            }
+            match upper {
+                "COUNTIFS" => Value::Number(count as f64),
+                "SUMIFS" => Value::Number(sum),
+                _ if count == 0 => return Err(EvalErr::Div0),
+                _ => Value::Number(sum / count as f64),
+            }
+        }
+
+        // CHOOSE(index, value1, value2, …) — 1-based pick.
+        "CHOOSE" => {
+            let i = num(0) as usize;
+            if i < 1 || i >= args.len() {
+                return Err(EvalErr::Value);
+            }
+            args[i].to_scalar()
+        }
+
+        // XLOOKUP(needle, lookup_range, return_range, [if_not_found]) — exact.
+        "XLOOKUP" => {
+            if args.len() < 3 {
+                return Err(EvalErr::Value);
+            }
+            let needle = scalar(0);
+            let look = args[1].cells();
+            let ret = args[2].cells();
+            match look
+                .iter()
+                .position(|v| compare_values(v, &needle) == Some(std::cmp::Ordering::Equal))
+            {
+                Some(i) => ret.get(i).cloned().ok_or(EvalErr::Ref)?,
+                None if args.len() >= 4 => scalar(3),
+                None => return Err(EvalErr::Na),
+            }
+        }
+
+        // LOOKUP(needle, lookup_vector, [result_vector]) — last value ≤ needle
+        // (assumes the lookup vector is sorted ascending, like Excel).
+        "LOOKUP" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            let needle = scalar(0);
+            let look = args[1].cells();
+            let res = if args.len() >= 3 { args[2].cells() } else { look.clone() };
+            let mut best: Option<usize> = None;
+            for (i, v) in look.iter().enumerate() {
+                if matches!(
+                    compare_values(v, &needle),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                ) {
+                    best = Some(i);
+                }
+            }
+            match best {
+                Some(i) => res.get(i).cloned().unwrap_or(Value::Number(0.0)),
+                None => return Err(EvalErr::Na),
+            }
+        }
+
+        // TEXTJOIN(delimiter, ignore_empty, text…)
+        "TEXTJOIN" => {
+            if args.len() < 3 {
+                return Err(EvalErr::Value);
+            }
+            let delim = text(0);
+            let ignore_empty = scalar(1).is_truthy();
+            let parts: Vec<String> = flatten_values(&args[2..])
+                .iter()
+                .map(Value::as_text)
+                .filter(|s| !(ignore_empty && s.is_empty()))
+                .collect();
+            Value::Text(parts.join(&delim))
+        }
+
+        // SUBSTITUTE(text, old, new, [instance]) — replace by content.
+        "SUBSTITUTE" => {
+            if args.len() < 3 {
+                return Err(EvalErr::Value);
+            }
+            let (s, old, new) = (text(0), text(1), text(2));
+            if old.is_empty() {
+                Value::Text(s)
+            } else if args.len() >= 4 {
+                Value::Text(substitute_nth(&s, &old, &new, num(3) as usize))
+            } else {
+                Value::Text(s.replace(&old, &new))
+            }
+        }
+
+        // REPLACE(text, start, num_chars, new_text) — replace by position.
+        "REPLACE" => {
+            if args.len() < 4 {
+                return Err(EvalErr::Value);
+            }
+            let chars: Vec<char> = text(0).chars().collect();
+            let start = (num(1).max(1.0) as usize).saturating_sub(1);
+            let count = num(2).max(0.0) as usize;
+            let mut out: String = chars.iter().take(start).collect();
+            out.push_str(&text(3));
+            out.extend(chars.iter().skip(start + count));
+            Value::Text(out)
+        }
+
+        // FIND (case-sensitive) / SEARCH (case-insensitive) → 1-based position;
+        // #VALUE! when not found. Character-indexed (Unicode-safe).
+        "FIND" | "SEARCH" => {
+            if args.len() < 2 {
+                return Err(EvalErr::Value);
+            }
+            let (needle, hay) = (text(0), text(1));
+            let start = if args.len() >= 3 {
+                (num(2).max(1.0) as usize).saturating_sub(1)
+            } else {
+                0
+            };
+            let (hay_c, needle_c): (Vec<char>, Vec<char>) = if upper == "SEARCH" {
+                (hay.to_lowercase().chars().collect(), needle.to_lowercase().chars().collect())
+            } else {
+                (hay.chars().collect(), needle.chars().collect())
+            };
+            match find_subsequence(&hay_c, &needle_c, start) {
+                Some(i) => Value::Number((i + 1) as f64),
+                None => return Err(EvalErr::Value),
+            }
+        }
+
+        // VALUE(text) — coerce numeric/date text to a number; else #VALUE!.
+        "VALUE" => {
+            let t = text(0);
+            let t = t.trim();
+            if let Ok(n) = t.parse::<f64>() {
+                Value::Number(n)
+            } else if let Some(serial) = crate::core::date::parse_date(t) {
+                Value::Number(serial)
+            } else {
+                return Err(EvalErr::Value);
+            }
+        }
+
         _ => return Ok(None),
     };
     Ok(Some(v))
+}
+
+/// Replace only the `nth` (1-based) occurrence of `old` with `new`. `nth == 0`
+/// or fewer than `nth` occurrences leaves the string unchanged. Used by
+/// `SUBSTITUTE`'s optional instance argument.
+fn substitute_nth(s: &str, old: &str, new: &str, nth: usize) -> String {
+    if nth == 0 {
+        return s.to_string();
+    }
+    let mut count = 0;
+    let mut result = String::new();
+    let mut rest = s;
+    while let Some(pos) = rest.find(old) {
+        count += 1;
+        if count == nth {
+            result.push_str(&rest[..pos]);
+            result.push_str(new);
+            result.push_str(&rest[pos + old.len()..]);
+            return result;
+        }
+        result.push_str(&rest[..pos + old.len()]);
+        rest = &rest[pos + old.len()..];
+    }
+    result.push_str(rest);
+    result
+}
+
+/// First char index ≥ `start` at which `needle` occurs in `hay` (both already
+/// case-folded by the caller for `SEARCH`). An empty needle matches at `start`.
+fn find_subsequence(hay: &[char], needle: &[char], start: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return (start <= hay.len()).then_some(start);
+    }
+    if needle.len() > hay.len() {
+        return None;
+    }
+    (start..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
 }
 
 fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
@@ -2521,6 +2776,89 @@ mod tests {
         assert_eq!(eval_with(&cells, "=MATCH(\"d\", A2:B2, 0)"), "2");
         assert_eq!(eval_with(&cells, "=MATCH(25, A5:A7, 1)"), "2"); // largest ≤ 25
         assert_eq!(eval_with(&cells, "=MATCH(99, A5:A7, 0)"), "#N/A");
+    }
+
+    #[test]
+    fn multi_criteria_sumifs_countifs_averageifs() {
+        let cells = [
+            (0, 0, "apple"),  (0, 1, "red"),    (0, 2, "10"),
+            (1, 0, "banana"), (1, 1, "yellow"), (1, 2, "20"),
+            (2, 0, "apple"),  (2, 1, "green"),  (2, 2, "30"),
+            (3, 0, "apple"),  (3, 1, "red"),    (3, 2, "40"),
+        ];
+        assert_eq!(eval_with(&cells, "=SUMIFS(C1:C4, A1:A4, \"apple\", B1:B4, \"red\")"), "50");
+        assert_eq!(eval_with(&cells, "=COUNTIFS(A1:A4, \"apple\")"), "3");
+        assert_eq!(eval_with(&cells, "=COUNTIFS(A1:A4, \"apple\", C1:C4, \">15\")"), "2");
+        assert_eq!(eval_with(&cells, "=AVERAGEIFS(C1:C4, A1:A4, \"apple\", B1:B4, \"red\")"), "25");
+        assert_eq!(eval_with(&cells, "=AVERAGEIFS(C1:C4, A1:A4, \"plum\")"), "#DIV/0!");
+    }
+
+    #[test]
+    fn choose_function() {
+        assert_eq!(eval_with(&[], "=CHOOSE(2, \"a\", \"b\", \"c\")"), "b");
+        assert_eq!(eval_with(&[], "=CHOOSE(1, 10, 20)"), "10");
+        assert_eq!(eval_with(&[], "=CHOOSE(5, \"a\", \"b\")"), "#VALUE!");
+    }
+
+    #[test]
+    fn xlookup_and_lookup() {
+        let cells = [
+            (0, 0, "1"), (0, 1, "one"),
+            (1, 0, "2"), (1, 1, "two"),
+            (2, 0, "3"), (2, 1, "three"),
+        ];
+        assert_eq!(eval_with(&cells, "=XLOOKUP(2, A1:A3, B1:B3)"), "two");
+        assert_eq!(eval_with(&cells, "=XLOOKUP(9, A1:A3, B1:B3, \"missing\")"), "missing");
+        assert_eq!(eval_with(&cells, "=XLOOKUP(9, A1:A3, B1:B3)"), "#N/A");
+        assert_eq!(eval_with(&cells, "=LOOKUP(2.5, A1:A3, B1:B3)"), "two"); // approx: last ≤
+    }
+
+    #[test]
+    fn textjoin_substitute_replace_value() {
+        // Blank-skipping is tested with empty string literals (an empty *cell*
+        // resolves to 0 in this engine, not a blank).
+        // 2nd arg is the ignore-empty flag (bare TRUE/FALSE aren't literals in
+        // this engine — use 1/0).
+        assert_eq!(eval_with(&[], "=TEXTJOIN(\"-\", 1, \"a\", \"\", \"c\")"), "a-c");
+        assert_eq!(eval_with(&[], "=TEXTJOIN(\", \", 0, \"x\", \"y\")"), "x, y");
+        assert_eq!(eval_with(&[], "=SUBSTITUTE(\"a-b-c\", \"-\", \"+\")"), "a+b+c");
+        assert_eq!(eval_with(&[], "=SUBSTITUTE(\"a-b-c\", \"-\", \"+\", 2)"), "a-b+c");
+        assert_eq!(eval_with(&[], "=REPLACE(\"abcdef\", 2, 3, \"XY\")"), "aXYef");
+        assert_eq!(eval_with(&[], "=VALUE(\"123\")"), "123");
+        assert_eq!(eval_with(&[], "=VALUE(\"abc\")"), "#VALUE!");
+    }
+
+    #[test]
+    fn find_and_search() {
+        assert_eq!(eval_with(&[], "=FIND(\"b\", \"abcabc\")"), "2");
+        assert_eq!(eval_with(&[], "=FIND(\"b\", \"abcabc\", 3)"), "5"); // start past the first
+        assert_eq!(eval_with(&[], "=FIND(\"z\", \"abc\")"), "#VALUE!");
+        assert_eq!(eval_with(&[], "=SEARCH(\"B\", \"abc\")"), "2"); // case-insensitive
+        assert_eq!(eval_with(&[], "=FIND(\"B\", \"abc\")"), "#VALUE!"); // case-sensitive
+    }
+
+    #[test]
+    fn info_and_error_functions() {
+        // Booleans render as 1/0 in this engine.
+        let cells = [(0, 0, "5"), (0, 1, "hello")]; // A1=5, B1=hello
+        assert_eq!(eval_with(&cells, "=ISNUMBER(A1)"), "1");
+        assert_eq!(eval_with(&cells, "=ISNUMBER(B1)"), "0");
+        assert_eq!(eval_with(&cells, "=ISTEXT(B1)"), "1");
+        assert_eq!(eval_with(&cells, "=ISTEXT(A1)"), "0");
+        assert_eq!(eval_with(&cells, "=ISERROR(1/0)"), "1");
+        assert_eq!(eval_with(&cells, "=ISERROR(A1)"), "0");
+        assert_eq!(eval_with(&cells, "=ISNA(VLOOKUP(99, A1:A2, 1, 0))"), "1");
+        assert_eq!(eval_with(&cells, "=ISNA(1/0)"), "0"); // #DIV/0! is not #N/A
+        assert_eq!(eval_with(&cells, "=ISERR(1/0)"), "1"); // any error except #N/A
+        assert_eq!(eval_with(&cells, "=ISERR(VLOOKUP(99, A1:A2, 1, 0))"), "0");
+    }
+
+    #[test]
+    fn ifna_recovers_from_na_only() {
+        let cells = [(0, 0, "5")];
+        assert_eq!(eval_with(&cells, "=IFNA(VLOOKUP(99, A1:A1, 1, 0), \"none\")"), "none");
+        assert_eq!(eval_with(&cells, "=IFNA(42, \"none\")"), "42");
+        assert_eq!(eval_with(&cells, "=IFNA(1/0, \"none\")"), "#DIV/0!"); // non-#N/A propagates
     }
 
     #[test]
