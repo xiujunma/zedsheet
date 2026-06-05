@@ -6,6 +6,7 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
 use crate::component::element::Element;
+use crate::config::CSS_PREFIX;
 use crate::renderer::alphabets::exp2xy;
 
 /// Set (or clear, with `None`) the grid canvas's CSS cursor. Used by Format
@@ -64,6 +65,17 @@ pub(crate) fn toggle_disabled(toolbar: &web_sys::Element, action: &str, on: bool
 pub(crate) fn set_text_by_id(id: &str, text: &str) {
     if let Some(el) = document().get_element_by_id(id) {
         el.set_text_content(Some(text));
+    }
+}
+
+/// Swap the sprite icon on a toolbar icon button (its inner `-icon-img`), so a
+/// dropdown button can reflect the active cell's value — e.g. the align
+/// dropdowns show the current alignment and update when the selection changes
+/// (matching x-spreadsheet's DropdownItem).
+pub(crate) fn set_toolbar_icon(toolbar: &web_sys::Element, action: &str, icon: &str) {
+    let selector = format!("[data-action=\"{}\"] .{}-icon-img", action, CSS_PREFIX);
+    if let Ok(Some(img)) = toolbar.query_selector(&selector) {
+        let _ = img.set_attribute("class", &format!("{}-icon-img {}", CSS_PREFIX, icon));
     }
 }
 

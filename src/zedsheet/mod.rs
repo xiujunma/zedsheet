@@ -442,12 +442,11 @@ impl ZedSheet {
                     toggle_active(tb, "underline", style.underline);
                     toggle_active(tb, "strike", style.strike);
                     toggle_active(tb, "textwrap", style.text_wrap);
-                    toggle_active(tb, "align-left", style.align == "left");
-                    toggle_active(tb, "align-center", style.align == "center");
-                    toggle_active(tb, "align-right", style.align == "right");
-                    toggle_active(tb, "align-top", style.valign == "top");
-                    toggle_active(tb, "align-middle", style.valign == "middle");
-                    toggle_active(tb, "align-bottom", style.valign == "bottom");
+                    // The align dropdown buttons reflect the active cell's
+                    // alignment (icon align-left/center/right and
+                    // align-top/middle/bottom), updating as the selection moves.
+                    set_toolbar_icon(tb, "halign", &format!("align-{}", style.align));
+                    set_toolbar_icon(tb, "valign", &format!("align-{}", style.valign));
                 }
                 set_text_by_id("zs-dd-font", &style.font_family);
                 set_text_by_id("zs-dd-fontsize", &style.font_size.to_string());

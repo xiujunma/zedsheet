@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "zedsheet"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "calamine",
  "console_error_panic_hook",
