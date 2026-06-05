@@ -2149,6 +2149,28 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             }
         }
 
+        // IF / IFS live here (not the numeric catalog) so the chosen branch
+        // keeps its type — a text result survives instead of coercing to 0
+        // (issue #28 follow-up). Arguments are still evaluated eagerly upstream,
+        // so this is NOT short-circuit; lazy evaluation is tracked separately.
+        "IF" => {
+            if scalar(0).is_truthy() {
+                args.get(1).map(Arg::to_scalar).unwrap_or(Value::Number(0.0))
+            } else {
+                args.get(2).map(Arg::to_scalar).unwrap_or(Value::Number(0.0))
+            }
+        }
+        "IFS" => {
+            let mut i = 0;
+            while i + 1 < args.len() {
+                if scalar(i).is_truthy() {
+                    return Ok(Some(args[i + 1].to_scalar()));
+                }
+                i += 2;
+            }
+            return Err(EvalErr::Na); // no condition matched
+        }
+
         _ => return Ok(None),
     };
     Ok(Some(v))
@@ -2224,28 +2246,8 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "NOT" => bool_f64(first == 0.0),
         "TRUE" => 1.0,
         "FALSE" => 0.0,
-        "IF" => {
-            if args.len() >= 3 {
-                if first != 0.0 { args[1] } else { args[2] }
-            } else if args.len() == 2 {
-                if first != 0.0 { args[1] } else { 0.0 }
-            } else {
-                0.0
-            }
-        }
-        // IFS(cond1, val1, cond2, val2, …): first truthy condition's value.
-        "IFS" => {
-            let mut i = 0;
-            let mut out = 0.0;
-            while i + 1 < args.len() {
-                if args[i] != 0.0 {
-                    out = args[i + 1];
-                    break;
-                }
-                i += 2;
-            }
-            out
-        }
+        // IF / IFS are handled in apply_special_function so their result keeps
+        // its type (text survives); see there.
 
         // Math
         "ABS" => first.abs(),
@@ -2869,6 +2871,28 @@ mod tests {
         assert_eq!(eval_with(&cells, "=IF(A2=\"ABC\", 1, 0)"), "1");
         // SUM over a text cell still treats it as 0 (historic behavior).
         assert_eq!(eval_with(&cells, "=SUM(A1, 5)"), "5");
+    }
+
+    #[test]
+    fn if_preserves_text_branches() {
+        let cells = [(0, 0, "10")];
+        assert_eq!(eval_with(&cells, "=IF(A1>5, \"yes\", \"no\")"), "yes");
+        assert_eq!(eval_with(&cells, "=IF(A1>50, \"yes\", \"no\")"), "no");
+        assert_eq!(eval_with(&cells, "=IF(A1>5, \"yes\")"), "yes"); // 2-arg, true
+        assert_eq!(eval_with(&cells, "=IF(A1>50, \"yes\")"), "0"); // 2-arg, false → 0
+        assert_eq!(eval_with(&cells, "=IF(A1>5, 1, 0)"), "1"); // numeric still works
+        // nested, returning a text branch
+        assert_eq!(
+            eval_with(&cells, "=IF(A1>5, IF(A1>8, \"big\", \"mid\"), \"small\")"),
+            "big"
+        );
+    }
+
+    #[test]
+    fn ifs_preserves_text_and_na_on_no_match() {
+        let cells = [(0, 0, "75")];
+        assert_eq!(eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=70, \"B\", A1>=0, \"C\")"), "B");
+        assert_eq!(eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=80, \"B\")"), "#N/A"); // no match
     }
 
     #[test]
