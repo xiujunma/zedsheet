@@ -508,12 +508,25 @@ pub(crate) fn wire_events(
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
             // A fill-handle drag applies the fill on release.
             let was_fill = matches!(*drag.borrow(), Some(ds) if ds.kind == DragKind::Fill);
+            // `dragging` is only set by a plain cell-selection gesture (resize/
+            // scrollbar/fill drags return early at mousedown), so this is the
+            // moment a selection finalizes — where an armed Format Painter
+            // applies to the freshly-selected range (issue #31).
+            let was_selecting = *dragging.borrow();
             if was_fill {
                 {
                     let mut r = renderer.borrow_mut();
                     r.apply_fill();
                     r.render();
                 }
+                sync();
+            } else if was_selecting && renderer.borrow().is_format_painter_armed() {
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.apply_format_painter();
+                    r.render();
+                }
+                super::util::set_canvas_cursor(None);
                 sync();
             }
             *dragging.borrow_mut() = false;

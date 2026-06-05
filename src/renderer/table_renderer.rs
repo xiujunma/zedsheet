@@ -445,6 +445,9 @@ pub struct TableRenderer {
     /// The last range's anchor is the active cell mirrored by `selector`.
     pub multi_range: MultiRangeState,
     pub clipboard: Option<ClipboardData>,
+    /// Format Painter (issue #31): the source cell's resolved style, captured
+    /// while armed; the next selection applies it. `None` when not armed.
+    format_painter: Option<CellStyle>,
     /// Source selection bounds (r0,c0,r1,c1) while a fill-handle drag is active.
     fill_source: Option<(usize, usize, usize, usize)>,
     /// Screen rect (x,y,w,h) of the fill handle from the last render, for hit-testing.
@@ -526,6 +529,7 @@ impl TableRenderer {
             selection_anchor: (0, 0),
             multi_range: MultiRangeState::new(),
             clipboard: None,
+            format_painter: None,
             fill_source: None,
             last_fill_handle: std::cell::Cell::new(None),
             undo_stack: Vec::new(),
@@ -1183,6 +1187,29 @@ impl TableRenderer {
             let idx = self.data.add_style(style);
             self.data.set_cell_style(ri, ci, idx);
         }
+    }
+
+    /// Format Painter (issue #31): if armed, disarm; otherwise capture the
+    /// active cell's resolved style to paint onto the next selection. Returns
+    /// the resulting armed state (for cursor feedback).
+    pub fn toggle_format_painter(&mut self) -> bool {
+        self.format_painter = match self.format_painter {
+            Some(_) => None,
+            None => Some(self.data.get_cell_style(self.selector.ri, self.selector.ci)),
+        };
+        self.format_painter.is_some()
+    }
+
+    pub fn is_format_painter_armed(&self) -> bool {
+        self.format_painter.is_some()
+    }
+
+    /// Apply the armed Format Painter style to the current selection, then
+    /// disarm. No-op if not armed (or, via the style funnel, on a read-only
+    /// sheet). Single-use, matching Excel's single-click Format Painter.
+    pub fn apply_format_painter(&mut self) {
+        let Some(style) = self.format_painter.take() else { return };
+        self.update_selection_style(move |s| *s = style.clone());
     }
 
     pub fn toggle_bold(&mut self) {

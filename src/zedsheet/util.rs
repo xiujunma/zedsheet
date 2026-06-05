@@ -8,6 +8,24 @@ use web_sys::HtmlElement;
 use crate::component::element::Element;
 use crate::renderer::alphabets::exp2xy;
 
+/// Set (or clear, with `None`) the grid canvas's CSS cursor. Used by Format
+/// Painter to signal its armed state (issue #31). Targets the first mounted
+/// grid canvas.
+pub(crate) fn set_canvas_cursor(cursor: Option<&str>) {
+    let Some(canvas) = document().query_selector("canvas.zedsheet-table").ok().flatten() else {
+        return;
+    };
+    let Some(he) = canvas.dyn_ref::<HtmlElement>() else { return };
+    match cursor {
+        Some(c) => {
+            let _ = he.style().set_property("cursor", c);
+        }
+        None => {
+            let _ = he.style().remove_property("cursor");
+        }
+    }
+}
+
 pub(crate) fn client_box(el: &Element) -> (f64, f64) {
     el.el
         .as_ref()

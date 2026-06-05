@@ -5,6 +5,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use crate::component::element::Element;
 use crate::config::CSS_PREFIX;
+use super::util::set_canvas_cursor;
 #[allow(unused_imports)]
 use super::*;
 
@@ -107,6 +108,15 @@ pub(crate) fn wire_toolbar(
         // Dropdown buttons open their registered menu under the button.
         if let Some((_, menu)) = menus.iter().find(|(a, _)| *a == action) {
             show_palette_under(menu, &button);
+            return;
+        }
+
+        // Format Painter (issue #31): toggle the armed state, capturing the
+        // active cell's style. The next selection applies it (see the window
+        // mouseup handler in events.rs). The canvas cursor reflects the state.
+        if action == "paintformat" {
+            let armed = renderer.borrow_mut().toggle_format_painter();
+            set_canvas_cursor(if armed { Some("copy") } else { None });
             return;
         }
 
