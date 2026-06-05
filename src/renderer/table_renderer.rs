@@ -771,6 +771,21 @@ impl TableRenderer {
         }
     }
 
+    /// The on-screen rect of a cell, expanded to cover its full merged region
+    /// when it is part of one (the top-left comes from the merge origin). Used
+    /// to size the cell editor so it covers the whole merged cell, not just the
+    /// anchor.
+    pub fn merged_screen_rect(&self, ri: usize, ci: usize) -> Rect {
+        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(ri, ci, ri, ci);
+        let origin = self.cell_screen_rect(r0, c0);
+        Rect {
+            x: origin.x,
+            y: origin.y,
+            width: (c0..=c1).map(|c| self.col_width_at(c)).sum(),
+            height: (r0..=r1).map(|r| self.row_height_at(r)).sum(),
+        }
+    }
+
     /// Scroll the body by whole-cell steps, clamped to the data bounds.
     pub fn scroll_by(&mut self, d_rows: i32, d_cols: i32) {
         let max_row = self.data.row_count().saturating_sub(1);

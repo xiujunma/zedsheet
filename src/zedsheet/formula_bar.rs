@@ -335,7 +335,8 @@ pub(crate) fn start_edit(
         let mut r = renderer.borrow_mut();
         r.select_cell(ri, ci);
         r.render();
-        (r.cell_screen_rect(ri, ci), r.cell_text_at(ri, ci))
+        // Size the editor to the whole merged region, not just the anchor cell.
+        (r.merged_screen_rect(ri, ci), r.cell_text_at(ri, ci))
     };
     let style = textarea.style();
     let _ = style.set_property("left", &format!("{}px", rect.x));
