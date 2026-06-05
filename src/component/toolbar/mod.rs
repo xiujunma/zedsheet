@@ -127,10 +127,20 @@ impl Toolbar {
                     let mut btn = h("div", Some(&format!("{}-toolbar-btn", CSS_PREFIX)));
                     btn.dataset_set("action", action);
                     btn.dataset_set("tip", tip_for(action));
+                    // Dropdown buttons get a small down-caret to signal they open
+                    // a menu (matching the format/font dropdowns).
+                    let caret = if is_dropdown_action(action) {
+                        "<span style=\"display:inline-block;width:0;height:0;margin-left:1px;\
+                           border-left:3px solid transparent;border-right:3px solid transparent;\
+                           border-top:4px solid #585757;vertical-align:middle;opacity:0.6;\"></span>"
+                    } else {
+                        ""
+                    };
                     btn.set_inner_html(format!(
-                        "<div class=\"{prefix}-icon\"><div class=\"{prefix}-icon-img {icon}\"></div></div>",
+                        "<div class=\"{prefix}-icon\"><div class=\"{prefix}-icon-img {icon}\"></div></div>{caret}",
                         prefix = CSS_PREFIX,
-                        icon = icon
+                        icon = icon,
+                        caret = caret
                     ));
                     btns.append_child(&mut btn);
                     self.buttons.push(btn);
@@ -171,6 +181,12 @@ impl Default for Toolbar {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Whether a toolbar icon button opens a dropdown menu (so it should show a
+/// down-caret). The format/font/fontsize dropdowns render their own caret.
+fn is_dropdown_action(action: &str) -> bool {
+    matches!(action, "halign" | "valign" | "freeze" | "borders" | "formula")
 }
 
 /// Human-readable tooltip text for a toolbar button's `data-action`.

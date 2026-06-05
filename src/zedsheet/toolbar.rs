@@ -248,8 +248,29 @@ pub(crate) fn border_menu_html() -> String {
     s
 }
 
+/// Hide `menu` on any mousedown outside it (a click inside is left to the
+/// menu's own item handler). The toolbar button that opens the menu reopens it
+/// on the subsequent click event.
+pub(crate) fn close_on_outside_click(menu: web_sys::Element) {
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        if let Some(target) = event.target() {
+            if let Ok(node) = target.dyn_into::<web_sys::Node>() {
+                if menu.contains(Some(&node)) {
+                    return;
+                }
+            }
+        }
+        hide_palette(&menu);
+    });
+    window()
+        .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+}
+
 /// Wire the borders dropdown: a row applies that border mode to the selection.
 pub(crate) fn wire_border_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    close_on_outside_click(menu.clone());
     let renderer = renderer.clone();
     let sync = sync.clone();
     let menu_for_hide = menu.clone();
@@ -296,6 +317,7 @@ pub(crate) fn freeze_menu_html() -> String {
 /// Wire the freeze dropdown: each row sets (or clears) the frozen panes for the
 /// active selection (issue #18).
 pub(crate) fn wire_freeze_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    close_on_outside_click(menu.clone());
     let renderer = renderer.clone();
     let sync = sync.clone();
     let menu_for_hide = menu.clone();
@@ -347,6 +369,7 @@ pub(crate) fn valign_menu_html() -> String {
 /// Wire the vertical-align dropdown: clicking an item applies it to the
 /// selection via `set_valign` and closes the menu.
 pub(crate) fn wire_valign_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    close_on_outside_click(menu.clone());
     let renderer = renderer.clone();
     let sync = sync.clone();
     let menu_for_hide = menu.clone();
@@ -389,6 +412,7 @@ pub(crate) fn halign_menu_html() -> String {
 /// Wire the horizontal-align dropdown: clicking an item applies it via
 /// `set_align` and closes the menu.
 pub(crate) fn wire_halign_menu(menu: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
+    close_on_outside_click(menu.clone());
     let renderer = renderer.clone();
     let sync = sync.clone();
     let menu_for_hide = menu.clone();
