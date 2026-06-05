@@ -1,6 +1,6 @@
 [package]
 name = "zedsheet"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 description = "Web spreadsheet in Rust/WebAssembly — canvas grid, formula engine, styling, merges, charts, CSV/XLSX import-export; embeds in any app via a small JS API"
 license = "MIT"

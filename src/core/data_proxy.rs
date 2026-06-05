@@ -291,6 +291,9 @@ impl DataProxy {
             match self.eval_expr(expr, &mut visited) {
                 Ok(Value::Number(v)) => format_number(v),
                 Ok(Value::Text(s)) => s,
+                // A formula resolving to a blank shows 0, matching Excel's
+                // `=A1` on an empty cell (issue #36).
+                Ok(Value::Blank) => format_number(0.0),
                 Err(e) => e.code().to_string(),
             }
         } else {
@@ -370,7 +373,7 @@ impl DataProxy {
         } else {
             let t = text.trim();
             if t.is_empty() {
-                Ok(Value::Number(0.0))
+                Ok(Value::Blank)
             } else if let Ok(n) = t.parse::<f64>() {
                 Ok(Value::Number(n))
             } else if let Some(serial) = crate::core::date::parse_date(t) {
@@ -1599,11 +1602,14 @@ impl EvalErr {
 pub(crate) enum Value {
     Number(f64),
     Text(String),
+    /// An empty cell. Coerces to `0` / `""` like before, but is distinguishable
+    /// by `ISBLANK` / `COUNTA` / `COUNTBLANK` (issue #36).
+    Blank,
 }
 
 impl Value {
     /// Numeric coercion, mirroring the engine's historic behavior: numeric
-    /// text parses, date text becomes its serial, anything else is 0.
+    /// text parses, date text becomes its serial, blanks and anything else 0.
     fn as_number(&self) -> f64 {
         match self {
             Value::Number(n) => *n,
@@ -1612,6 +1618,7 @@ impl Value {
                 t.parse::<f64>()
                     .unwrap_or_else(|_| crate::core::date::parse_date(t).unwrap_or(0.0))
             }
+            Value::Blank => 0.0,
         }
     }
 
@@ -1620,6 +1627,7 @@ impl Value {
         match self {
             Value::Number(n) => format_number(*n),
             Value::Text(s) => s.clone(),
+            Value::Blank => String::new(),
         }
     }
 
@@ -1679,6 +1687,9 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Text(x), Value::Text(y)) => Some(x.to_lowercase().cmp(&y.to_lowercase())),
         (Value::Number(_), Value::Text(_)) => Some(Ordering::Less),
         (Value::Text(_), Value::Number(_)) => Some(Ordering::Greater),
+        // A blank compares as 0, preserving the historic "empty == 0".
+        (Value::Blank, _) => compare_values(&Value::Number(0.0), b),
+        (_, Value::Blank) => compare_values(a, &Value::Number(0.0)),
     }
 }
 
@@ -1834,14 +1845,15 @@ fn apply_info_function(
         }
     };
     let bool_v = |b: bool| Ok(Value::Number(if b { 1.0 } else { 0.0 }));
-    let is_kind = |want_text: bool| -> bool {
-        arg_error(args.first()).is_none()
-            && matches!(
-                args.first(),
-                Some(Ok(a)) if matches!(a.to_scalar(), Value::Text(_)) == want_text
-            )
-    };
     let err0 = arg_error(args.first());
+    // arg0's value when it isn't an error — for the type predicates. A blank
+    // is its own kind: neither number nor text (issue #36).
+    let scalar0 = || -> Option<Value> {
+        match args.first() {
+            Some(Ok(a)) if err0.is_none() => Some(a.to_scalar()),
+            _ => None,
+        }
+    };
 
     let v = match name.to_uppercase().as_str() {
         "IFERROR" => {
@@ -1861,8 +1873,9 @@ fn apply_info_function(
         "ISERROR" => bool_v(err0.is_some()),
         "ISNA" => bool_v(err0 == Some(EvalErr::Na)),
         "ISERR" => bool_v(matches!(err0, Some(e) if e != EvalErr::Na)),
-        "ISNUMBER" => bool_v(is_kind(false)),
-        "ISTEXT" => bool_v(is_kind(true)),
+        "ISNUMBER" => bool_v(matches!(scalar0(), Some(Value::Number(_)))),
+        "ISTEXT" => bool_v(matches!(scalar0(), Some(Value::Text(_)))),
+        "ISBLANK" => bool_v(matches!(scalar0(), Some(Value::Blank))),
         _ => return None,
     };
     Some(v)
@@ -2148,6 +2161,14 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
                 return Err(EvalErr::Value);
             }
         }
+
+        // COUNTA counts non-blank cells; COUNTBLANK counts blanks (issue #36).
+        "COUNTA" => Value::Number(
+            flatten_values(args).iter().filter(|v| !matches!(v, Value::Blank)).count() as f64,
+        ),
+        "COUNTBLANK" => Value::Number(
+            flatten_values(args).iter().filter(|v| matches!(v, Value::Blank)).count() as f64,
+        ),
 
         // IF / IFS live here (not the numeric catalog) so the chosen branch
         // keeps its type — a text result survives instead of coercing to 0
@@ -2893,6 +2914,30 @@ mod tests {
         let cells = [(0, 0, "75")];
         assert_eq!(eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=70, \"B\", A1>=0, \"C\")"), "B");
         assert_eq!(eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=80, \"B\")"), "#N/A"); // no match
+    }
+
+    #[test]
+    fn blank_aware_functions() {
+        // A1=5, A2 empty, A3="x", A4 empty, A5=0
+        let cells = [(0, 0, "5"), (2, 0, "x"), (4, 0, "0")];
+        assert_eq!(eval_with(&cells, "=ISBLANK(A2)"), "1"); // an empty cell is blank
+        assert_eq!(eval_with(&cells, "=ISBLANK(A1)"), "0"); // a number is not
+        assert_eq!(eval_with(&cells, "=ISBLANK(A5)"), "0"); // a literal 0 is not blank
+        assert_eq!(eval_with(&cells, "=ISBLANK(\"\")"), "0"); // an empty string is not blank
+        assert_eq!(eval_with(&cells, "=COUNTA(A1:A5)"), "3"); // A1, A3, A5
+        assert_eq!(eval_with(&cells, "=COUNTBLANK(A1:A5)"), "2"); // A2, A4
+        // A blank cell is now neither a number nor text (Excel parity).
+        assert_eq!(eval_with(&cells, "=ISNUMBER(A2)"), "0");
+        assert_eq!(eval_with(&cells, "=ISTEXT(A2)"), "0");
+    }
+
+    #[test]
+    fn blank_still_coerces_to_zero_in_math_and_compare() {
+        // The Value::Blank refactor must preserve the historic "empty == 0".
+        let cells = [(0, 0, "5")]; // A1=5, A2 empty
+        assert_eq!(eval_with(&cells, "=A2+10"), "10");
+        assert_eq!(eval_with(&cells, "=SUM(A1:A2)"), "5");
+        assert_eq!(eval_with(&cells, "=IF(A2=0, \"z\", \"nz\")"), "z");
     }
 
     #[test]
