@@ -2445,6 +2445,34 @@ mod tests {
         assert_eq!(eval("=IF(1=1, 7, 9)", &[]), "7");
     }
 
+    // Bare TRUE/FALSE are recognized boolean literals (issue #39). This engine
+    // models booleans as 1/0, so they render and flow through as 1/0.
+    #[test]
+    fn boolean_literals() {
+        assert_eq!(eval("=TRUE", &[]), "1");
+        assert_eq!(eval("=FALSE", &[]), "0");
+        assert_eq!(eval("=true", &[]), "1"); // case-insensitive
+        assert_eq!(eval("=False", &[]), "0");
+        // Flow through functions.
+        assert_eq!(eval("=IF(TRUE, 7, 9)", &[]), "7");
+        assert_eq!(eval("=IF(FALSE, 7, 9)", &[]), "9");
+        assert_eq!(eval("=AND(TRUE, FALSE)", &[]), "0");
+        assert_eq!(eval("=OR(TRUE, FALSE)", &[]), "1");
+        // The TRUE()/FALSE() functions still work — the literal must not shadow
+        // the `Name(` -> Function tokenization.
+        assert_eq!(eval("=TRUE()", &[]), "1");
+        assert_eq!(eval("=FALSE()", &[]), "0");
+        // VLOOKUP/HLOOKUP accept the FALSE literal as the exact-match flag.
+        assert_eq!(
+            eval_with(&[(0, 0, "Bob"), (0, 1, "200")], "=VLOOKUP(\"Bob\", A1:B2, 2, FALSE)"),
+            "200"
+        );
+        assert_eq!(
+            eval_with(&[(0, 0, "Bob"), (1, 0, "200")], "=HLOOKUP(\"Bob\", A1:A2, 2, FALSE)"),
+            "200"
+        );
+    }
+
     #[test]
     fn freeze_defaults_to_inactive() {
         let d = DataProxy::new("t");

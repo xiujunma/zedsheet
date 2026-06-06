@@ -426,6 +426,16 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             }
             if i < chars.len() && chars[i] == '(' {
                 tokens.push(Token::Function(ident));
+            } else if ident == "TRUE" {
+                // Boolean literals (issue #39). `ident` is already upper-cased,
+                // so this is case-insensitive. The `(` check above runs first,
+                // so the TRUE()/FALSE() functions are not shadowed. This engine
+                // models booleans as 1/0, so they tokenize as numeric literals
+                // and flow through every path (VLOOKUP's exact-match flag, IF,
+                // AND/OR, comparisons) the same way `1`/`0` already do.
+                tokens.push(Token::Number(1.0));
+            } else if ident == "FALSE" {
+                tokens.push(Token::Number(0.0));
             } else if looks_like_cell_ref(&ident) {
                 tokens.push(Token::CellRef(ident));
             } else {
