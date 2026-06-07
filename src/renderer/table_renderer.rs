@@ -828,6 +828,15 @@ impl TableRenderer {
         self.scroll_cols = nc as usize;
     }
 
+    /// Number of body rows that fit in the viewport — the step for PageUp /
+    /// PageDown (issue #41). Approximated from the default row height; always
+    /// at least 1 so a page move never stalls.
+    pub fn rows_per_page(&self) -> usize {
+        let body_h = (self.height - self.col_header.height).max(0.0);
+        let rh = self.data.default_row_height.max(1.0);
+        ((body_h / rh).floor() as usize).max(1)
+    }
+
     /// Move the single-cell selection by a delta, clamped to the data bounds.
     /// Scrolls the body if the new selection falls outside the visible range.
     pub fn move_selection(&mut self, d_rows: i32, d_cols: i32) {

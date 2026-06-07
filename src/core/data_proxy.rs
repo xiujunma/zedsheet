@@ -1111,6 +1111,21 @@ impl DataProxy {
         out
     }
 
+    /// The rightmost non-empty column in row `ri`, or 0 if the row is empty.
+    /// Used by the End key to jump to the last filled cell in the row (#41).
+    pub fn row_last_filled_col(&self, ri: usize) -> usize {
+        self.rows
+            .get(&ri)
+            .and_then(|row| {
+                row.cells
+                    .iter()
+                    .filter(|(_, c)| !c.text.is_empty())
+                    .map(|(ci, _)| *ci)
+                    .max()
+            })
+            .unwrap_or(0)
+    }
+
     /// Re-evaluate the active filters and hide/reveal the data rows of the
     /// autofilter range accordingly (issue #10). Filters match on the
     /// *displayed* value (formula results, applied formats) — the same string
@@ -3793,5 +3808,16 @@ mod tests {
         assert_eq!(d.get_named_range("testRange").as_deref(), Some("F1:F5"));
         d.set_cell_text(10, 0, "=SUM(testRange)");
         assert_eq!(d.cell_display_value(10, 0), "105");
+    }
+
+    // End-key target: rightmost non-empty column in a row (issue #41).
+    #[test]
+    fn row_last_filled_col_finds_rightmost_nonempty() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(2, 0, "a");
+        d.set_cell_text(2, 3, "b"); // D3
+        assert_eq!(d.row_last_filled_col(2), 3);
+        // An empty row reports column 0 (Home/End collapse to A there).
+        assert_eq!(d.row_last_filled_col(7), 0);
     }
 }

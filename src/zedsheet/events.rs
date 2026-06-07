@@ -393,6 +393,12 @@ pub(crate) fn wire_events(
                         "z" if ke.shift_key() => r.redo(),
                         "z" => r.undo(),
                         "y" => r.redo(),
+                        // Ctrl/Cmd+Home → A1; Ctrl/Cmd+End → last used cell (#41).
+                        "home" => r.select_and_reveal(0, 0),
+                        "end" => {
+                            let (mr, mc) = r.data.used_extent().unwrap_or((0, 0));
+                            r.select_and_reveal(mr, mc);
+                        }
                         _ => handled = false,
                     }
                     if handled {
@@ -424,6 +430,31 @@ pub(crate) fn wire_events(
                 "ArrowDown" => dr = 1,
                 "ArrowLeft" => dc = -1,
                 "ArrowRight" => dc = 1,
+                // Tab moves right, Shift+Tab left (#41).
+                "Tab" => dc = if ke.shift_key() { -1 } else { 1 },
+                "PageDown" => dr = renderer.borrow().rows_per_page() as i32,
+                "PageUp" => dr = -(renderer.borrow().rows_per_page() as i32),
+                // Home → start of row; End → last filled cell in the row (#41).
+                "Home" | "End" => {
+                    let (ri, target) = {
+                        let r = renderer.borrow();
+                        let s = r.get_selector();
+                        let col = if key == "Home" {
+                            0
+                        } else {
+                            r.data.row_last_filled_col(s.ri)
+                        };
+                        (s.ri, col)
+                    };
+                    {
+                        let mut r = renderer.borrow_mut();
+                        r.select_and_reveal(ri, target);
+                        r.render();
+                    }
+                    ke.prevent_default();
+                    sync();
+                    return;
+                }
                 "Enter" | "F2" => {
                     let (ri, ci) = {
                         let r = renderer.borrow();
