@@ -1157,8 +1157,17 @@ impl TableRenderer {
         self.start_col = 0;
         self.scroll_rows = 0;
         self.scroll_cols = 0;
-        self.selector = SelectorRect::default();
-        self.selection_anchor = (0, 0);
+        // Restore the selection carried in the loaded data instead of snapping
+        // back to A1 (issue #44). For payloads without `sel`, DataProxy's
+        // selector defaults to A1, so this preserves the old behavior.
+        let sel = self.data.selector.clone();
+        self.selector = SelectorRect {
+            ri: sel.range.sri,
+            ci: sel.range.sci,
+            eri: sel.range.eri,
+            eci: sel.range.eci,
+        };
+        self.selection_anchor = (sel.ri, sel.ci);
         self.multi_range.clear();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -1198,7 +1207,22 @@ impl TableRenderer {
     }
 
     pub fn data_clone(&self) -> DataProxy {
-        self.data.clone()
+        let mut d = self.data.clone();
+        // Mirror the live selection into the snapshot so get_data() exposes the
+        // active cell + selection range (issue #44). The renderer's
+        // SelectorRect is the source of truth; DataProxy.selector is otherwise
+        // only a serialization/bridge copy. This also makes tab switches and
+        // on_change payloads carry the current selection.
+        let s = self.selector;
+        d.selector.range = CellRange::new(
+            s.ri.min(s.eri),
+            s.ci.min(s.eci),
+            s.ri.max(s.eri),
+            s.ci.max(s.eci),
+        );
+        d.selector.ri = self.selection_anchor.0;
+        d.selector.ci = self.selection_anchor.1;
+        d
     }
 
     /// Normalized selection bounds (top-left .. bottom-right).

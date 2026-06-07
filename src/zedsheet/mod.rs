@@ -776,8 +776,9 @@ impl ZedSheet {
                 let first = sheets.borrow()[0].clone();
                 {
                     let mut r = renderer.borrow_mut();
+                    // set_data restores the selection carried in the payload
+                    // (issue #44); don't clobber it back to A1.
                     r.set_data(first);
-                    r.set_selector(0, 0, 0, 0);
                     r.render();
                 }
                 if let Some(menu) = &tab_menu {

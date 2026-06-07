@@ -1288,6 +1288,14 @@ impl DataProxy {
             "namedRanges": serde_json::to_value(&self.named_ranges).unwrap_or_default(),
             "condfmts": serde_json::to_value(&self.cond_formats).unwrap_or_default(),
             "charts": serde_json::to_value(&self.charts).unwrap_or_default(),
+            // Active cell (ri, ci) + selection rectangle, so a host can
+            // round-trip selection state through get_data/load_data and read
+            // the active cell from an on_change payload (issue #44).
+            "sel": {
+                "ri": self.selector.ri,
+                "ci": self.selector.ci,
+                "range": self.selector.range.to_string(),
+            },
         })
     }
 
@@ -1347,6 +1355,21 @@ impl DataProxy {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.charts = ch;
+        }
+        // Restore the active cell + selection range (issue #44). Absent `sel`
+        // (older payloads) leaves the default A1 selection.
+        if let Some(sel) = data.get("sel") {
+            if let Some(ri) = sel.get("ri").and_then(|v| v.as_u64()) {
+                self.selector.ri = ri as usize;
+            }
+            if let Some(ci) = sel.get("ci").and_then(|v| v.as_u64()) {
+                self.selector.ci = ci as usize;
+            }
+            if let Some(range) = sel.get("range").and_then(|v| v.as_str()) {
+                if let Ok(r) = CellRange::from_str(range) {
+                    self.selector.range = r;
+                }
+            }
         }
     }
 
@@ -3710,5 +3733,41 @@ mod tests {
         assert!(json.get("validations").is_some(), "validations key must serialize");
         let arr = json.get("validations").unwrap().as_array().unwrap();
         assert_eq!(arr.len(), 1);
+    }
+
+    // Active cell + selection round-trip through the wire format (issue #44).
+    #[test]
+    fn sel_round_trips_through_json() {
+        // Active cell B5 (ri=4, ci=1) with a B5:C7 selection rectangle.
+        let mut d = DataProxy::new("t");
+        d.selector.ri = 4;
+        d.selector.ci = 1;
+        d.selector.range = CellRange::new(4, 1, 6, 2);
+
+        let json = d.get_data();
+        let sel = json
+            .get("sel")
+            .expect("get_data must include a sel key (issue #44)");
+        assert_eq!(sel.get("ri").and_then(|v| v.as_u64()), Some(4));
+        assert_eq!(sel.get("ci").and_then(|v| v.as_u64()), Some(1));
+
+        // Round-trip into a fresh sheet restores the active cell + range.
+        let mut d2 = DataProxy::new("t");
+        d2.set_data(json);
+        assert_eq!((d2.selector.ri, d2.selector.ci), (4, 1));
+        let r = &d2.selector.range;
+        assert_eq!((r.sri, r.sci, r.eri, r.eci), (4, 1, 6, 2));
+    }
+
+    #[test]
+    fn set_data_without_sel_keeps_default_a1() {
+        // Older payloads omit `sel`; set_data must not panic and must leave the
+        // default A1 selection rather than reading garbage.
+        let mut json = DataProxy::new("t").get_data();
+        json.as_object_mut().unwrap().remove("sel");
+
+        let mut d = DataProxy::new("t");
+        d.set_data(json);
+        assert_eq!((d.selector.ri, d.selector.ci), (0, 0));
     }
 }
