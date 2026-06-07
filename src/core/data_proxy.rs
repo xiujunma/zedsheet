@@ -1340,9 +1340,17 @@ impl DataProxy {
         }
         if let Some(nr) = data
             .get("namedRanges")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
         {
-            self.named_ranges = nr;
+            // Upper-case the keys so JSON-loaded ranges resolve the same as
+            // name-box ones — resolve_name/get_named_range look up by the
+            // upper-cased name, and set_named_range stores upper-cased keys.
+            // Without this, a key like "testRange" never matches "TESTRANGE"
+            // (issue #45).
+            self.named_ranges = nr
+                .into_iter()
+                .map(|(k, v)| (k.to_uppercase(), v))
+                .collect();
         }
         if let Some(cf) = data
             .get("condfmts")
@@ -3769,5 +3777,21 @@ mod tests {
         let mut d = DataProxy::new("t");
         d.set_data(json);
         assert_eq!((d.selector.ri, d.selector.ci), (0, 0));
+    }
+
+    // A named range loaded from JSON with a mixed-case key must resolve inside
+    // formulas, which look it up by upper-cased name (issue #45).
+    #[test]
+    fn json_named_range_resolves_in_formula() {
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "10"), (1, "20"), (2, "30"), (3, "30"), (4, "15")] {
+            d.set_cell_text(r, 5, v); // F1:F5
+        }
+        // set_data only touches the keys present, so the cells above survive.
+        d.set_data(serde_json::json!({ "namedRanges": { "testRange": "F1:F5" } }));
+        // Stored under the upper-cased key so resolve_name hits.
+        assert_eq!(d.get_named_range("testRange").as_deref(), Some("F1:F5"));
+        d.set_cell_text(10, 0, "=SUM(testRange)");
+        assert_eq!(d.cell_display_value(10, 0), "105");
     }
 }
