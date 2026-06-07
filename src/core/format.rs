@@ -19,12 +19,174 @@ pub fn format_value(text: &str, format: &str) -> String {
         "datetime" => format_temporal(text, DateKind::DateTime),
         "duration" => format_temporal(text, DateKind::Duration),
         "normal" | "text" | "general" => text.to_string(),
-        // Anything else is treated as a custom number-format pattern.
+        // A pattern with date/time token letters (y/m/d/h/s) is an Excel-style
+        // date format code (issue #40); anything else is a custom number
+        // pattern. Either way a non-numeric value passes through unchanged.
         pattern => match text.trim().parse::<f64>() {
+            Ok(n) if looks_like_date_pattern(pattern) => format_date_pattern(n, pattern),
             Ok(n) => format_custom(n, pattern),
             Err(_) => text.to_string(),
         },
     }
+}
+
+const MONTH_ABBR: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const MONTH_FULL: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August", "September",
+    "October", "November", "December",
+];
+
+/// True if `pattern` is an Excel date/time format code rather than a number
+/// pattern. Quoted/escaped literals are stripped first so a literal like
+/// `"kg"` or `"items"` doesn't falsely trigger date mode; what remains is a
+/// date code if it contains any token letter (y/m/d/h/s).
+fn looks_like_date_pattern(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    let mut bare = String::new();
+    while i < chars.len() {
+        match chars[i] {
+            '"' => {
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    i += 1;
+                }
+                i += 1; // closing quote
+            }
+            '\\' => i += 2, // escaped literal char
+            c => {
+                bare.push(c.to_ascii_lowercase());
+                i += 1;
+            }
+        }
+    }
+    bare.chars().any(|c| matches!(c, 'y' | 'm' | 'd' | 'h' | 's'))
+}
+
+enum DateSeg {
+    /// A run of `count` of the same token letter (lower-cased).
+    Tok(char, usize),
+    /// AM/PM (or A/P) indicator.
+    AmPm,
+    /// A literal passed through verbatim.
+    Lit(String),
+}
+
+fn parse_date_segments(pattern: &str) -> Vec<DateSeg> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let lower: Vec<char> = chars.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let starts_with = |i: usize, s: &str| lower[i..].iter().collect::<String>().starts_with(s);
+    let mut segs = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '"' {
+            i += 1;
+            let mut s = String::new();
+            while i < chars.len() && chars[i] != '"' {
+                s.push(chars[i]);
+                i += 1;
+            }
+            i += 1; // closing quote
+            segs.push(DateSeg::Lit(s));
+        } else if c == '\\' && i + 1 < chars.len() {
+            segs.push(DateSeg::Lit(chars[i + 1].to_string()));
+            i += 2;
+        } else if starts_with(i, "am/pm") {
+            segs.push(DateSeg::AmPm);
+            i += 5;
+        } else if starts_with(i, "a/p") {
+            segs.push(DateSeg::AmPm);
+            i += 3;
+        } else {
+            let lc = c.to_ascii_lowercase();
+            if matches!(lc, 'y' | 'm' | 'd' | 'h' | 's') {
+                let mut n = 0;
+                while i < chars.len() && chars[i].to_ascii_lowercase() == lc {
+                    n += 1;
+                    i += 1;
+                }
+                segs.push(DateSeg::Tok(lc, n));
+            } else {
+                segs.push(DateSeg::Lit(c.to_string()));
+                i += 1;
+            }
+        }
+    }
+    segs
+}
+
+/// Render a date serial with an Excel date/time format code. Supports
+/// `yyyy/yy`, `mmmm/mmm/mm/m` (month, or minutes next to `h`/`s`), `dd/d`,
+/// `hh/h`, `ss/s`, and `AM/PM`. Unknown characters pass through as literals.
+pub fn format_date_pattern(serial: f64, pattern: &str) -> String {
+    use crate::core::date::{from_serial, time_parts};
+    let (year, month, day) = from_serial(serial);
+    let (hour24, minute, second) = time_parts(serial);
+    let segs = parse_date_segments(pattern);
+    let ampm = segs.iter().any(|s| matches!(s, DateSeg::AmPm));
+    let hour = if ampm {
+        let h = hour24 % 12;
+        if h == 0 { 12 } else { h }
+    } else {
+        hour24
+    };
+    // Token letters in order, so an `m` knows its neighbors for the
+    // month-vs-minute rule (minute when adjacent to hours or seconds).
+    let letters: Vec<char> = segs
+        .iter()
+        .filter_map(|s| if let DateSeg::Tok(c, _) = s { Some(*c) } else { None })
+        .collect();
+    let mut ti: usize = 0;
+    let mut out = String::new();
+    for seg in &segs {
+        match seg {
+            DateSeg::Lit(s) => out.push_str(s),
+            DateSeg::AmPm => out.push_str(if hour24 < 12 { "AM" } else { "PM" }),
+            DateSeg::Tok(c, n) => {
+                let n = *n;
+                match c {
+                    'y' => out.push_str(&if n <= 2 {
+                        format!("{:02}", year.rem_euclid(100))
+                    } else {
+                        format!("{:04}", year)
+                    }),
+                    'd' => out.push_str(&if n >= 2 { format!("{day:02}") } else { format!("{day}") }),
+                    'h' => out.push_str(&if n >= 2 { format!("{hour:02}") } else { format!("{hour}") }),
+                    's' => out.push_str(&if n >= 2 {
+                        format!("{second:02}")
+                    } else {
+                        format!("{second}")
+                    }),
+                    'm' => {
+                        let prev = ti.checked_sub(1).and_then(|p| letters.get(p)).copied();
+                        let next = letters.get(ti + 1).copied();
+                        let is_minute = prev == Some('h') || next == Some('s');
+                        if is_minute {
+                            out.push_str(&if n >= 2 {
+                                format!("{minute:02}")
+                            } else {
+                                format!("{minute}")
+                            });
+                        } else {
+                            let idx = (month as usize).saturating_sub(1).min(11);
+                            match n {
+                                1 => out.push_str(&format!("{month}")),
+                                2 => out.push_str(&format!("{month:02}")),
+                                3 => out.push_str(MONTH_ABBR[idx]),
+                                _ => out.push_str(MONTH_FULL[idx]),
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                ti += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Render a date/time-formatted cell. The cell value is interpreted as a serial
@@ -239,5 +401,26 @@ mod tests {
     #[test]
     fn custom_non_numeric_passthrough() {
         assert_eq!(format_value("abc", "#,##0.00"), "abc");
+    }
+
+    // Excel-style date/time format codes via TEXT() (issue #40).
+    #[test]
+    fn date_format_codes() {
+        use crate::core::date::to_serial;
+        let s = to_serial(2024, 12, 25).to_string();
+        assert_eq!(format_value(&s, "yyyy-mm-dd"), "2024-12-25");
+        assert_eq!(format_value(&s, "mm/dd/yyyy"), "12/25/2024");
+        assert_eq!(format_value(&s, "yyyy/m/d"), "2024/12/25");
+        assert_eq!(format_value(&s, "yy-mm-dd"), "24-12-25");
+        assert_eq!(format_value(&s, "mmm d, yyyy"), "Dec 25, 2024");
+        assert_eq!(format_value(&s, "mmmm"), "December");
+        // `mm` between `hh` and `ss` is minutes, not month.
+        assert_eq!(format_value("0.5", "hh:mm:ss"), "12:00:00");
+        let dt = (to_serial(2024, 1, 15) + 0.5).to_string();
+        assert_eq!(format_value(&dt, "yyyy-mm-dd hh:mm:ss"), "2024-01-15 12:00:00");
+        // Non-numeric passes through unchanged.
+        assert_eq!(format_value("hello", "yyyy-mm-dd"), "hello");
+        // A literal containing date letters (quoted) must NOT trigger date mode.
+        assert_eq!(format_value("1234.5", "#,##0.0 \"kg\""), "1,234.5 \"kg\"");
     }
 }
