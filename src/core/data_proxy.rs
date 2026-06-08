@@ -130,6 +130,12 @@ pub struct DataProxy {
     /// copy) shares a single source of truth — toggling on either side
     /// is immediately visible to the other.
     pub read_only: Rc<RefCell<bool>>,
+    /// The cell whose formula is currently being evaluated, so position-aware
+    /// functions (`ROW`/`COLUMN` with no argument) know their caller (issue
+    /// #37). `eval_expr` sets it with save/restore, so a nested cell-reference
+    /// evaluation restores the outer cell on return. Transient — not part of
+    /// the serialized wire format.
+    eval_cell: std::cell::Cell<(usize, usize)>,
 }
 
 impl Default for DataProxy {
@@ -154,6 +160,7 @@ impl Default for DataProxy {
             named_ranges: HashMap::new(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
+            eval_cell: std::cell::Cell::new((0, 0)),
         }
     }
 }
@@ -288,7 +295,7 @@ impl DataProxy {
         if let Some(expr) = text.strip_prefix('=') {
             let mut visited: Visited = HashSet::new();
             visited.insert((self.name.clone(), ri, ci));
-            match self.eval_expr(expr, &mut visited) {
+            match self.eval_expr(expr, (ri, ci), &mut visited) {
                 Ok(Value::Number(v)) => format_number(v),
                 Ok(Value::Text(s)) => s,
                 // A formula resolving to a blank shows 0, matching Excel's
@@ -367,7 +374,7 @@ impl DataProxy {
         }
         if let Some(expr) = text.strip_prefix('=') {
             visited.insert(key.clone());
-            let v = self.eval_expr(expr, visited);
+            let v = self.eval_expr(expr, (ri, ci), visited);
             visited.remove(&key);
             v
         } else {
@@ -384,11 +391,18 @@ impl DataProxy {
         }
     }
 
-    fn eval_expr(&self, expr: &str, visited: &mut Visited) -> Result<Value, EvalErr> {
+    fn eval_expr(&self, expr: &str, cell: (usize, usize), visited: &mut Visited) -> Result<Value, EvalErr> {
+        // Track the calling cell for position-aware functions (ROW/COLUMN),
+        // save/restore so a nested cell-ref eval restores the outer cell on
+        // return — `=ROW() + B1 + ROW()` keeps both ROW()s reading this cell
+        // even though resolving B1 re-enters eval_expr (issue #37).
+        let prev = self.eval_cell.get();
+        self.eval_cell.set(cell);
         let tokens = tokenize(expr);
         let mut pos = 0usize;
-        let v = self.parse_cmp(&tokens, &mut pos, visited)?;
-        Ok(v)
+        let v = self.parse_cmp(&tokens, &mut pos, visited);
+        self.eval_cell.set(prev);
+        v
     }
 
     // expr := add ((= | == | <> | > | < | >= | <=) add)* — comparisons yield 1/0.
@@ -506,6 +520,14 @@ impl DataProxy {
                 if matches!(upper.as_str(), "IF" | "IFS" | "CHOOSE") {
                     let spans = self.arg_spans(t, pos);
                     return self.eval_lazy(&upper, t, &spans, vis);
+                }
+                // Position / reference functions (issue #37) need the calling
+                // cell or their argument's coordinates, not its value — they
+                // read the raw arg spans. In scalar context a returned range
+                // collapses to its top-left.
+                if matches!(upper.as_str(), "ROW" | "COLUMN" | "OFFSET" | "INDIRECT" | "ADDRESS") {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_ref_fn(&upper, t, &spans, vis).map(|a| a.to_scalar());
                 }
                 let args = self.parse_args(t, pos, vis);
                 // Functions that must observe a *failed* or typed argument
@@ -627,6 +649,31 @@ impl DataProxy {
                     match self.resolve_name(&n) {
                         Some((r0, c0, r1, c1)) => self.resolve_grid(r0, c0, r1, c1, vis),
                         None => Err(EvalErr::Name),
+                    }
+                } else {
+                    self.parse_cmp(t, pos, vis).map(Arg::Scalar)
+                }
+            } else if let Some(Token::Function(f)) = t.get(*pos).cloned() {
+                // A bare OFFSET/INDIRECT argument keeps its (possibly multi-cell)
+                // Arg::Range so it composes inside SUM(...) etc. If an operator
+                // follows the call, it's part of a larger expression and folds
+                // to a scalar via parse_cmp (issue #37).
+                let upper = f.to_uppercase();
+                if matches!(upper.as_str(), "OFFSET" | "INDIRECT") {
+                    let save = *pos;
+                    *pos += 1; // function name
+                    if matches!(t.get(*pos), Some(Token::LeftParen)) {
+                        *pos += 1;
+                    }
+                    let spans = self.arg_spans(t, pos);
+                    if matches!(
+                        t.get(*pos),
+                        Some(Token::Comma) | Some(Token::RightParen) | None
+                    ) {
+                        self.eval_ref_fn(&upper, t, &spans, vis)
+                    } else {
+                        *pos = save;
+                        self.parse_cmp(t, pos, vis).map(Arg::Scalar)
                     }
                 } else {
                     self.parse_cmp(t, pos, vis).map(Arg::Scalar)
@@ -761,6 +808,105 @@ impl DataProxy {
                     return Err(EvalErr::Value);
                 }
                 self.eval_span(t, spans[idx], vis)
+            }
+            _ => Err(EvalErr::Value),
+        }
+    }
+
+    /// Extract a reference's bounds `(sri, sci, eri, eci)` from a single
+    /// argument's token span — a `CellRef`, a `CellRef:CellRef` range, or a
+    /// named range. ROW/COLUMN/OFFSET need the argument's coordinates, not its
+    /// value, so they read the span directly rather than via `parse_args`
+    /// (issue #37).
+    fn span_ref(&self, t: &[Token], span: (usize, usize)) -> Option<(usize, usize, usize, usize)> {
+        match &t[span.0..span.1] {
+            [Token::CellRef(a)] => {
+                let (c, r) = exp2xy(a);
+                Some((r, c, r, c))
+            }
+            [Token::CellRef(a), Token::Colon, Token::CellRef(b)] => {
+                let (c0, r0) = exp2xy(a);
+                let (c1, r1) = exp2xy(b);
+                Some((r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1)))
+            }
+            [Token::Name(n)] => self.resolve_name(n),
+            _ => None,
+        }
+    }
+
+    /// Position / reference functions: ROW, COLUMN, ADDRESS, OFFSET, INDIRECT
+    /// (issue #37). Returns an `Arg` so OFFSET/INDIRECT can yield a multi-cell
+    /// `Arg::Range` that composes inside `SUM(...)`; ROW/COLUMN/ADDRESS yield a
+    /// scalar. `arg_spans` (not `parse_args`) supplies the spans so the ref
+    /// arguments keep their coordinates.
+    fn eval_ref_fn(
+        &self,
+        name: &str,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Arg, EvalErr> {
+        match name {
+            "ROW" | "COLUMN" => {
+                let (r, c) = if spans.is_empty() {
+                    self.eval_cell.get() // caller's position when the arg is omitted
+                } else {
+                    let (r0, c0, _, _) = self.span_ref(t, spans[0]).ok_or(EvalErr::Ref)?;
+                    (r0, c0)
+                };
+                let n = if name == "ROW" { r + 1 } else { c + 1 }; // A1 is row 1 / col 1
+                Ok(Arg::Scalar(Value::Number(n as f64)))
+            }
+            "ADDRESS" => {
+                if spans.len() < 2 {
+                    return Err(EvalErr::Value);
+                }
+                let row = self.eval_span(t, spans[0], vis)?.as_number() as i64;
+                let col = self.eval_span(t, spans[1], vis)?.as_number() as i64;
+                if row < 1 || col < 1 {
+                    return Err(EvalErr::Value);
+                }
+                let abs = match spans.get(2) {
+                    Some(s) => self.eval_span(t, *s, vis)?.as_number() as i64,
+                    None => 1,
+                };
+                Ok(Arg::Scalar(Value::Text(format_address(row as usize, col as usize, abs))))
+            }
+            "OFFSET" => {
+                if spans.len() < 3 {
+                    return Err(EvalErr::Value);
+                }
+                let (r0, c0, r1, c1) = self.span_ref(t, spans[0]).ok_or(EvalErr::Ref)?;
+                let drows = self.eval_span(t, spans[1], vis)?.as_number() as i64;
+                let dcols = self.eval_span(t, spans[2], vis)?.as_number() as i64;
+                let height = match spans.get(3) {
+                    Some(s) => self.eval_span(t, *s, vis)?.as_number() as i64,
+                    None => (r1 - r0 + 1) as i64,
+                };
+                let width = match spans.get(4) {
+                    Some(s) => self.eval_span(t, *s, vis)?.as_number() as i64,
+                    None => (c1 - c0 + 1) as i64,
+                };
+                let nr0 = r0 as i64 + drows;
+                let nc0 = c0 as i64 + dcols;
+                if nr0 < 0 || nc0 < 0 || height < 1 || width < 1 {
+                    return Err(EvalErr::Ref);
+                }
+                self.resolve_grid(
+                    nr0 as usize,
+                    nc0 as usize,
+                    (nr0 + height - 1) as usize,
+                    (nc0 + width - 1) as usize,
+                    vis,
+                )
+            }
+            "INDIRECT" => {
+                if spans.is_empty() {
+                    return Err(EvalErr::Value);
+                }
+                let s = self.eval_span(t, spans[0], vis)?.as_text();
+                let (r0, c0, r1, c1) = parse_a1_ref(&s).ok_or(EvalErr::Ref)?;
+                self.resolve_grid(r0, c0, r1, c1, vis)
             }
             _ => Err(EvalErr::Value),
         }
@@ -1707,6 +1853,45 @@ fn parse_range_expr(expr: &str) -> (usize, usize, usize, usize) {
     }
 }
 
+/// Validate and parse an A1 reference string — `"A1"` or `"A1:B3"` — into
+/// bounds `(r0, c0, r1, c1)`. `None` for anything that isn't a well-formed
+/// reference, so `INDIRECT` of garbage yields `#REF!` (issue #37).
+fn parse_a1_ref(s: &str) -> Option<(usize, usize, usize, usize)> {
+    let s = s.trim();
+    let valid = |part: &str| crate::formula::parser::looks_like_cell_ref(part.trim());
+    match s.split_once(':') {
+        Some((a, b)) => {
+            if !valid(a) || !valid(b) {
+                return None;
+            }
+            let (c0, r0) = exp2xy(a.trim());
+            let (c1, r1) = exp2xy(b.trim());
+            Some((r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1)))
+        }
+        None => {
+            if !valid(s) {
+                return None;
+            }
+            let (c, r) = exp2xy(s);
+            Some((r, c, r, c))
+        }
+    }
+}
+
+/// Build an Excel A1 address string for 1-based `(row, col)`. `abs`: 1=`$A$1`,
+/// 2=`A$1` (abs row), 3=`$A1` (abs col), 4=`A1` (issue #37).
+fn format_address(row: usize, col: usize, abs: i64) -> String {
+    let col_abs = matches!(abs, 1 | 3);
+    let row_abs = matches!(abs, 1 | 2);
+    format!(
+        "{}{}{}{}",
+        if col_abs { "$" } else { "" },
+        string_at(col - 1),
+        if row_abs { "$" } else { "" },
+        row
+    )
+}
+
 fn format_number(v: f64) -> String {
     if !v.is_finite() {
         return "#ERROR".to_string();
@@ -2617,6 +2802,37 @@ mod tests {
         assert_eq!(eval("=CHOOSE(2, 1/0, 42, 1/0)", &[]), "42");
         assert_eq!(eval("=CHOOSE(1, 10, 20)", &[]), "10");
         assert_eq!(eval("=CHOOSE(9, 1, 2)", &[]), "#VALUE!"); // out of range
+    }
+
+    // Position / reference functions (issue #37). `eval` evaluates at (50,50),
+    // so the calling cell is row 51 / column 51 (1-based).
+    #[test]
+    fn position_functions() {
+        // ROW()/COLUMN() use the calling cell when the argument is omitted.
+        assert_eq!(eval("=ROW()", &[]), "51");
+        assert_eq!(eval("=COLUMN()", &[]), "51");
+        // ROW(ref)/COLUMN(ref) read the reference's coordinates, not its value.
+        assert_eq!(eval("=ROW(C5)", &[]), "5");
+        assert_eq!(eval("=COLUMN(C5)", &[]), "3");
+        // ADDRESS builds an A1 string; abs_num 1=$A$1, 2=A$1, 3=$A1, 4=A1.
+        assert_eq!(eval("=ADDRESS(2, 3)", &[]), "$C$2");
+        assert_eq!(eval("=ADDRESS(2, 3, 4)", &[]), "C2");
+        assert_eq!(eval("=ADDRESS(1, 1, 2)", &[]), "A$1");
+        assert_eq!(eval("=ADDRESS(1, 1, 3)", &[]), "$A1");
+        // INDIRECT resolves a reference built from a string.
+        assert_eq!(eval_with(&[(0, 0, "42")], "=INDIRECT(\"A1\")"), "42");
+        assert_eq!(eval("=INDIRECT(\"not a ref\")", &[]), "#REF!");
+        // OFFSET shifts a reference; scalar context yields the top-left value.
+        assert_eq!(eval_with(&[(2, 2, "hi")], "=OFFSET(A1, 2, 2)"), "hi"); // -> C3
+        // OFFSET / INDIRECT ranges compose inside SUM.
+        assert_eq!(
+            eval_with(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3")], "=SUM(OFFSET(A1, 0, 0, 3, 1))"),
+            "6"
+        );
+        assert_eq!(
+            eval_with(&[(0, 0, "10"), (1, 0, "20")], "=SUM(INDIRECT(\"A1:A2\"))"),
+            "30"
+        );
     }
 
     #[test]
