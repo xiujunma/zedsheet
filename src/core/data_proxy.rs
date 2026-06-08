@@ -498,6 +498,15 @@ impl DataProxy {
                 if matches!(t.get(*pos), Some(Token::LeftParen)) {
                     *pos += 1;
                 }
+                // IF/IFS/CHOOSE are short-circuit (issue #38): capture each
+                // argument's token span without evaluating, then evaluate only
+                // the condition and the chosen branch. An error in a not-taken
+                // branch (e.g. `=IF(TRUE(), 1, 1/0)`) must not propagate.
+                let upper = name.to_uppercase();
+                if matches!(upper.as_str(), "IF" | "IFS" | "CHOOSE") {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_lazy(&upper, t, &spans, vis);
+                }
                 let args = self.parse_args(t, pos, vis);
                 // Functions that must observe a *failed* or typed argument
                 // (IFERROR, IFNA, IS*) are resolved here, where the per-argument
@@ -655,6 +664,105 @@ impl DataProxy {
                     None => return args,
                 }
             }
+        }
+    }
+
+    /// Split the argument list (cursor just past `(`) into per-argument token
+    /// spans `[start, end)` WITHOUT evaluating, advancing `pos` past the
+    /// matching `)`. Used by lazy functions (IF/IFS/CHOOSE) so a not-taken
+    /// branch is never evaluated (issue #38). Nested parens are tracked so a
+    /// comma inside a sub-call doesn't split an argument.
+    fn arg_spans(&self, t: &[Token], pos: &mut usize) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        if matches!(t.get(*pos), Some(Token::RightParen)) {
+            *pos += 1;
+            return spans;
+        }
+        let mut start = *pos;
+        let mut depth = 0usize;
+        loop {
+            match t.get(*pos) {
+                Some(Token::LeftParen) => {
+                    depth += 1;
+                    *pos += 1;
+                }
+                Some(Token::RightParen) if depth > 0 => {
+                    depth -= 1;
+                    *pos += 1;
+                }
+                Some(Token::RightParen) => {
+                    spans.push((start, *pos));
+                    *pos += 1;
+                    return spans;
+                }
+                Some(Token::Comma) if depth == 0 => {
+                    spans.push((start, *pos));
+                    *pos += 1;
+                    start = *pos;
+                }
+                Some(_) => *pos += 1,
+                None => {
+                    spans.push((start, *pos));
+                    return spans;
+                }
+            }
+        }
+    }
+
+    /// Evaluate the sub-expression in `t[span.0..span.1]` to a scalar value.
+    fn eval_span(&self, t: &[Token], span: (usize, usize), vis: &mut Visited) -> Result<Value, EvalErr> {
+        let mut p = 0usize;
+        self.parse_cmp(&t[span.0..span.1], &mut p, vis)
+    }
+
+    /// Short-circuit IF/IFS/CHOOSE: evaluate the condition/index first, then
+    /// only the chosen branch (issue #38). Semantics match the former eager
+    /// arms in `apply_special_function`.
+    fn eval_lazy(
+        &self,
+        name: &str,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        match name {
+            "IF" => {
+                let Some(cond) = spans.first() else {
+                    return Err(EvalErr::Value);
+                };
+                let branch = if self.eval_span(t, *cond, vis)?.is_truthy() {
+                    spans.get(1)
+                } else {
+                    spans.get(2)
+                };
+                match branch {
+                    // A missing branch yields FALSE (0), matching Excel/the
+                    // former eager IF.
+                    Some(&s) => self.eval_span(t, s, vis),
+                    None => Ok(Value::Number(0.0)),
+                }
+            }
+            "IFS" => {
+                let mut i = 0;
+                while i + 1 < spans.len() {
+                    if self.eval_span(t, spans[i], vis)?.is_truthy() {
+                        return self.eval_span(t, spans[i + 1], vis);
+                    }
+                    i += 2;
+                }
+                Err(EvalErr::Na) // no condition matched
+            }
+            "CHOOSE" => {
+                let Some(idx_span) = spans.first() else {
+                    return Err(EvalErr::Value);
+                };
+                let idx = self.eval_span(t, *idx_span, vis)?.as_number() as usize;
+                if idx < 1 || idx >= spans.len() {
+                    return Err(EvalErr::Value);
+                }
+                self.eval_span(t, spans[idx], vis)
+            }
+            _ => Err(EvalErr::Value),
         }
     }
 
@@ -2083,14 +2191,6 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
         }
 
         // CHOOSE(index, value1, value2, …) — 1-based pick.
-        "CHOOSE" => {
-            let i = num(0) as usize;
-            if i < 1 || i >= args.len() {
-                return Err(EvalErr::Value);
-            }
-            args[i].to_scalar()
-        }
-
         // XLOOKUP(needle, lookup_range, return_range, [if_not_found]) — exact.
         "XLOOKUP" => {
             if args.len() < 3 {
@@ -2221,28 +2321,9 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             flatten_values(args).iter().filter(|v| matches!(v, Value::Blank)).count() as f64,
         ),
 
-        // IF / IFS live here (not the numeric catalog) so the chosen branch
-        // keeps its type — a text result survives instead of coercing to 0
-        // (issue #28 follow-up). Arguments are still evaluated eagerly upstream,
-        // so this is NOT short-circuit; lazy evaluation is tracked separately.
-        "IF" => {
-            if scalar(0).is_truthy() {
-                args.get(1).map(Arg::to_scalar).unwrap_or(Value::Number(0.0))
-            } else {
-                args.get(2).map(Arg::to_scalar).unwrap_or(Value::Number(0.0))
-            }
-        }
-        "IFS" => {
-            let mut i = 0;
-            while i + 1 < args.len() {
-                if scalar(i).is_truthy() {
-                    return Ok(Some(args[i + 1].to_scalar()));
-                }
-                i += 2;
-            }
-            return Err(EvalErr::Na); // no condition matched
-        }
-
+        // IF / IFS / CHOOSE are short-circuit and handled upstream in
+        // eval_expr's Token::Function arm (see eval_lazy, issue #38), so they
+        // never reach this eager dispatch.
         _ => return Ok(None),
     };
     Ok(Some(v))
@@ -2318,8 +2399,8 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "NOT" => bool_f64(first == 0.0),
         "TRUE" => 1.0,
         "FALSE" => 0.0,
-        // IF / IFS are handled in apply_special_function so their result keeps
-        // its type (text survives); see there.
+        // IF / IFS / CHOOSE are short-circuit and handled upstream in eval_lazy
+        // (issue #38) — they never reach this numeric dispatch.
 
         // Math
         "ABS" => first.abs(),
@@ -2517,6 +2598,25 @@ mod tests {
             eval_with(&[(0, 0, "Bob"), (1, 0, "200")], "=HLOOKUP(\"Bob\", A1:A2, 2, FALSE)"),
             "200"
         );
+    }
+
+    // IF/IFS/CHOOSE are short-circuit: a not-taken branch is never evaluated,
+    // so an error in it does not propagate (issue #38).
+    #[test]
+    fn lazy_if_ifs_choose() {
+        assert_eq!(eval("=IF(TRUE(), 1, 1/0)", &[]), "1");
+        assert_eq!(eval("=IF(FALSE(), 1/0, 2)", &[]), "2");
+        // Taken branches still work, text survives, condition errors propagate.
+        assert_eq!(eval("=IF(1>0, 7, 9)", &[]), "7");
+        assert_eq!(eval_with(&[(0, 0, "x")], "=IF(A1=\"x\", \"yes\", \"no\")"), "yes");
+        assert_eq!(eval("=IF(1/0, 1, 2)", &[]), "#DIV/0!"); // condition error propagates
+        // IFS: only the matched pair's value is evaluated.
+        assert_eq!(eval("=IFS(FALSE(), 1/0, TRUE(), 5)", &[]), "5");
+        assert_eq!(eval("=IFS(TRUE(), 5, FALSE(), 1/0)", &[]), "5");
+        // CHOOSE: only the selected value is evaluated; 1-based index.
+        assert_eq!(eval("=CHOOSE(2, 1/0, 42, 1/0)", &[]), "42");
+        assert_eq!(eval("=CHOOSE(1, 10, 20)", &[]), "10");
+        assert_eq!(eval("=CHOOSE(9, 1, 2)", &[]), "#VALUE!"); // out of range
     }
 
     #[test]
