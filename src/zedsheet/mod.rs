@@ -20,6 +20,7 @@ use crate::renderer::table_renderer::{DragKind, TableRenderer};
 // `use super::*`, so these `pub(crate) use` re-exports give them the shared
 // types/helpers and each other's entry points.
 mod util;
+mod autocomplete;
 mod formula_bar;
 mod toolbar;
 mod context_menu;

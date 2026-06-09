@@ -5,6 +5,8 @@ use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent};
 use crate::component::element::Element;
 use crate::config::CSS_PREFIX;
+use std::cell::RefCell;
+use super::autocomplete;
 #[allow(unused_imports)]
 use super::*;
 
@@ -29,6 +31,194 @@ pub(crate) fn fx_menu_html() -> String {
         ));
     }
     s
+}
+
+// --- Formula autocomplete (issue #26) -------------------------------------
+
+/// Current caret byte offset in `input`.
+fn caret_of(input: &HtmlInputElement) -> usize {
+    let len = input.value().len() as u32;
+    input.selection_start().ok().flatten().unwrap_or(len) as usize
+}
+
+/// Position `popover` directly under the formula input and show it.
+fn ac_position(input: &HtmlInputElement, popover: &HtmlElement) {
+    if let Ok(el) = input.clone().dyn_into::<web_sys::Element>() {
+        let r = el.get_bounding_client_rect();
+        let st = popover.style();
+        let _ = st.set_property("display", "block");
+        let _ = st.set_property("left", &format!("{}px", r.left()));
+        let _ = st.set_property("top", &format!("{}px", r.bottom()));
+    }
+}
+
+/// Refresh the popover for the input's current text/caret. Shows matching
+/// function names (with `index` highlighted), or an argument-signature hint
+/// when inside a call, or hides it. Returns the number of name matches shown
+/// (0 when showing a signature or hidden) — handlers use this to know whether
+/// keyboard navigation applies.
+fn ac_refresh(input: &HtmlInputElement, popover: &HtmlElement, index: usize) -> usize {
+    let value = input.value();
+    let caret = caret_of(input);
+    if let Some((_, prefix)) = autocomplete::prefix_at(&value, caret) {
+        let m = autocomplete::matches(&prefix);
+        if !m.is_empty() {
+            let n = m.len();
+            let sel = index.min(n - 1);
+            let mut html = String::new();
+            for (i, (name, sig)) in m.iter().enumerate() {
+                let bg = if i == sel { "background:#e8f0fe;" } else { "" };
+                html.push_str(&format!(
+                    "<div class=\"{p}-ac-item\" data-ac-name=\"{name}\" \
+                       style=\"padding:3px 10px;cursor:pointer;white-space:nowrap;{bg}\">\
+                       <b>{name}</b> <span style=\"color:#999;font-size:11px;\">{sig}</span></div>",
+                    p = CSS_PREFIX,
+                ));
+            }
+            popover.set_inner_html(&html);
+            ac_position(input, popover);
+            return n;
+        }
+    }
+    if let Some(sig) = autocomplete::active_signature(&value, caret) {
+        popover.set_inner_html(&format!(
+            "<div style=\"padding:3px 10px;color:#333;white-space:nowrap;\">{sig}</div>"
+        ));
+        ac_position(input, popover);
+        return 0;
+    }
+    let _ = popover.style().set_property("display", "none");
+    0
+}
+
+/// Replace the function-name prefix at the caret with `name(`, caret inside.
+fn ac_accept(input: &HtmlInputElement, name: &str) {
+    let value = input.value();
+    let caret = caret_of(input);
+    if let Some((start, _)) = autocomplete::prefix_at(&value, caret) {
+        let new = format!("{}{}({}", &value[..start], name, &value[caret..]);
+        input.set_value(&new);
+        let pos = (start + name.len() + 1) as u32;
+        let _ = input.set_selection_range(pos, pos);
+    }
+}
+
+/// True if the popover is currently shown.
+fn ac_visible(popover: &HtmlElement) -> bool {
+    popover
+        .style()
+        .get_property_value("display")
+        .map(|d| d != "none")
+        .unwrap_or(false)
+}
+
+/// Wire autocomplete onto a formula-entry input: a suggestion popover while
+/// typing `=name`, keyboard navigation, and an argument-signature hint inside
+/// a call (issue #26). The keydown listener is registered BEFORE the input's
+/// Enter-commit handler so accepting a suggestion with Enter/Tab doesn't also
+/// commit the cell.
+fn wire_autocomplete(input: &HtmlInputElement) {
+    let doc = gloo::utils::document();
+    let Ok(popover) = doc.create_element("div") else { return };
+    let _ = popover.set_attribute(
+        "style",
+        "display:none;position:fixed;z-index:1200;background:#fff;\
+         border:1px solid #ccc;box-shadow:1px 2px 6px rgba(0,0,0,0.15);\
+         max-height:240px;overflow-y:auto;font-size:13px;min-width:160px;",
+    );
+    let Ok(pop): Result<HtmlElement, _> = popover.clone().dyn_into() else { return };
+    if let Some(body) = doc.body() {
+        let _ = body.append_child(&popover);
+    }
+    let index = Rc::new(RefCell::new(0usize));
+
+    // Live updates as the user types.
+    {
+        let inp = input.clone();
+        let pop = pop.clone();
+        let index = index.clone();
+        let mut el: Element = input.clone().dyn_into::<web_sys::Element>().unwrap().into();
+        el.add_event_listener("input", move |_e: web_sys::Event| {
+            *index.borrow_mut() = 0;
+            ac_refresh(&inp, &pop, 0);
+        });
+    }
+
+    // Keyboard: navigate / accept / dismiss while the popover is open.
+    {
+        let inp = input.clone();
+        let pop = pop.clone();
+        let index = index.clone();
+        let mut el: Element = input.clone().dyn_into::<web_sys::Element>().unwrap().into();
+        el.add_event_listener("keydown", move |event: web_sys::Event| {
+            if !ac_visible(&pop) {
+                return;
+            }
+            let ke: KeyboardEvent = event.clone().dyn_into().unwrap();
+            let value = inp.value();
+            let caret = caret_of(&inp);
+            let m = autocomplete::prefix_at(&value, caret)
+                .map(|(_, p)| autocomplete::matches(&p))
+                .unwrap_or_default();
+            let n = m.len();
+            match ke.key().as_str() {
+                "ArrowDown" if n > 0 => {
+                    let next = { let mut i = index.borrow_mut(); *i = (*i + 1) % n; *i };
+                    ke.prevent_default();
+                    ac_refresh(&inp, &pop, next);
+                }
+                "ArrowUp" if n > 0 => {
+                    let next = { let mut i = index.borrow_mut(); *i = (*i + n - 1) % n; *i };
+                    ke.prevent_default();
+                    ac_refresh(&inp, &pop, next);
+                }
+                "Enter" | "Tab" if n > 0 => {
+                    let sel = (*index.borrow()).min(n - 1);
+                    ac_accept(&inp, m[sel].0);
+                    ke.prevent_default();
+                    event.stop_immediate_propagation(); // don't also commit the cell
+                    *index.borrow_mut() = 0;
+                    ac_refresh(&inp, &pop, 0); // surface the signature hint
+                }
+                "Escape" => {
+                    let _ = pop.style().set_property("display", "none");
+                    ke.prevent_default();
+                    event.stop_immediate_propagation(); // don't revert the input
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // Click (mousedown so the input keeps focus) a suggestion to accept it.
+    {
+        let inp = input.clone();
+        let pop = pop.clone();
+        let index = index.clone();
+        let mut el: Element = popover.clone().into();
+        el.add_event_listener("mousedown", move |event: web_sys::Event| {
+            event.prevent_default();
+            let Some(target) = event.target() else { return };
+            let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+            if let Ok(Some(item)) = elx.closest("[data-ac-name]") {
+                if let Some(name) = item.get_attribute("data-ac-name") {
+                    ac_accept(&inp, &name);
+                    *index.borrow_mut() = 0;
+                    ac_refresh(&inp, &pop, 0);
+                }
+            }
+        });
+    }
+
+    // Hide when the input loses focus (a suggestion mousedown preventDefault
+    // keeps focus, so clicking the popover doesn't trigger this).
+    {
+        let pop = pop.clone();
+        let mut el: Element = input.clone().dyn_into::<web_sys::Element>().unwrap().into();
+        el.add_event_listener("blur", move |_e: web_sys::Event| {
+            let _ = pop.style().set_property("display", "none");
+        });
+    }
 }
 
 /// Wire the formula bar: name box navigates, the input edits the active cell,
@@ -217,6 +407,13 @@ pub(crate) fn wire_formula_bar(
                 sync();
             }
         });
+    }
+
+    // Autocomplete (issue #26). Wired BEFORE the Enter-commit handler below so
+    // its keydown listener fires first and can swallow Enter/Tab when accepting
+    // a suggestion (stop_immediate_propagation) instead of committing the cell.
+    if let Some(fi) = &formula_input {
+        wire_autocomplete(fi);
     }
 
     // Formula input: Enter commits (and moves down), Escape reverts.
