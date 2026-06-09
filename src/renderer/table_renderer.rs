@@ -833,7 +833,8 @@ impl TableRenderer {
     /// at least 1 so a page move never stalls.
     pub fn rows_per_page(&self) -> usize {
         let body_h = (self.height - self.col_header.height).max(0.0);
-        let rh = self.data.default_row_height.max(1.0);
+        // Zoomed row height (issue #32): fewer rows fit per page at 200%.
+        let rh = (self.data.default_row_height * self.data.zoom()).max(1.0);
         ((body_h / rh).floor() as usize).max(1)
     }
 
@@ -1160,12 +1161,17 @@ impl TableRenderer {
     /// Replace the active sheet data (used when switching sheet tabs), resetting
     /// the view state and undo history.
     pub fn set_data(&mut self, data: DataProxy) {
+        // Zoom is per-view, not per-document: keep the current level across a
+        // data swap (load_data / sheet-tab switch), since the incoming
+        // DataProxy carries the transient default of 1.0 (issue #32).
+        let zoom = self.data.zoom();
         self.freeze = data.freeze;
         self.data = data;
         self.start_row = 0;
         self.start_col = 0;
         self.scroll_rows = 0;
         self.scroll_cols = 0;
+        self.data.set_zoom(zoom);
         // Restore the selection carried in the loaded data instead of snapping
         // back to A1 (issue #44). For payloads without `sel`, DataProxy's
         // selector defaults to A1, so this preserves the old behavior.
@@ -1203,16 +1209,32 @@ impl TableRenderer {
 
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo_stack.pop() {
+            // Zoom is view state, not document state — an undo must not
+            // revert it to the level captured in the snapshot (issue #32).
+            let zoom = self.data.zoom();
             self.redo_stack.push(self.data.clone());
             self.data = prev;
+            self.data.set_zoom(zoom);
         }
     }
 
     pub fn redo(&mut self) {
         if let Some(next) = self.redo_stack.pop() {
+            let zoom = self.data.zoom();
             self.undo_stack.push(self.data.clone());
             self.data = next;
+            self.data.set_zoom(zoom);
         }
+    }
+
+    /// Current view zoom factor (1.0 = 100%).
+    pub fn zoom(&self) -> f64 {
+        self.data.zoom()
+    }
+
+    /// Set the view zoom (clamped to 10–400%). View-only: no undo snapshot.
+    pub fn set_zoom(&mut self, zoom: f64) {
+        self.data.set_zoom(zoom);
     }
 
     pub fn data_clone(&self) -> DataProxy {
@@ -2144,12 +2166,17 @@ impl TableRenderer {
         None
     }
 
+    /// Resize a column from a header drag. `w` is in SCREEN pixels (the drag
+    /// captures `col_width_at`, which is zoomed, and adds a cursor delta), so
+    /// divide by zoom to store the model width (issue #32).
     pub fn set_col_width_clamped(&mut self, ci: usize, w: f64) {
-        self.data.set_col_width(ci, w.max(20f64));
+        let model_w = w / self.data.zoom();
+        self.data.set_col_width(ci, model_w.max(20f64));
     }
 
     pub fn set_row_height_clamped(&mut self, ri: usize, h: f64) {
-        self.data.set_row_height(ri, h.max(12f64));
+        let model_h = h / self.data.zoom();
+        self.data.set_row_height(ri, model_h.max(12f64));
     }
 
     /// Scroll vertically to a fraction [0, 1] of the rows.

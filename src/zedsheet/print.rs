@@ -77,7 +77,12 @@ pub(crate) fn build_print_html(sheet: &DataProxy) -> String {
 /// Print the active sheet: load the document into a hidden, reused iframe and
 /// invoke its `print()` once loaded (issue #17).
 pub(crate) fn open_print(renderer: &SharedRenderer) {
-    let html = build_print_html(&renderer.borrow().data);
+    // Print at 100% regardless of the current view zoom (issue #32): the
+    // sizing reads get_col_width/get_row_height, which apply the zoom factor,
+    // so stamp 1.0 onto a local clone.
+    let mut sheet = renderer.borrow().data.clone();
+    sheet.set_zoom(1.0);
+    let html = build_print_html(&sheet);
     let doc = gloo::utils::document();
     // Replace any previous print frame so repeated prints stay clean.
     if let Ok(Some(old)) = doc.query_selector("#zs-print-frame") {

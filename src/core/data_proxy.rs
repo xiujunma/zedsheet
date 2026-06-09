@@ -136,6 +136,13 @@ pub struct DataProxy {
     /// evaluation restores the outer cell on return. Transient — not part of
     /// the serialized wire format.
     eval_cell: std::cell::Cell<(usize, usize)>,
+    /// View zoom factor (issue #32), 0.1–4.0 (Excel's 10–400%). Applied in
+    /// `get_row_height`/`get_col_width`, the single geometry source shared by
+    /// the render path (Area/Viewport), hit-testing (`cell_at`/`track_at`),
+    /// scrollbars, the editor overlay, and chart anchors — so screen geometry
+    /// stays consistent everywhere. Stored row heights / column widths remain
+    /// in unzoomed model pixels. Transient — not serialized; print stamps 1.0.
+    zoom: f64,
 }
 
 impl Default for DataProxy {
@@ -161,6 +168,7 @@ impl Default for DataProxy {
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
             eval_cell: std::cell::Cell::new((0, 0)),
+            zoom: 1.0,
         }
     }
 }
@@ -1241,10 +1249,16 @@ impl DataProxy {
         }
     }
 
+    /// On-screen row height: the stored (model) height × the view zoom
+    /// (issue #32). A hidden row's 0 stays 0 at any zoom.
     pub fn get_row_height(&self, ri: usize) -> f64 {
-        self.rows.get(&ri).map(|r| r.get_height()).unwrap_or(self.default_row_height)
+        let h = self.rows.get(&ri).map(|r| r.get_height()).unwrap_or(self.default_row_height);
+        h * self.zoom
     }
 
+    /// Set a row's MODEL height (unzoomed pixels). Callers translating a
+    /// screen-pixel drag must divide by `zoom()` first (the renderer's
+    /// clamped setters do).
     pub fn set_row_height(&mut self, ri: usize, height: f64) {
         let row = self.rows.entry(ri).or_insert_with(Row::default);
         row.set_height(height);
@@ -1254,8 +1268,19 @@ impl DataProxy {
         self.cols.set_width(ci, width);
     }
 
+    /// On-screen column width: stored (model) width × the view zoom (issue #32).
     pub fn get_col_width(&self, ci: usize) -> f64 {
-        self.cols.get_width(ci)
+        self.cols.get_width(ci) * self.zoom
+    }
+
+    /// Current view zoom factor (1.0 = 100%).
+    pub fn zoom(&self) -> f64 {
+        self.zoom
+    }
+
+    /// Set the view zoom, clamped to Excel's 10–400% range.
+    pub fn set_zoom(&mut self, zoom: f64) {
+        self.zoom = zoom.clamp(0.1, 4.0);
     }
 
     pub fn copy(&mut self) {
@@ -1320,7 +1345,9 @@ impl DataProxy {
     }
 
     pub fn freeze_total_width(&self) -> f64 {
-        self.cols.sum_width(0, self.freeze.1)
+        // Through get_col_width (not cols.sum_width) so the zoom factor
+        // (issue #32) applies here exactly as in every other geometry path.
+        (0..self.freeze.1).map(|i| self.get_col_width(i)).sum()
     }
 
     pub fn freeze_total_height(&self) -> f64 {
@@ -4124,6 +4151,46 @@ mod tests {
         assert_eq!(d.get_named_range("testRange").as_deref(), Some("F1:F5"));
         d.set_cell_text(10, 0, "=SUM(testRange)");
         assert_eq!(d.cell_display_value(10, 0), "105");
+    }
+
+    // View zoom (issue #32): get_row_height/get_col_width are the single
+    // geometry source for render AND hit-testing, so zoom applies there.
+    #[test]
+    fn zoom_scales_track_sizes() {
+        let mut d = DataProxy::new("t");
+        let (h0, w0) = (d.get_row_height(0), d.get_col_width(0));
+        d.set_row_height(3, 40.0); // explicit model height
+        d.set_zoom(1.5);
+        assert_eq!(d.get_row_height(0), h0 * 1.5); // default height zooms
+        assert_eq!(d.get_col_width(0), w0 * 1.5);
+        assert_eq!(d.get_row_height(3), 60.0); // explicit height zooms
+        // A hidden row stays collapsed at any zoom.
+        d.set_row_hidden(5, true);
+        assert_eq!(d.get_row_height(5), 0.0);
+        // Unhiding restores the model height (zoom never corrupted it).
+        d.set_row_hidden(5, false);
+        assert_eq!(d.get_row_height(5), h0 * 1.5);
+        // Zoom back to 100% restores original sizes exactly.
+        d.set_zoom(1.0);
+        assert_eq!(d.get_row_height(3), 40.0);
+    }
+
+    #[test]
+    fn zoom_clamps_to_excel_range() {
+        let mut d = DataProxy::new("t");
+        d.set_zoom(0.01);
+        assert_eq!(d.zoom(), 0.1); // 10% floor
+        d.set_zoom(99.0);
+        assert_eq!(d.zoom(), 4.0); // 400% ceiling
+    }
+
+    #[test]
+    fn freeze_total_width_respects_zoom() {
+        let mut d = DataProxy::new("t");
+        d.set_freeze(0, 2);
+        let w = d.freeze_total_width();
+        d.set_zoom(2.0);
+        assert_eq!(d.freeze_total_width(), w * 2.0);
     }
 
     // End-key target: rightmost non-empty column in a row (issue #41).

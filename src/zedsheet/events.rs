@@ -339,6 +339,23 @@ pub(crate) fn wire_events(
             if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
                 return;
             }
+            // Ctrl/Cmd+wheel zooms in 10% steps (issue #32). prevent_default
+            // (already called above) stops the browser's own page zoom.
+            if we.ctrl_key() || we.meta_key() {
+                let pct = {
+                    let mut r = renderer.borrow_mut();
+                    let step = if we.delta_y() < 0.0 { 0.1 } else { -0.1 };
+                    let next = r.zoom() + step;
+                    r.set_zoom(next);
+                    r.render();
+                    (r.zoom() * 100.0).round()
+                };
+                // Keep the toolbar's zoom dropdown title in sync.
+                if let Some(t) = document().get_element_by_id("zs-dd-zoom") {
+                    t.set_text_content(Some(&format!("{}%", pct)));
+                }
+                return;
+            }
             let dy = we.delta_y();
             let dx = we.delta_x();
             let d_rows = if dy > 0.0 { 1 } else if dy < 0.0 { -1 } else { 0 };

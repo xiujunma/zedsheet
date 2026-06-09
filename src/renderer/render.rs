@@ -290,7 +290,10 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
         // the font iteratively until the text fits the cell width without
         // wrapping. Only applies when text_wrap is off and the cell has
         // text; empty cells keep the declared size.
-        let mut font_size = style.font_size as f64;
+        // The view zoom scales fonts with the (already-zoomed) cell geometry
+        // (issue #32); shrink-to-fit then operates on the zoomed size against
+        // the zoomed cell rect, so its fit math is unchanged.
+        let mut font_size = style.font_size as f64 * renderer.data.zoom();
         if style.shrink_to_fit && !style.text_wrap && !text.is_empty() {
             let max_w = (draw_rect.width - 2f64 * pad - style.indent as f64).max(1f64);
             let max_h = (draw_rect.height - 2f64 * pad).max(1f64);

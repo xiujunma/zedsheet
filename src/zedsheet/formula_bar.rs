@@ -528,18 +528,21 @@ pub(crate) fn start_edit(
     if let Some(e) = editor_error {
         let _ = e.style().set_property("display", "none");
     }
-    let (rect, text) = {
+    let (rect, text, zoom) = {
         let mut r = renderer.borrow_mut();
         r.select_cell(ri, ci);
         r.render();
         // Size the editor to the whole merged region, not just the anchor cell.
-        (r.merged_screen_rect(ri, ci), r.cell_text_at(ri, ci))
+        (r.merged_screen_rect(ri, ci), r.cell_text_at(ri, ci), r.zoom())
     };
     let style = textarea.style();
     let _ = style.set_property("left", &format!("{}px", rect.x));
     let _ = style.set_property("top", &format!("{}px", rect.y));
     let _ = style.set_property("width", &format!("{}px", rect.width));
     let _ = style.set_property("height", &format!("{}px", rect.height));
+    // The cell rect is zoomed (issue #32); scale the editor font to match the
+    // rendered text (base 13px set in init_editor_style).
+    let _ = style.set_property("font-size", &format!("{}px", 13.0 * zoom));
     let _ = style.set_property("display", "block");
     textarea.set_value(&text);
     *editing.borrow_mut() = Some((ri, ci));

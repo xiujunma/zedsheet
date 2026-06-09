@@ -99,11 +99,13 @@ impl Toolbar {
 
         let mut btns = h("div", Some(&format!("{}-toolbar-btns", CSS_PREFIX)));
 
-        // Dropdown buttons (format / font / fontsize) precede the icon groups.
+        // Dropdown buttons (format / font / fontsize / zoom) precede the icon
+        // groups. The zoom title always shows the current level (issue #32).
         for (action, title, width, id) in [
             ("dd-format", "Normal", 72, "zs-dd-format"),
             ("dd-font", "Arial", 72, "zs-dd-font"),
             ("dd-fontsize", "10", 30, "zs-dd-fontsize"),
+            ("dd-zoom", "100%", 44, "zs-dd-zoom"),
         ] {
             let mut btn = h("div", Some(&format!("{}-toolbar-btn", CSS_PREFIX)));
             btn.dataset_set("action", action);
@@ -195,6 +197,7 @@ fn tip_for(action: &str) -> &'static str {
         "dd-format" => "Format",
         "dd-font" => "Font",
         "dd-fontsize" => "Font size",
+        "dd-zoom" => "Zoom",
         "undo" => "Undo",
         "redo" => "Redo",
         "print" => "Print",

@@ -53,6 +53,8 @@ pub(crate) enum DdKind {
     Format,
     Font,
     FontSize,
+    /// View zoom presets (issue #32).
+    Zoom,
 }
 
 /// An in-progress header-resize or scrollbar drag.
@@ -169,7 +171,7 @@ impl ZedSheet {
 
         // Toolbar dropdown menus (format / font / fontsize).
         let mut dropdown_nodes: Vec<(String, web_sys::Element, DdKind, &'static str)> = Vec::new();
-        let dropdowns: [(&str, DdKind, &'static str, &str, Vec<(&str, &str)>); 3] = [
+        let dropdowns: [(&str, DdKind, &'static str, &str, Vec<(&str, &str)>); 4] = [
             (
                 "dd-format",
                 DdKind::Format,
@@ -212,6 +214,17 @@ impl ZedSheet {
                     ("10", "10"), ("11", "11"), ("12", "12"), ("13", "13"),
                     ("14", "14"), ("16", "16"), ("18", "18"), ("20", "20"),
                     ("24", "24"), ("28", "28"), ("32", "32"), ("36", "36"), ("48", "48"),
+                ],
+            ),
+            // View zoom (issue #32). Values are percentages.
+            (
+                "dd-zoom",
+                DdKind::Zoom,
+                "zs-dd-zoom",
+                "70px",
+                vec![
+                    ("50", "50%"), ("75", "75%"), ("100", "100%"), ("125", "125%"),
+                    ("150", "150%"), ("200", "200%"), ("400", "400%"),
                 ],
             ),
         ];

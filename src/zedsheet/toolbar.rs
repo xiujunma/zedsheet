@@ -481,6 +481,12 @@ pub(crate) fn wire_dropdown(menu: web_sys::Element, kind: DdKind, title_id: &'st
                             r.set_font_size(px);
                         }
                     }
+                    // View zoom (issue #32): value is a percentage.
+                    DdKind::Zoom => {
+                        if let Ok(pct) = val.parse::<f64>() {
+                            r.set_zoom(pct / 100.0);
+                        }
+                    }
                 }
                 r.render();
             }
