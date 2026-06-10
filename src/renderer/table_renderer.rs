@@ -286,6 +286,21 @@ pub struct Cell {
     pub formula: String,
 }
 
+/// Base header sizes; the outline gutters (issue #30) extend them.
+pub const BASE_ROW_HEADER_W: f64 = 50.0;
+pub const BASE_COL_HEADER_H: f64 = 20.0;
+/// Width of one outline nesting-level lane in the gutter.
+pub const OUTLINE_LANE: f64 = 12.0;
+
+/// A click target in the outline gutters (issue #30).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutlineHit {
+    RowToggle(usize),
+    ColToggle(usize),
+    RowLevel(usize),
+    ColLevel(usize),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SelectorRect {
     pub ri: usize,
@@ -489,7 +504,7 @@ pub struct TableRenderer {
 
 impl TableRenderer {
     pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: DataProxy) -> TableRenderer {
-        TableRenderer {
+        let mut r = TableRenderer {
             target: container,
             data,
             bgcolor: String::from("#ffffff"),
@@ -566,7 +581,11 @@ impl TableRenderer {
             last_fill_handle: std::cell::Cell::new(None),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-        }
+        };
+        // Data may arrive with outline groups (load_data / tests) — size the
+        // gutters before the first render (issue #30).
+        r.refresh_outline_gutters();
+        r
     }
 
     pub fn render(&mut self) {
@@ -826,6 +845,175 @@ impl TableRenderer {
         let nc = (self.scroll_cols as i32 + d_cols).clamp(0, max_col as i32);
         self.scroll_rows = nr as usize;
         self.scroll_cols = nc as usize;
+    }
+
+    // --- Row/column outline groups (issue #30) ---
+
+    /// Resize the header bands to make room for the outline gutters: one
+    /// 12px lane per nesting level. Call whenever the group lists may have
+    /// changed (group/ungroup, data swap, undo). Headers are unzoomed by
+    /// design (issue #32), and so is the gutter.
+    pub fn refresh_outline_gutters(&mut self) {
+        let row_lvls = crate::core::outline::max_level(&self.data.row_groups);
+        let col_lvls = crate::core::outline::max_level(&self.data.col_groups);
+        self.row_header.width =
+            BASE_ROW_HEADER_W + if row_lvls > 0 { row_lvls as f64 * OUTLINE_LANE + 4.0 } else { 0.0 };
+        self.col_header.height =
+            BASE_COL_HEADER_H + if col_lvls > 0 { col_lvls as f64 * OUTLINE_LANE + 4.0 } else { 0.0 };
+    }
+
+    /// Group the selection's rows (context menu). Document state → undoable.
+    pub fn group_rows(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, _, r1, _) = self.selection_bounds();
+        self.data.add_row_group(r0, r1);
+        self.refresh_outline_gutters();
+    }
+
+    pub fn ungroup_rows(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, _, r1, _) = self.selection_bounds();
+        self.data.remove_row_groups_overlapping(r0, r1);
+        self.refresh_outline_gutters();
+    }
+
+    pub fn group_cols(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (_, c0, _, c1) = self.selection_bounds();
+        self.data.add_col_group(c0, c1);
+        self.refresh_outline_gutters();
+    }
+
+    pub fn ungroup_cols(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (_, c0, _, c1) = self.selection_bounds();
+        self.data.remove_col_groups_overlapping(c0, c1);
+        self.refresh_outline_gutters();
+    }
+
+    /// Insert SUBTOTAL rows for the selection, grouping each key block
+    /// (issue #30 — Excel's Data ▸ Subtotal).
+    pub fn subtotal_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let (r0, c0, r1, c1) = self.selection_bounds();
+        self.data.subtotal_range(r0, c0, r1, c1);
+        self.refresh_outline_gutters();
+    }
+
+    /// Collapse/expand toggles and level buttons. Not snapshotted — Excel
+    /// does not put collapse/expand on the undo stack either.
+    pub fn toggle_outline(&mut self, hit: OutlineHit) {
+        match hit {
+            OutlineHit::RowToggle(i) => self.data.toggle_row_group(i),
+            OutlineHit::ColToggle(i) => self.data.toggle_col_group(i),
+            OutlineHit::RowLevel(k) => self.data.set_row_outline_level(k),
+            OutlineHit::ColLevel(k) => self.data.set_col_outline_level(k),
+        }
+    }
+
+    /// Screen rect of each row group's ± toggle (group index, rect). The
+    /// toggle sits in its level's gutter lane at the summary row (end + 1),
+    /// which stays visible when the group collapses.
+    pub fn row_group_toggle_rects(&self) -> Vec<(usize, Rect)> {
+        let levels = crate::core::outline::group_levels(&self.data.row_groups);
+        let max_row = self.data.row_count().saturating_sub(1);
+        self.data
+            .row_groups
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| {
+                let lane = (levels[i] - 1) as f64 * OUTLINE_LANE;
+                let toggle_row = (g.end + 1).min(max_row);
+                let y = self.cell_screen_rect(toggle_row, 0).y;
+                if y < self.col_header.height - 0.5 || y >= self.height {
+                    return None; // scrolled out of view
+                }
+                Some((i, Rect { x: lane + 1.0, y: y + 1.0, width: 11.0, height: 11.0 }))
+            })
+            .collect()
+    }
+
+    pub fn col_group_toggle_rects(&self) -> Vec<(usize, Rect)> {
+        let levels = crate::core::outline::group_levels(&self.data.col_groups);
+        let max_col = self.data.col_count().saturating_sub(1);
+        self.data
+            .col_groups
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| {
+                let lane = (levels[i] - 1) as f64 * OUTLINE_LANE;
+                let toggle_col = (g.end + 1).min(max_col);
+                let x = self.cell_screen_rect(0, toggle_col).x;
+                if x < self.row_header.width - 0.5 || x >= self.width {
+                    return None;
+                }
+                Some((i, Rect { x: x + 1.0, y: lane + 1.0, width: 11.0, height: 11.0 }))
+            })
+            .collect()
+    }
+
+    /// Rects of the 1/2/…/n outline level buttons in the corner: row buttons
+    /// along the top strip, column buttons in a second strip below.
+    pub fn row_level_button_rects(&self) -> Vec<(usize, Rect)> {
+        let max = crate::core::outline::max_level(&self.data.row_groups);
+        if max == 0 {
+            return Vec::new();
+        }
+        (1..=max + 1)
+            .map(|k| (k, Rect { x: 2.0 + (k - 1) as f64 * 13.0, y: 2.0, width: 11.0, height: 11.0 }))
+            .collect()
+    }
+
+    pub fn col_level_button_rects(&self) -> Vec<(usize, Rect)> {
+        let max = crate::core::outline::max_level(&self.data.col_groups);
+        if max == 0 {
+            return Vec::new();
+        }
+        (1..=max + 1)
+            .map(|k| (k, Rect { x: 2.0 + (k - 1) as f64 * 13.0, y: 15.0, width: 11.0, height: 11.0 }))
+            .collect()
+    }
+
+    /// Hit-test the outline gutters: toggles and level buttons. Checked
+    /// before resize/cell handling in the mousedown path.
+    pub fn outline_hit(&self, x: f64, y: f64) -> Option<OutlineHit> {
+        let inside = |r: &Rect| x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
+        for (k, r) in self.row_level_button_rects() {
+            if inside(&r) {
+                return Some(OutlineHit::RowLevel(k));
+            }
+        }
+        for (k, r) in self.col_level_button_rects() {
+            if inside(&r) {
+                return Some(OutlineHit::ColLevel(k));
+            }
+        }
+        for (i, r) in self.row_group_toggle_rects() {
+            if inside(&r) {
+                return Some(OutlineHit::RowToggle(i));
+            }
+        }
+        for (i, r) in self.col_group_toggle_rects() {
+            if inside(&r) {
+                return Some(OutlineHit::ColToggle(i));
+            }
+        }
+        None
     }
 
     /// Number of body rows that fit in the viewport — the step for PageUp /
@@ -1172,6 +1360,8 @@ impl TableRenderer {
         self.scroll_rows = 0;
         self.scroll_cols = 0;
         self.data.set_zoom(zoom);
+        // Size the outline gutters for the loaded data's groups (issue #30).
+        self.refresh_outline_gutters();
         // Restore the selection carried in the loaded data instead of snapping
         // back to A1 (issue #44). For payloads without `sel`, DataProxy's
         // selector defaults to A1, so this preserves the old behavior.
@@ -1215,6 +1405,8 @@ impl TableRenderer {
             self.redo_stack.push(self.data.clone());
             self.data = prev;
             self.data.set_zoom(zoom);
+            // The restored data may have different outline groups (issue #30).
+            self.refresh_outline_gutters();
         }
     }
 
@@ -1224,6 +1416,7 @@ impl TableRenderer {
             self.undo_stack.push(self.data.clone());
             self.data = next;
             self.data.set_zoom(zoom);
+            self.refresh_outline_gutters();
         }
     }
 

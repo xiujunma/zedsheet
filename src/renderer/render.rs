@@ -662,15 +662,17 @@ pub fn render_col_headers(canvas: &Canvas, area: &Area, renderer: &TableRenderer
         canvas.fill_rect(0f64, 0f64, area.width, h);
     }
     canvas.set_line_width(renderer.header_gridline.width);
+    // Center column letters below any outline gutter band (issue #30).
+    let gh = (h - crate::renderer::table_renderer::BASE_COL_HEADER_H).max(0.0);
     area.each_col(|col, x, width| {
         canvas
             .set_font(&font)
             .set_fill_style(hs.color.as_str())
             .set_text_align("center")
             .set_text_baseline("middle");
-        canvas.fill_text(&string_at(col), x + width / 2f64, h / 2f64, None);
+        canvas.fill_text(&string_at(col), x + width / 2f64, (h + gh) / 2f64, None);
         canvas.set_stroke_style(renderer.header_gridline.color.as_str());
-        canvas.line(x + width, 0f64, x + width, h);
+        canvas.line(x + width, gh, x + width, h);
     });
     canvas.set_stroke_style(renderer.header_gridline.color.as_str());
     canvas.line(0f64, h, area.width, h);
@@ -694,19 +696,118 @@ pub fn render_row_headers(canvas: &Canvas, area: &Area, renderer: &TableRenderer
         canvas.fill_rect(0f64, 0f64, w, area.height);
     }
     canvas.set_line_width(renderer.header_gridline.width);
+    // Center row numbers in the number portion, right of any outline gutter
+    // (issue #30): the gutter occupies [0, w - BASE_ROW_HEADER_W).
+    let gw = (w - crate::renderer::table_renderer::BASE_ROW_HEADER_W).max(0.0);
     area.each_row(|row, y, height| {
         canvas
             .set_font(&font)
             .set_fill_style(hs.color.as_str())
             .set_text_align("center")
             .set_text_baseline("middle");
-        canvas.fill_text(&format!("{}", row + 1), w / 2f64, y + height / 2f64, None);
+        canvas.fill_text(&format!("{}", row + 1), (w + gw) / 2f64, y + height / 2f64, None);
         canvas.set_stroke_style(renderer.header_gridline.color.as_str());
-        canvas.line(0f64, y + height, w, y + height);
+        canvas.line(gw, y + height, w, y + height);
     });
     canvas.set_stroke_style(renderer.header_gridline.color.as_str());
     canvas.line(w, 0f64, w, area.height);
     canvas.restore();
+}
+
+/// Draw the row/column outline gutters (issue #30): per-level bracket lines,
+/// ± toggle boxes at each group's summary row/column, and the 1/2/…/n level
+/// buttons in the corner. Geometry comes from the renderer's *_rects helpers,
+/// which the mousedown hit-testing shares — so a drawn toggle is exactly a
+/// clickable toggle.
+pub fn render_outline(canvas: &Canvas, renderer: &TableRenderer) {
+    use crate::renderer::table_renderer::{BASE_COL_HEADER_H, BASE_ROW_HEADER_W, OUTLINE_LANE};
+    let row_gutter_w = renderer.row_header.width - BASE_ROW_HEADER_W;
+    let col_gutter_h = renderer.col_header.height - BASE_COL_HEADER_H;
+    let hdr_h = renderer.col_header.height;
+    let hdr_w = renderer.row_header.width;
+
+    let draw_toggle = |r: &Rect, collapsed: bool| {
+        canvas.set_fill_style("#ffffff");
+        canvas.fill_rect(r.x, r.y, r.width, r.height);
+        canvas.set_stroke_style("#999999");
+        canvas.set_line_width(1.0);
+        canvas.stroke_rect(r.x + 0.5, r.y + 0.5, r.width - 1.0, r.height - 1.0);
+        let (cx, cy) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
+        canvas.set_stroke_style("#333333");
+        canvas.line(r.x + 3.0, cy, r.x + r.width - 3.0, cy); // −
+        if collapsed {
+            canvas.line(cx, r.y + 3.0, cx, r.y + r.height - 3.0); // +
+        }
+    };
+
+    // Row gutter: brackets + toggles, clipped to the band under the corner.
+    if row_gutter_w > 0.0 {
+        canvas.save();
+        canvas.begin_path();
+        canvas.rect(0.0, hdr_h, row_gutter_w, renderer.height - hdr_h);
+        canvas.clip(None);
+        let levels = crate::core::outline::group_levels(&renderer.data.row_groups);
+        let toggles = renderer.row_group_toggle_rects();
+        for (i, g) in renderer.data.row_groups.iter().enumerate() {
+            let lane_mid = (levels[i] - 1) as f64 * OUTLINE_LANE + 6.5;
+            if !g.collapsed {
+                let y0 = renderer.cell_screen_rect(g.start, 0).y + 2.0;
+                let y1 = renderer.cell_screen_rect((g.end + 1).min(renderer.data.row_count() - 1), 0).y;
+                canvas.set_stroke_style("#666666");
+                canvas.set_line_width(1.0);
+                canvas.line(lane_mid, y0, lane_mid, y1); // bracket spine
+                canvas.line(lane_mid, y0, lane_mid + 4.0, y0); // top tick
+            }
+        }
+        for (i, r) in &toggles {
+            draw_toggle(r, renderer.data.row_groups[*i].collapsed);
+        }
+        canvas.restore();
+    }
+
+    // Column gutter: symmetric, above the column headers.
+    if col_gutter_h > 0.0 {
+        canvas.save();
+        canvas.begin_path();
+        canvas.rect(hdr_w, 0.0, renderer.width - hdr_w, col_gutter_h);
+        canvas.clip(None);
+        let levels = crate::core::outline::group_levels(&renderer.data.col_groups);
+        let toggles = renderer.col_group_toggle_rects();
+        for (i, g) in renderer.data.col_groups.iter().enumerate() {
+            let lane_mid = (levels[i] - 1) as f64 * OUTLINE_LANE + 6.5;
+            if !g.collapsed {
+                let x0 = renderer.cell_screen_rect(0, g.start).x + 2.0;
+                let x1 = renderer.cell_screen_rect(0, (g.end + 1).min(renderer.data.col_count() - 1)).x;
+                canvas.set_stroke_style("#666666");
+                canvas.set_line_width(1.0);
+                canvas.line(x0, lane_mid, x1, lane_mid);
+                canvas.line(x0, lane_mid, x0, lane_mid + 4.0);
+            }
+        }
+        for (i, r) in &toggles {
+            draw_toggle(r, renderer.data.col_groups[*i].collapsed);
+        }
+        canvas.restore();
+    }
+
+    // Level buttons in the corner (rows top strip, columns second strip).
+    for (k, r) in renderer
+        .row_level_button_rects()
+        .into_iter()
+        .chain(renderer.col_level_button_rects())
+    {
+        canvas.set_fill_style("#ffffff");
+        canvas.fill_rect(r.x, r.y, r.width, r.height);
+        canvas.set_stroke_style("#999999");
+        canvas.set_line_width(1.0);
+        canvas.stroke_rect(r.x + 0.5, r.y + 0.5, r.width - 1.0, r.height - 1.0);
+        canvas
+            .set_font("9px Arial")
+            .set_fill_style("#333333")
+            .set_text_align("center")
+            .set_text_baseline("middle");
+        canvas.fill_text(&k.to_string(), r.x + r.width / 2.0, r.y + r.height / 2.0 + 0.5, None);
+    }
 }
 
 /// Render the top-left corner box where the headers meet.
@@ -853,6 +954,8 @@ pub fn render(renderer: &TableRenderer) {
         if frow > 0 { render_row_headers(&canvas, area1, renderer); }
         if fcol > 0 { render_col_headers(&canvas, area3, renderer); }
         render_corner(&canvas, renderer);
+        // Outline gutters + level buttons over the header bands (issue #30).
+        render_outline(&canvas, renderer);
 
         // Freeze divider lines.
         if frow > 0 || fcol > 0 {

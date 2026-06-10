@@ -7,6 +7,7 @@ pub mod col;
 pub mod data_proxy;
 pub mod helper;
 pub mod merges;
+pub mod outline;
 pub mod row;
 pub mod state;
 pub mod validation;

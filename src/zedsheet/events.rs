@@ -62,6 +62,20 @@ pub(crate) fn wire_events(
                 return;
             }
 
+            // Outline gutter toggles / level buttons (issue #30). Checked
+            // before resize: the widened header band overlaps the gutter, and
+            // a toggle near a row boundary must win over a resize grab.
+            let outline = renderer.borrow().outline_hit(x, y);
+            if let Some(hit) = outline {
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.toggle_outline(hit);
+                    r.render();
+                }
+                sync(); // hide flags are document state — persist + notify
+                return;
+            }
+
             // Header boundary → start a resize.
             let resize = renderer.borrow().resize_target(x, y);
             if let Some(kind) = resize {

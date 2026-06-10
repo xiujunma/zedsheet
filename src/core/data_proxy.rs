@@ -14,6 +14,7 @@ use crate::core::state::{Selector, Scroll, Clipboard, History};
 use crate::core::validation::{Validation, Validations};
 use crate::core::auto_filter::AutoFilter;
 use crate::core::cond_format::{lerp3_hex, lerp_hex, CondRule};
+use crate::core::outline::OutlineGroup;
 use crate::core::chart::Chart;
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
@@ -129,6 +130,12 @@ pub struct DataProxy {
     pub auto_filter: AutoFilter,
     /// Conditional-formatting rules, evaluated at render time (issue #11).
     pub cond_formats: Vec<CondRule>,
+    /// Row outline groups (issue #30): collapsible ranges drawn as a gutter
+    /// left of the row headers. Collapse state applies through the row hide
+    /// flags, so hidden state itself also persists with the rows.
+    pub row_groups: Vec<OutlineGroup>,
+    /// Column outline groups (issue #30), drawn above the column headers.
+    pub col_groups: Vec<OutlineGroup>,
     /// Charts floating over the grid, anchored at cells (issue #16).
     pub charts: Vec<Chart>,
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
@@ -182,6 +189,8 @@ impl Default for DataProxy {
             clipboard: Clipboard::new(),
             auto_filter: AutoFilter::new(),
             cond_formats: Vec::new(),
+            row_groups: Vec::new(),
+            col_groups: Vec::new(),
             charts: Vec::new(),
             named_ranges: HashMap::new(),
             sheets: None,
@@ -720,9 +729,13 @@ impl DataProxy {
                 }
                 // Position / reference functions (issue #37) need the calling
                 // cell or their argument's coordinates, not its value — they
-                // read the raw arg spans. In scalar context a returned range
-                // collapses to its top-left.
-                if matches!(upper.as_str(), "ROW" | "COLUMN" | "OFFSET" | "INDIRECT" | "ADDRESS") {
+                // read the raw arg spans. SUBTOTAL (issue #30) joins them
+                // because it must see each value's ROW to honor hidden rows.
+                // In scalar context a returned range collapses to its top-left.
+                if matches!(
+                    upper.as_str(),
+                    "ROW" | "COLUMN" | "OFFSET" | "INDIRECT" | "ADDRESS" | "SUBTOTAL"
+                ) {
                     let spans = self.arg_spans(t, pos);
                     return self.eval_ref_fn(&upper, t, &spans, vis).map(|a| a.to_scalar());
                 }
@@ -1105,6 +1118,93 @@ impl DataProxy {
                 let (r0, c0, r1, c1) = parse_a1_ref(&s).ok_or(EvalErr::Ref)?;
                 self.resolve_grid(r0, c0, r1, c1, vis)
             }
+            // SUBTOTAL(function_num, ref1, [ref2, …]) — issue #30. The
+            // 101–111 variants skip hidden rows (collapsed outline groups,
+            // filtered-out or manually hidden rows all share the hide flag,
+            // so all are skipped); 1–11 include every row.
+            "SUBTOTAL" => {
+                if spans.len() < 2 {
+                    return Err(EvalErr::Value);
+                }
+                let f = self.eval_span(t, spans[0], vis)?.as_number() as i64;
+                let (skip_hidden, func) = if (101..=111).contains(&f) {
+                    (true, f - 100)
+                } else if (1..=11).contains(&f) {
+                    (false, f)
+                } else {
+                    return Err(EvalErr::Value);
+                };
+                let mut nums: Vec<f64> = Vec::new();
+                let mut nonblank = 0usize;
+                for span in &spans[1..] {
+                    let (r0, c0, r1, c1) = self.span_ref(t, *span).ok_or(EvalErr::Ref)?;
+                    for r in r0..=r1 {
+                        if skip_hidden && self.is_row_hidden(r) {
+                            continue;
+                        }
+                        for c in c0..=c1 {
+                            match self.resolve_value(r, c, vis)? {
+                                Value::Number(n) => {
+                                    nums.push(n);
+                                    nonblank += 1;
+                                }
+                                Value::Text(s) if !s.trim().is_empty() => nonblank += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                let n = nums.len() as f64;
+                let mean = || nums.iter().sum::<f64>() / n;
+                // Sample (n-1) / population (n) variance; #DIV/0! when the
+                // divisor would be zero, matching Excel.
+                let var = |pop: bool| -> Result<f64, EvalErr> {
+                    let d = if pop { n } else { n - 1.0 };
+                    if d <= 0.0 {
+                        return Err(EvalErr::Div0);
+                    }
+                    let m = mean();
+                    Ok(nums.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / d)
+                };
+                let v = match func {
+                    1 => {
+                        if nums.is_empty() {
+                            return Err(EvalErr::Div0);
+                        }
+                        mean()
+                    }
+                    2 => n,
+                    3 => nonblank as f64,
+                    4 => {
+                        if nums.is_empty() {
+                            0.0
+                        } else {
+                            nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                        }
+                    }
+                    5 => {
+                        if nums.is_empty() {
+                            0.0
+                        } else {
+                            nums.iter().cloned().fold(f64::INFINITY, f64::min)
+                        }
+                    }
+                    6 => {
+                        if nums.is_empty() {
+                            0.0
+                        } else {
+                            nums.iter().product()
+                        }
+                    }
+                    7 => var(false)?.sqrt(),
+                    8 => var(true)?.sqrt(),
+                    9 => nums.iter().sum(),
+                    10 => var(false)?,
+                    11 => var(true)?,
+                    _ => return Err(EvalErr::Value),
+                };
+                Ok(Arg::Scalar(Value::Number(v)))
+            }
             _ => Err(EvalErr::Value),
         }
     }
@@ -1238,6 +1338,7 @@ impl DataProxy {
         self.row_count += n;
         self.merges.shift("row", at, n as isize, |_, _, _, _| {});
         self.adjust_all_formulas(true, at, n as isize, None);
+        shift_groups_for_insert(&mut self.row_groups, at, n);
     }
 
     /// Delete the row at `at`, shifting later rows up.
@@ -1254,6 +1355,53 @@ impl DataProxy {
         self.row_count = self.row_count.saturating_sub(1);
         self.merges.shift("row", at, -1, |_, _, _, _| {});
         self.adjust_all_formulas(true, at + 1, -1, Some(at));
+        shift_groups_for_delete(&mut self.row_groups, at);
+    }
+
+    /// Insert SUBTOTAL rows into `r0..=r1` (issue #30): at each change of
+    /// value in the key column `c0`, a "<key> Total" row with
+    /// `=SUBTOTAL(9, …)` per numeric column `c0+1..=c1` is inserted below the
+    /// block, and the block becomes a collapsible outline group — Excel's
+    /// Data ▸ Subtotal.
+    pub fn subtotal_range(&mut self, r0: usize, c0: usize, r1: usize, c1: usize) {
+        if r1 <= r0 {
+            return; // need at least two rows to subtotal
+        }
+        // Consecutive blocks of equal key value, top-down.
+        let mut blocks: Vec<(usize, usize, String)> = Vec::new();
+        let mut bs = r0;
+        let mut key = self.cell_display_value(r0, c0);
+        for r in (r0 + 1)..=r1 {
+            let k = self.cell_display_value(r, c0);
+            if k != key {
+                blocks.push((bs, r - 1, key));
+                bs = r;
+                key = k;
+            }
+        }
+        blocks.push((bs, r1, key));
+        // Each processed block inserts one row, shifting everything below by
+        // one — `off` tracks the accumulated shift.
+        let mut off = 0usize;
+        for (s0, e0, k) in blocks {
+            let (s, e) = (s0 + off, e0 + off);
+            self.insert_row(e + 1, 1);
+            self.set_cell_text(e + 1, c0, &format!("{} Total", k));
+            for c in (c0 + 1)..=c1 {
+                let has_num = (s..=e)
+                    .any(|r| self.cell_raw_value(r, c).trim().parse::<f64>().is_ok());
+                if has_num {
+                    let col = string_at(c);
+                    self.set_cell_text(
+                        e + 1,
+                        c,
+                        &format!("=SUBTOTAL(9,{col}{}:{col}{})", s + 1, e + 1),
+                    );
+                }
+            }
+            self.add_row_group(s, e);
+            off += 1;
+        }
     }
 
     /// Insert `n` blank columns at `at`, shifting existing cells/cols right.
@@ -1275,6 +1423,7 @@ impl DataProxy {
         self.cols.len += n;
         self.merges.shift("column", at, n as isize, |_, _, _, _| {});
         self.adjust_all_formulas(false, at, n as isize, None);
+        shift_groups_for_insert(&mut self.col_groups, at, n);
     }
 
     /// Delete the column at `at`, shifting later cells/cols left.
@@ -1302,6 +1451,7 @@ impl DataProxy {
         self.cols.len = self.cols.len.saturating_sub(1);
         self.merges.shift("column", at, -1, |_, _, _, _| {});
         self.adjust_all_formulas(false, at + 1, -1, Some(at));
+        shift_groups_for_delete(&mut self.col_groups, at);
     }
 
     // --- Hide / unhide rows & columns (issue #14) ---
@@ -1309,6 +1459,109 @@ impl DataProxy {
     /// Hide or reveal row `ri`.
     pub fn set_row_hidden(&mut self, ri: usize, hide: bool) {
         self.rows.entry(ri).or_default().set_hide(hide);
+    }
+
+    // --- Row/column outline groups (issue #30) ---
+
+    /// Group rows `start..=end`. Invalid or duplicate ranges are ignored.
+    pub fn add_row_group(&mut self, start: usize, end: usize) {
+        if start > end || self.row_groups.iter().any(|g| g.start == start && g.end == end) {
+            return;
+        }
+        self.row_groups.push(OutlineGroup { start, end, collapsed: false });
+    }
+
+    pub fn add_col_group(&mut self, start: usize, end: usize) {
+        if start > end || self.col_groups.iter().any(|g| g.start == start && g.end == end) {
+            return;
+        }
+        self.col_groups.push(OutlineGroup { start, end, collapsed: false });
+    }
+
+    /// Remove every row group that intersects `start..=end` (the Ungroup
+    /// command), revealing any rows only those groups were hiding.
+    pub fn remove_row_groups_overlapping(&mut self, start: usize, end: usize) {
+        let keep = |g: &OutlineGroup| g.end < start || g.start > end;
+        // Reveal the removed groups' members first — apply_row_groups only
+        // visits rows of REMAINING groups, so without this a removed collapsed
+        // group would leave its rows hidden forever.
+        let removed: Vec<OutlineGroup> =
+            self.row_groups.iter().filter(|g| !keep(g)).cloned().collect();
+        self.row_groups.retain(keep);
+        for g in &removed {
+            for r in g.start..=g.end {
+                self.set_row_hidden(r, false);
+            }
+        }
+        // Re-hide anything a surviving collapsed group still covers.
+        self.apply_row_groups();
+    }
+
+    pub fn remove_col_groups_overlapping(&mut self, start: usize, end: usize) {
+        let keep = |g: &OutlineGroup| g.end < start || g.start > end;
+        let removed: Vec<OutlineGroup> =
+            self.col_groups.iter().filter(|g| !keep(g)).cloned().collect();
+        self.col_groups.retain(keep);
+        for g in &removed {
+            for c in g.start..=g.end {
+                self.set_col_hidden(c, false);
+            }
+        }
+        self.apply_col_groups();
+    }
+
+    /// Collapse/expand row group `idx` (a gutter ± click).
+    pub fn toggle_row_group(&mut self, idx: usize) {
+        if let Some(g) = self.row_groups.get_mut(idx) {
+            g.collapsed = !g.collapsed;
+        }
+        self.apply_row_groups();
+    }
+
+    pub fn toggle_col_group(&mut self, idx: usize) {
+        if let Some(g) = self.col_groups.get_mut(idx) {
+            g.collapsed = !g.collapsed;
+        }
+        self.apply_col_groups();
+    }
+
+    /// Outline level button `k` (issue #30): show levels `< k` expanded and
+    /// collapse every group at level `>= k` — Excel's 1/2/3 buttons. The
+    /// highest button (max level + 1) therefore expands everything.
+    pub fn set_row_outline_level(&mut self, k: usize) {
+        let levels = crate::core::outline::group_levels(&self.row_groups);
+        for (g, lvl) in self.row_groups.iter_mut().zip(levels) {
+            g.collapsed = lvl >= k;
+        }
+        self.apply_row_groups();
+    }
+
+    pub fn set_col_outline_level(&mut self, k: usize) {
+        let levels = crate::core::outline::group_levels(&self.col_groups);
+        for (g, lvl) in self.col_groups.iter_mut().zip(levels) {
+            g.collapsed = lvl >= k;
+        }
+        self.apply_col_groups();
+    }
+
+    /// Recompute the hide flag for every row covered by a group: hidden iff
+    /// ANY collapsed group contains it — so expanding an outer group leaves a
+    /// still-collapsed inner group's rows hidden. Rows outside all groups
+    /// (e.g. manually hidden, #14) are untouched.
+    fn apply_row_groups(&mut self) {
+        let groups = self.row_groups.clone();
+        for r in groups.iter().flat_map(|g| g.start..=g.end).collect::<HashSet<_>>() {
+            let hide = groups.iter().any(|g| g.collapsed && g.contains(r));
+            self.set_row_hidden(r, hide);
+        }
+    }
+
+    fn apply_col_groups(&mut self) {
+        let groups = self.col_groups.clone();
+        for c in groups.iter().flat_map(|g| g.start..=g.end).collect::<HashSet<_>>() {
+            let hide = groups.iter().any(|g| g.collapsed && g.contains(c));
+            self.set_col_hidden(c, hide);
+        }
     }
 
     /// Whether row `ri` is currently hidden.
@@ -1772,6 +2025,9 @@ impl DataProxy {
             "autofilter": self.auto_filter.get_data(),
             "namedRanges": serde_json::to_value(&self.named_ranges).unwrap_or_default(),
             "condfmts": serde_json::to_value(&self.cond_formats).unwrap_or_default(),
+            // Outline groups (issue #30); collapse-hidden state rides with rows/cols.
+            "rowGroups": serde_json::to_value(&self.row_groups).unwrap_or_default(),
+            "colGroups": serde_json::to_value(&self.col_groups).unwrap_or_default(),
             "charts": serde_json::to_value(&self.charts).unwrap_or_default(),
             // Active cell (ri, ci) + selection rectangle, so a host can
             // round-trip selection state through get_data/load_data and read
@@ -1842,6 +2098,18 @@ impl DataProxy {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.cond_formats = cf;
+        }
+        if let Some(rg) = data
+            .get("rowGroups")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.row_groups = rg;
+        }
+        if let Some(cg) = data
+            .get("colGroups")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.col_groups = cg;
         }
         if let Some(ch) = data
             .get("charts")
@@ -2067,6 +2335,36 @@ fn parse_range_expr(expr: &str) -> (usize, usize, usize, usize) {
         let (c, r) = exp2xy(expr);
         (r, c, r, c)
     }
+}
+
+/// Shift outline groups for `n` tracks inserted at `at` (issue #30): members
+/// at/after the insertion move down, so a group straddling `at` grows.
+fn shift_groups_for_insert(groups: &mut Vec<OutlineGroup>, at: usize, n: usize) {
+    for g in groups.iter_mut() {
+        if g.start >= at {
+            g.start += n;
+        }
+        if g.end >= at {
+            g.end += n;
+        }
+    }
+}
+
+/// Shift outline groups for the track deleted at `at`: a group containing it
+/// shrinks; a group reduced to nothing is dropped.
+fn shift_groups_for_delete(groups: &mut Vec<OutlineGroup>, at: usize) {
+    groups.retain_mut(|g| {
+        if g.start > at {
+            g.start -= 1;
+        }
+        if g.end >= at {
+            if g.end == 0 {
+                return false; // the single-track group at row/col 0 was deleted
+            }
+            g.end -= 1;
+        }
+        g.start <= g.end
+    });
 }
 
 /// Validate and parse an A1 reference string — `"A1"` or `"A1:B3"` — into
@@ -4523,6 +4821,152 @@ mod tests {
         let mut s = Style::default();
         d2.apply_cond_format(2, 1, &mut s);
         assert_eq!(s.bgcolor.as_deref(), Some("#ff0000"), "style rule applies alongside icons");
+    }
+
+    // --- Outline groups + SUBTOTAL (issue #30) ---
+
+    #[test]
+    fn outline_toggle_hides_and_nested_expand_keeps_inner_collapsed() {
+        let mut d = DataProxy::new("t");
+        d.add_row_group(1, 8); // outer
+        d.add_row_group(2, 4); // inner
+        // Collapse inner: rows 2..=4 hide.
+        d.toggle_row_group(1);
+        assert!(d.is_row_hidden(3));
+        assert!(!d.is_row_hidden(5));
+        // Collapse outer too: all of 1..=8 hide.
+        d.toggle_row_group(0);
+        assert!(d.is_row_hidden(1) && d.is_row_hidden(8));
+        // Expand outer: inner is STILL collapsed, so 2..=4 stay hidden.
+        d.toggle_row_group(0);
+        assert!(!d.is_row_hidden(1) && !d.is_row_hidden(8));
+        assert!(d.is_row_hidden(2) && d.is_row_hidden(4));
+        // Ungroup everything intersecting 0..=10: rows reappear.
+        d.remove_row_groups_overlapping(0, 10);
+        assert!(d.row_groups.is_empty());
+        assert!(!d.is_row_hidden(3));
+    }
+
+    #[test]
+    fn outline_level_buttons_collapse_by_depth() {
+        let mut d = DataProxy::new("t");
+        d.add_row_group(1, 8); // level 1
+        d.add_row_group(2, 4); // level 2
+        // Button 1: collapse levels >= 1 (everything).
+        d.set_row_outline_level(1);
+        assert!(d.is_row_hidden(1) && d.is_row_hidden(3));
+        // Button 2: level-1 groups expand, level-2 stay collapsed.
+        d.set_row_outline_level(2);
+        assert!(!d.is_row_hidden(1));
+        assert!(d.is_row_hidden(3));
+        // Button 3 (max+1): everything expands.
+        d.set_row_outline_level(3);
+        assert!(!d.is_row_hidden(3));
+    }
+
+    #[test]
+    fn outline_groups_survive_serialization_and_shifts() {
+        let mut d = DataProxy::new("t");
+        d.add_row_group(2, 4);
+        d.add_col_group(1, 3);
+        d.toggle_row_group(0);
+        let mut d2 = DataProxy::new("t");
+        d2.set_data(d.get_data());
+        assert_eq!(d2.row_groups, d.row_groups);
+        assert_eq!(d2.col_groups, d.col_groups);
+        assert!(d2.row_groups[0].collapsed);
+        assert!(d2.is_row_hidden(3), "hide flags ride with the rows");
+
+        // Structural edits keep groups aligned.
+        let mut d3 = DataProxy::new("t");
+        d3.add_row_group(5, 8);
+        d3.insert_row(2, 2); // insert above: group shifts down
+        assert_eq!((d3.row_groups[0].start, d3.row_groups[0].end), (7, 10));
+        d3.insert_row(8, 1); // insert inside: group grows
+        assert_eq!((d3.row_groups[0].start, d3.row_groups[0].end), (7, 11));
+        d3.delete_row(0); // delete above: shifts up
+        assert_eq!((d3.row_groups[0].start, d3.row_groups[0].end), (6, 10));
+        d3.delete_row(8); // delete inside: shrinks
+        assert_eq!((d3.row_groups[0].start, d3.row_groups[0].end), (6, 9));
+    }
+
+    #[test]
+    fn subtotal_function_variants_and_hidden_rows() {
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "10"), (1, "20"), (2, "30"), (3, "40")] {
+            d.set_cell_text(r, 0, v); // A1:A4
+        }
+        d.set_cell_text(4, 0, "label"); // text counts for COUNTA only
+        d.set_cell_text(10, 0, "=SUBTOTAL(9, A1:A5)");
+        assert_eq!(d.cell_display_value(10, 0), "100");
+        // Hide row 2 (value 20): 9 still includes it, 109 skips it.
+        d.set_row_hidden(1, true);
+        d.set_cell_text(11, 0, "=SUBTOTAL(109, A1:A5)");
+        assert_eq!(d.cell_display_value(11, 0), "80");
+        d.set_cell_text(12, 0, "=SUBTOTAL(9, A1:A5)");
+        assert_eq!(d.cell_display_value(12, 0), "100");
+        // Other function numbers (over the visible 10, 30, 40).
+        for (f, want) in [
+            (101, "26.666666666666668"), // average of 10,30,40 — wait, format
+            (102, "3"),                  // numeric count
+            (103, "4"),                  // non-blank count (incl. "label")
+            (104, "40"),
+            (105, "10"),
+            (106, "12000"),
+            (109, "80"),
+        ] {
+            d.set_cell_text(20, 0, &format!("=SUBTOTAL({f}, A1:A5)"));
+            let got = d.cell_display_value(20, 0);
+            if f == 101 {
+                assert!(got.starts_with("26.6666"), "avg: {got}");
+            } else {
+                assert_eq!(got, want, "fn {f}");
+            }
+        }
+        // Variance/stdev over 1..4 (unhide first): var-sample = 5/3.
+        d.set_row_hidden(1, false);
+        let mut e = DataProxy::new("t");
+        for (r, v) in [(0, "1"), (1, "2"), (2, "3"), (3, "4")] {
+            e.set_cell_text(r, 0, v);
+        }
+        e.set_cell_text(10, 0, "=SUBTOTAL(10, A1:A4)");
+        assert!(e.cell_display_value(10, 0).starts_with("1.6666"), "sample var");
+        e.set_cell_text(11, 0, "=SUBTOTAL(11, A1:A4)");
+        assert_eq!(e.cell_display_value(11, 0), "1.25"); // population var
+        e.set_cell_text(12, 0, "=SUBTOTAL(8, A1:A4)");
+        assert!(e.cell_display_value(12, 0).starts_with("1.118"), "pop stdev");
+        // Bad function number.
+        e.set_cell_text(13, 0, "=SUBTOTAL(42, A1:A4)");
+        assert_eq!(e.cell_display_value(13, 0), "#VALUE!");
+        // Composes inside arithmetic.
+        e.set_cell_text(14, 0, "=SUBTOTAL(9, A1:A4) * 2");
+        assert_eq!(e.cell_display_value(14, 0), "20");
+    }
+
+    #[test]
+    fn subtotal_range_inserts_grouped_total_rows() {
+        let mut d = DataProxy::new("t");
+        // Key column A, values in B: two blocks (x: rows 0-1, y: rows 2-3).
+        for (r, k, v) in [(0, "x", "1"), (1, "x", "2"), (2, "y", "3"), (3, "y", "4")] {
+            d.set_cell_text(r, 0, k);
+            d.set_cell_text(r, 1, v);
+        }
+        d.subtotal_range(0, 0, 3, 1);
+        // Block 1 total row inserted at row 2; block 2 (shifted to 3..4) total at 5.
+        assert_eq!(d.get_cell_text(2, 0), "x Total");
+        assert_eq!(d.get_cell_text(2, 1), "=SUBTOTAL(9,B1:B2)");
+        assert_eq!(d.cell_display_value(2, 1), "3");
+        assert_eq!(d.get_cell_text(5, 0), "y Total");
+        assert_eq!(d.get_cell_text(5, 1), "=SUBTOTAL(9,B4:B5)");
+        assert_eq!(d.cell_display_value(5, 1), "7");
+        // Each block became a collapsible group.
+        assert_eq!(d.row_groups.len(), 2);
+        assert_eq!((d.row_groups[0].start, d.row_groups[0].end), (0, 1));
+        assert_eq!((d.row_groups[1].start, d.row_groups[1].end), (3, 4));
+        // Collapsing a block keeps its SUBTOTAL row visible.
+        d.toggle_row_group(0);
+        assert!(d.is_row_hidden(0) && d.is_row_hidden(1));
+        assert!(!d.is_row_hidden(2));
     }
 
     // End-key target: rightmost non-empty column in a row (issue #41).

@@ -53,6 +53,13 @@ pub(crate) fn context_menu_html() -> String {
         item("condfmt", "Conditional formatting…"),
         // Issue #16: charts dialog.
         item("chart", "Insert chart…"),
+        // Issue #30: row/column outline groups + Subtotal.
+        divider.clone(),
+        item("group-rows", "Group rows"),
+        item("ungroup-rows", "Ungroup rows"),
+        item("group-cols", "Group columns"),
+        item("ungroup-cols", "Ungroup columns"),
+        item("subtotal", "Subtotal by first column"),
         // Text alignment helpers (issue #25). The "set_rotation" /
         // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
         // `wire_context_menu`.
@@ -227,6 +234,12 @@ pub(crate) fn wire_context_menu(
                     "shrink-toggle" if !read_only => r.toggle_shrink_to_fit(),
                     "indent-inc" if !read_only => r.bump_indent(10),
                     "indent-dec" if !read_only => r.bump_indent(-10),
+                    // Issue #30: outline groups + Subtotal.
+                    "group-rows" if !read_only => r.group_rows(),
+                    "ungroup-rows" if !read_only => r.ungroup_rows(),
+                    "group-cols" if !read_only => r.group_cols(),
+                    "ungroup-cols" if !read_only => r.ungroup_cols(),
+                    "subtotal" if !read_only => r.subtotal_selection(),
                     _ => {}
                 }
                 r.render();
