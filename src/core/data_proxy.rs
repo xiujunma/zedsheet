@@ -13,7 +13,7 @@ use crate::core::merges::Merges;
 use crate::core::state::{Selector, Scroll, Clipboard, History};
 use crate::core::validation::{Validation, Validations};
 use crate::core::auto_filter::AutoFilter;
-use crate::core::cond_format::{lerp_hex, CondRule};
+use crate::core::cond_format::{lerp3_hex, lerp_hex, CondRule};
 use crate::core::chart::Chart;
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
@@ -59,6 +59,25 @@ pub struct Style {
     /// we use raw pixels so callers can step freely (issue #25).
     #[serde(default)]
     pub indent: usize,
+}
+
+/// Render-time conditional-format visual for a cell (issue #29). Computed by
+/// `DataProxy::cond_visual` and drawn by `render_cells` — these decorate the
+/// cell rather than overriding its style.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CondVisual {
+    /// In-cell data bar: `frac` of the cell width (0..=1), in `color`.
+    Bar { frac: f64, color: String },
+    /// Icon at the cell's left edge; `zone` is 0 (low) / 1 (mid) / 2 (high).
+    Icon { set: IconSet, zone: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IconSet {
+    /// Down (red) / right (yellow) / up (green) arrows.
+    Arrows,
+    /// Red / yellow / green traffic lights.
+    Traffic,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -326,42 +345,212 @@ impl DataProxy {
             if ri < r0 || ri > r1 || ci < c0 || ci > c1 {
                 continue;
             }
-            if rule.op == "scale2" {
-                let Ok(n) = self.cell_raw_value(ri, ci).trim().parse::<f64>() else {
-                    continue;
+            match rule.op.as_str() {
+                // Color scales compute a fill from the cell's position in the
+                // range's numeric span (issue #11 / #29).
+                "scale2" | "scale3" => {
+                    let Ok(n) = self.cell_raw_value(ri, ci).trim().parse::<f64>() else {
+                        continue;
+                    };
+                    let Some((min, max)) = self.cond_range_min_max((r0, c0, r1, c1)) else {
+                        continue;
+                    };
+                    let t = if max > min { (n - min) / (max - min) } else { 0.5 };
+                    let bg = if rule.op == "scale2" {
+                        lerp_hex(&rule.v1, &rule.v2, t)
+                    } else {
+                        lerp3_hex(&rule.v1, &rule.v2, &rule.v3, t)
+                    };
+                    if let Some(bg) = bg {
+                        style.bgcolor = Some(bg);
+                        return;
+                    }
+                }
+                // Render-time visuals (issue #29): no style override here —
+                // the render path asks `cond_visual` for these.
+                "databar" | "icons" => continue,
+                _ => {
+                    if self.cond_rule_matches(rule, ri, ci, (r0, c0, r1, c1)) {
+                        if let Some(bg) = &rule.bgcolor {
+                            style.bgcolor = Some(bg.clone());
+                        }
+                        if let Some(c) = &rule.color {
+                            style.color = c.clone();
+                        }
+                        if rule.bold {
+                            style.bold = true;
+                        }
+                        return; // first matching style rule wins
+                    }
+                }
+            }
+        }
+    }
+
+    /// Numeric min/max across a conditional-format rule's range, or `None`
+    /// when the range holds no numbers. Shared by the color scales, data
+    /// bars, and icon sets (issue #29).
+    fn cond_range_min_max(&self, b: (usize, usize, usize, usize)) -> Option<(f64, f64)> {
+        let (r0, c0, r1, c1) = b;
+        let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+        for r in r0..=r1 {
+            for c in c0..=c1 {
+                if let Ok(x) = self.cell_raw_value(r, c).trim().parse::<f64>() {
+                    min = min.min(x);
+                    max = max.max(x);
+                }
+            }
+        }
+        (min.is_finite() && max.is_finite()).then_some((min, max))
+    }
+
+    /// All numeric values in a rule's range, in scan order.
+    fn cond_range_numbers(&self, b: (usize, usize, usize, usize)) -> Vec<f64> {
+        let (r0, c0, r1, c1) = b;
+        let mut out = Vec::new();
+        for r in r0..=r1 {
+            for c in c0..=c1 {
+                if let Ok(x) = self.cell_raw_value(r, c).trim().parse::<f64>() {
+                    out.push(x);
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether a boolean conditional-format rule matches cell (ri, ci). Pure
+    /// value comparisons delegate to `CondRule::matches_value`; the rule types
+    /// added by issue #29 (top/bottom-N, above/below average, duplicate/unique,
+    /// formula) need range-wide or sheet context, so they are resolved here.
+    fn cond_rule_matches(
+        &self,
+        rule: &CondRule,
+        ri: usize,
+        ci: usize,
+        bounds: (usize, usize, usize, usize),
+    ) -> bool {
+        let raw = self.cell_raw_value(ri, ci);
+        match rule.op.as_str() {
+            "top" | "bottom" => {
+                let Ok(n) = raw.trim().parse::<f64>() else { return false };
+                let mut vals = self.cond_range_numbers(bounds);
+                if vals.is_empty() {
+                    return false;
+                }
+                // `v1` is a count ("3") or a percentage ("10%").
+                let v1 = rule.v1.trim();
+                let count = if let Some(pct) = v1.strip_suffix('%') {
+                    let Ok(p) = pct.trim().parse::<f64>() else { return false };
+                    ((vals.len() as f64 * p / 100.0).round() as usize).max(1)
+                } else {
+                    let Ok(k) = v1.parse::<usize>() else { return false };
+                    k
                 };
-                let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+                let count = count.min(vals.len());
+                if count == 0 {
+                    return false;
+                }
+                if rule.op == "top" {
+                    vals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                    n >= vals[count - 1] // threshold comparison includes ties
+                } else {
+                    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    n <= vals[count - 1]
+                }
+            }
+            "above-avg" | "below-avg" => {
+                let Ok(n) = raw.trim().parse::<f64>() else { return false };
+                let vals = self.cond_range_numbers(bounds);
+                if vals.is_empty() {
+                    return false;
+                }
+                let avg = vals.iter().sum::<f64>() / vals.len() as f64;
+                // Excel's default rules are strict comparisons to the mean.
+                if rule.op == "above-avg" { n > avg } else { n < avg }
+            }
+            "dup" | "unique" => {
+                let needle = raw.trim().to_lowercase();
+                if needle.is_empty() {
+                    return false; // blanks are neither duplicates nor unique
+                }
+                let (r0, c0, r1, c1) = bounds;
+                let mut count = 0usize;
                 for r in r0..=r1 {
                     for c in c0..=c1 {
-                        if let Ok(x) = self.cell_raw_value(r, c).trim().parse::<f64>() {
-                            min = min.min(x);
-                            max = max.max(x);
+                        if self.cell_raw_value(r, c).trim().to_lowercase() == needle {
+                            count += 1;
                         }
                     }
                 }
-                if !min.is_finite() || !max.is_finite() {
-                    continue;
+                if rule.op == "dup" { count >= 2 } else { count == 1 }
+            }
+            "formula" => {
+                // Excel semantics: the formula is written for the range's
+                // top-left cell and its RELATIVE references shift with each
+                // cell ($-anchored parts stay put) — the same shift used when
+                // pasting formulas.
+                let expr = rule.v1.trim().trim_start_matches('=');
+                if expr.is_empty() {
+                    return false;
                 }
-                let t = if max > min { (n - min) / (max - min) } else { 0.5 };
-                if let Some(bg) = lerp_hex(&rule.v1, &rule.v2, t) {
-                    style.bgcolor = Some(bg);
-                    return;
-                }
+                let (r0, c0, _, _) = bounds;
+                let shifted = shift_formula_refs(
+                    expr,
+                    ri as isize - r0 as isize,
+                    ci as isize - c0 as isize,
+                );
+                let mut visited: Visited = HashSet::new();
+                matches!(self.eval_expr(&shifted, (ri, ci), &mut visited), Ok(v) if v.is_truthy())
+            }
+            _ => rule.matches_value(&raw),
+        }
+    }
+
+    /// The render-time conditional-format visual for a cell (issue #29): an
+    /// in-cell data bar or an icon. Resolved independently of the style rules
+    /// so a data bar can stack with a color rule. First covering rule wins.
+    pub fn cond_visual(&self, ri: usize, ci: usize) -> Option<CondVisual> {
+        for rule in &self.cond_formats {
+            if rule.op != "databar" && rule.op != "icons" {
                 continue;
             }
-            if rule.matches_value(&self.cell_raw_value(ri, ci)) {
-                if let Some(bg) = &rule.bgcolor {
-                    style.bgcolor = Some(bg.clone());
-                }
-                if let Some(c) = &rule.color {
-                    style.color = c.clone();
-                }
-                if rule.bold {
-                    style.bold = true;
-                }
-                return; // first matching rule wins
+            let Some((r0, c0, r1, c1)) = rule.bounds() else { continue };
+            if ri < r0 || ri > r1 || ci < c0 || ci > c1 {
+                continue;
             }
+            let Ok(n) = self.cell_raw_value(ri, ci).trim().parse::<f64>() else {
+                continue;
+            };
+            let Some((min, max)) = self.cond_range_min_max((r0, c0, r1, c1)) else {
+                continue;
+            };
+            let t = if max > min { (n - min) / (max - min) } else { 1.0 };
+            if rule.op == "databar" {
+                // Keep the range minimum visible as a sliver, like Excel.
+                let frac = 0.05 + 0.95 * t.clamp(0.0, 1.0);
+                let color = rule
+                    .bgcolor
+                    .clone()
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or_else(|| "#638ec6".to_string()); // Excel's default blue
+                return Some(CondVisual::Bar { frac, color });
+            }
+            // Icon zone by thirds of the range's numeric span.
+            let zone = if t < 1.0 / 3.0 {
+                0
+            } else if t < 2.0 / 3.0 {
+                1
+            } else {
+                2
+            };
+            let set = if rule.v1.trim().eq_ignore_ascii_case("traffic") {
+                IconSet::Traffic
+            } else {
+                IconSet::Arrows
+            };
+            return Some(CondVisual::Icon { set, zone });
         }
+        None
     }
 
     /// Resolve a cell to a formula value (issue #2). Error values propagate;
@@ -3433,6 +3622,7 @@ mod tests {
             op: op.into(),
             v1: v1.into(),
             v2: String::new(),
+            v3: String::new(),
             bgcolor: Some("#ffc7ce".into()),
             color: Some("#9c0006".into()),
             bold: true,
@@ -3502,6 +3692,7 @@ mod tests {
             op: "scale2".into(),
             v1: "#000000".into(),
             v2: "#ffffff".into(),
+            v3: String::new(),
             bgcolor: None,
             color: None,
             bold: false,
@@ -4191,6 +4382,147 @@ mod tests {
         let w = d.freeze_total_width();
         d.set_zoom(2.0);
         assert_eq!(d.freeze_total_width(), w * 2.0);
+    }
+
+    // --- Conditional-formatting rule types (issue #29) ---
+
+    /// Sheet with B1:B5 = 10,20,30,40,40 and a rule; returns the bgcolor that
+    /// apply_cond_format leaves on each of B1..B5.
+    fn cf_probe(rule: CondRule) -> Vec<Option<String>> {
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "10"), (1, "20"), (2, "30"), (3, "40"), (4, "40")] {
+            d.set_cell_text(r, 1, v);
+        }
+        d.cond_formats.push(rule);
+        (0..5)
+            .map(|r| {
+                let mut s = Style::default();
+                s.bgcolor = None;
+                d.apply_cond_format(r, 1, &mut s);
+                s.bgcolor
+            })
+            .collect()
+    }
+
+    fn cf_rule(op: &str, v1: &str) -> CondRule {
+        CondRule {
+            range: "B1:B5".into(),
+            op: op.into(),
+            v1: v1.into(),
+            v2: String::new(),
+            v3: String::new(),
+            bgcolor: Some("#ff0000".into()),
+            color: None,
+            bold: false,
+        }
+    }
+
+    #[test]
+    fn cf_top_bottom_n_with_ties_and_percent() {
+        let hit = Some("#ff0000".to_string());
+        // Top 2 of [10,20,30,40,40]: threshold is 40 — BOTH 40s match (ties).
+        assert_eq!(cf_probe(cf_rule("top", "2")), vec![None, None, None, hit.clone(), hit.clone()]);
+        // Bottom 2: 10 and 20.
+        assert_eq!(cf_probe(cf_rule("bottom", "2")), vec![hit.clone(), hit.clone(), None, None, None]);
+        // Top 40% of 5 values = top 2 (rounded count).
+        assert_eq!(cf_probe(cf_rule("top", "40%")), vec![None, None, None, hit.clone(), hit.clone()]);
+        // N larger than the range clamps to "everything".
+        assert_eq!(cf_probe(cf_rule("top", "99")).iter().filter(|x| x.is_some()).count(), 5);
+        // Unparsable N matches nothing.
+        assert_eq!(cf_probe(cf_rule("top", "x")), vec![None; 5]);
+    }
+
+    #[test]
+    fn cf_above_below_average() {
+        let hit = Some("#ff0000".to_string());
+        // mean(10,20,30,40,40) = 28 — strictly above: 30, 40, 40.
+        assert_eq!(cf_probe(cf_rule("above-avg", "")), vec![None, None, hit.clone(), hit.clone(), hit.clone()]);
+        // Strictly below: 10, 20.
+        assert_eq!(cf_probe(cf_rule("below-avg", "")), vec![hit.clone(), hit.clone(), None, None, None]);
+    }
+
+    #[test]
+    fn cf_duplicate_and_unique_values() {
+        let hit = Some("#ff0000".to_string());
+        // Only the two 40s are duplicates.
+        assert_eq!(cf_probe(cf_rule("dup", "")), vec![None, None, None, hit.clone(), hit.clone()]);
+        // Everything else is unique.
+        assert_eq!(cf_probe(cf_rule("unique", "")), vec![hit.clone(), hit.clone(), hit.clone(), None, None]);
+    }
+
+    #[test]
+    fn cf_formula_rule_shifts_relative_refs() {
+        let hit = Some("#ff0000".to_string());
+        // Anchored at the range top-left (B1): "=B1>25" shifts per row, so it
+        // matches the cells holding 30, 40, 40.
+        assert_eq!(cf_probe(cf_rule("formula", "=B1>25")), vec![None, None, hit.clone(), hit.clone(), hit.clone()]);
+        // $-anchored refs do NOT shift: =$B$1>25 is false everywhere (B1=10).
+        assert_eq!(cf_probe(cf_rule("formula", "=$B$1>25")), vec![None; 5]);
+        // Empty formula matches nothing.
+        assert_eq!(cf_probe(cf_rule("formula", "  ")), vec![None; 5]);
+    }
+
+    #[test]
+    fn cf_scale3_blends_min_mid_max() {
+        let mut rule = cf_rule("scale3", "#000000");
+        rule.v2 = "#808080".into();
+        rule.v3 = "#ffffff".into();
+        rule.bgcolor = None;
+        let got = cf_probe(rule);
+        // 10 → min color, 40 → max color; 30 is t=2/3 → blends mid→max.
+        assert_eq!(got[0].as_deref(), Some("#000000"));
+        assert_eq!(got[3].as_deref(), Some("#ffffff"));
+        let mid = got[2].as_deref().unwrap();
+        assert!(mid > "#808080" && mid < "#ffffff", "30 blends between mid and max: {mid}");
+    }
+
+    #[test]
+    fn cf_visuals_databar_and_icons() {
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "10"), (1, "25"), (2, "40")] {
+            d.set_cell_text(r, 1, v);
+        }
+        let mut bar = cf_rule("databar", "");
+        bar.range = "B1:B3".into();
+        bar.bgcolor = Some("#638ec6".into());
+        d.cond_formats.push(bar);
+        // Min keeps a visible sliver; max fills the cell.
+        match d.cond_visual(0, 1) {
+            Some(CondVisual::Bar { frac, ref color }) => {
+                assert!((frac - 0.05).abs() < 1e-9, "min bar frac: {frac}");
+                assert_eq!(color, "#638ec6");
+            }
+            v => panic!("expected min bar, got {v:?}"),
+        }
+        match d.cond_visual(2, 1) {
+            Some(CondVisual::Bar { frac, .. }) => assert!((frac - 1.0).abs() < 1e-9),
+            v => panic!("expected full bar, got {v:?}"),
+        }
+        // Non-numeric / out-of-range cells get no visual.
+        assert_eq!(d.cond_visual(4, 1), None);
+
+        // Icons: zones by thirds of [10, 40] — 10→low, 25→mid, 40→high.
+        let mut d2 = DataProxy::new("t");
+        for (r, v) in [(0, "10"), (1, "25"), (2, "40")] {
+            d2.set_cell_text(r, 1, v);
+        }
+        let mut icons = cf_rule("icons", "traffic");
+        icons.range = "B1:B3".into();
+        d2.cond_formats.push(icons);
+        for (r, zone) in [(0, 0u8), (1, 1), (2, 2)] {
+            match d2.cond_visual(r, 1) {
+                Some(CondVisual::Icon { set: IconSet::Traffic, zone: z }) => assert_eq!(z, zone, "row {r}"),
+                v => panic!("expected traffic icon, got {v:?}"),
+            }
+        }
+        // A databar/icons rule must NOT consume the style pass: a later style
+        // rule still applies (visuals stack with colors).
+        let mut style_rule = cf_rule("gt", "30");
+        style_rule.range = "B1:B3".into();
+        d2.cond_formats.push(style_rule);
+        let mut s = Style::default();
+        d2.apply_cond_format(2, 1, &mut s);
+        assert_eq!(s.bgcolor.as_deref(), Some("#ff0000"), "style rule applies alongside icons");
     }
 
     // End-key target: rightmost non-empty column in a row (issue #41).

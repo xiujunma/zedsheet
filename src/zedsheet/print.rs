@@ -155,6 +155,7 @@ mod tests {
             op: "gt".into(),
             v1: "150".into(),
             v2: String::new(),
+            v3: String::new(),
             bgcolor: Some("#ffc7ce".into()),
             color: None,
             bold: false,

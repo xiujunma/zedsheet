@@ -20,6 +20,10 @@ pub struct CondRule {
     pub v1: String,
     #[serde(default)]
     pub v2: String,
+    /// Third operand (issue #29): the max color of a 3-color scale. Older
+    /// serialized rules omit it, hence the default.
+    #[serde(default)]
+    pub v3: String,
     #[serde(default)]
     pub bgcolor: Option<String>,
     #[serde(default)]
@@ -69,6 +73,17 @@ impl CondRule {
     }
 }
 
+/// Interpolate across a 3-color stop list (issue #29): `t` in [0, 0.5] blends
+/// `a → b`, and (0.5, 1] blends `b → c` — Excel's 3-color scale behavior.
+pub fn lerp3_hex(a: &str, b: &str, c: &str, t: f64) -> Option<String> {
+    let t = t.clamp(0.0, 1.0);
+    if t <= 0.5 {
+        lerp_hex(a, b, t * 2.0)
+    } else {
+        lerp_hex(b, c, (t - 0.5) * 2.0)
+    }
+}
+
 /// Linearly interpolate between two `#rrggbb` colors. `t` is clamped to 0..=1.
 pub fn lerp_hex(a: &str, b: &str, t: f64) -> Option<String> {
     let pa = parse_hex(a)?;
@@ -105,10 +120,30 @@ mod tests {
             op: op.into(),
             v1: v1.into(),
             v2: v2.into(),
+            v3: String::new(),
             bgcolor: Some("#ffc7ce".into()),
             color: None,
             bold: false,
         }
+    }
+
+    // Older serialized rules predate `v3` (issue #29) and must keep loading.
+    #[test]
+    fn rule_without_v3_deserializes() {
+        let json = r##"{"range":"B2:B5","op":"gt","v1":"100","v2":"","bgcolor":"#ffc7ce","color":null,"bold":false}"##;
+        let r: CondRule = serde_json::from_str(json).unwrap();
+        assert_eq!(r.v3, "");
+        assert_eq!(r.op, "gt");
+    }
+
+    #[test]
+    fn lerp3_blends_through_midpoint() {
+        // Endpoints and the exact middle hit the stops.
+        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 0.0).unwrap(), "#000000");
+        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 0.5).unwrap(), "#808080");
+        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 1.0).unwrap(), "#ffffff");
+        // Quarter point blends within the first segment.
+        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 0.25).unwrap(), "#404040");
     }
 
     #[test]

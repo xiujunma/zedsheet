@@ -10,6 +10,7 @@ use crate::renderer::table_renderer::BorderType::{All, Inside, Vertical};
 use super::border::border_ranges;
 use super::table_renderer::Placement;
 use super::alphabets::string_at;
+use crate::core::data_proxy::{CondVisual, IconSet};
 
 pub trait AreaRenderer {
     fn cell(&self, row_index: usize, col_index: usize) -> Option<Cell>;
@@ -280,6 +281,71 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             if !is_white(bg) {
                 canvas.set_fill_style(bg.as_str());
                 canvas.fill_rect(draw_rect.x, draw_rect.y, draw_rect.width, draw_rect.height);
+            }
+        }
+
+        // Conditional-format visuals (issue #29): a data bar painted under the
+        // text, or an icon at the cell's left edge. Resolved independently of
+        // the style rules so a bar can stack with a color rule.
+        if let Some(visual) = renderer.data.cond_visual(row, col) {
+            match visual {
+                CondVisual::Bar { frac, color } => {
+                    let bw = (draw_rect.width - 2.0).max(0.0) * frac.clamp(0.0, 1.0);
+                    canvas.set_fill_style(color.as_str());
+                    canvas.fill_rect(
+                        draw_rect.x + 1.0,
+                        draw_rect.y + 2.0,
+                        bw,
+                        (draw_rect.height - 4.0).max(0.0),
+                    );
+                }
+                CondVisual::Icon { set, zone } => {
+                    // Icon size follows the (zoom-scaled) row height.
+                    let s = (draw_rect.height * 0.45).clamp(5.0, 16.0);
+                    let cx = draw_rect.x + 4.0 + s / 2.0;
+                    let cy = draw_rect.y + draw_rect.height / 2.0;
+                    match set {
+                        IconSet::Traffic => {
+                            let color = ["#e53935", "#fdd835", "#43a047"][zone.min(2) as usize];
+                            canvas
+                                .set_fill_style(color)
+                                .begin_path()
+                                .ellipse(cx, cy, s / 2.0, s / 2.0, 0.0, 0.0, std::f64::consts::TAU, None)
+                                .fill(None);
+                        }
+                        IconSet::Arrows => {
+                            let h = s / 2.0;
+                            canvas.begin_path();
+                            match zone.min(2) {
+                                0 => {
+                                    // Down arrow, red.
+                                    canvas
+                                        .set_fill_style("#e53935")
+                                        .move_to(cx - h, cy - h)
+                                        .line_to(cx + h, cy - h)
+                                        .line_to(cx, cy + h);
+                                }
+                                1 => {
+                                    // Right (flat) arrow, amber.
+                                    canvas
+                                        .set_fill_style("#fb8c00")
+                                        .move_to(cx - h, cy - h)
+                                        .line_to(cx + h, cy)
+                                        .line_to(cx - h, cy + h);
+                                }
+                                _ => {
+                                    // Up arrow, green.
+                                    canvas
+                                        .set_fill_style("#43a047")
+                                        .move_to(cx - h, cy + h)
+                                        .line_to(cx + h, cy + h)
+                                        .line_to(cx, cy - h);
+                                }
+                            }
+                            canvas.close_path().fill(None);
+                        }
+                    }
+                }
             }
         }
 

@@ -28,6 +28,16 @@ fn op_label(op: &str) -> &'static str {
         "between" => "between",
         "contains" => "text contains",
         "scale2" => "2-color scale",
+        "scale3" => "3-color scale",
+        "databar" => "data bar",
+        "icons" => "icon set",
+        "top" => "top",
+        "bottom" => "bottom",
+        "above-avg" => "above average",
+        "below-avg" => "below average",
+        "dup" => "duplicate values",
+        "unique" => "unique values",
+        "formula" => "formula",
         _ => "?",
     }
 }
@@ -58,16 +68,31 @@ pub(crate) fn cond_format_modal_html() -> String {
                         <option value="eq">Equal to</option>
                         <option value="between">Between</option>
                         <option value="contains">Text contains</option>
+                        <option value="top">Top N</option>
+                        <option value="bottom">Bottom N</option>
+                        <option value="above-avg">Above average</option>
+                        <option value="below-avg">Below average</option>
+                        <option value="dup">Duplicate values</option>
+                        <option value="unique">Unique values</option>
+                        <option value="formula">Custom formula</option>
                         <option value="scale2">2-color scale</option>
+                        <option value="scale3">3-color scale</option>
+                        <option value="databar">Data bar</option>
+                        <option value="icons-arrows">Icon set: arrows</option>
+                        <option value="icons-traffic">Icon set: traffic lights</option>
                     </select>
                 </div>
-                <div style="{row}">
+                <div class="zs-cf-v1-row" style="{row}">
                     <label class="zs-cf-v1-label" style="{label}">Value</label>
                     <input class="zs-cf-v1" style="flex:1;padding:3px;"/>
                 </div>
                 <div class="zs-cf-v2-row" style="{row}display:none;">
                     <label class="zs-cf-v2-label" style="{label}">and</label>
                     <input class="zs-cf-v2" style="flex:1;padding:3px;"/>
+                </div>
+                <div class="zs-cf-v3-row" style="{row}display:none;">
+                    <label class="zs-cf-v3-label" style="{label}">Max color</label>
+                    <input class="zs-cf-v3" style="flex:1;padding:3px;"/>
                 </div>
                 <div class="zs-cf-style-row" style="{row}">
                     <label style="{label}">Style</label>
@@ -96,17 +121,28 @@ fn render_rules_list(modal: &web_sys::Element, renderer: &SharedRenderer) {
     }
     let mut html = String::new();
     for (i, r) in rules.iter().enumerate() {
-        let what = if r.op == "between" {
-            format!("{} {} and {}", op_label(&r.op), esc(&r.v1), esc(&r.v2))
-        } else if r.op == "scale2" {
-            format!("{} {} → {}", op_label(&r.op), esc(&r.v1), esc(&r.v2))
-        } else {
-            format!("{} {}", op_label(&r.op), esc(&r.v1))
+        let what = match r.op.as_str() {
+            "between" => format!("{} {} and {}", op_label(&r.op), esc(&r.v1), esc(&r.v2)),
+            "scale2" => format!("{} {} → {}", op_label(&r.op), esc(&r.v1), esc(&r.v2)),
+            "scale3" => format!(
+                "{} {} → {} → {}",
+                op_label(&r.op),
+                esc(&r.v1),
+                esc(&r.v2),
+                esc(&r.v3)
+            ),
+            "icons" => format!("{} ({})", op_label(&r.op), esc(&r.v1)),
+            "top" | "bottom" => format!("{} {}", op_label(&r.op), esc(&r.v1)),
+            "databar" | "above-avg" | "below-avg" | "dup" | "unique" => {
+                op_label(&r.op).to_string()
+            }
+            _ => format!("{} {}", op_label(&r.op), esc(&r.v1)),
         };
         let swatch = r
             .bgcolor
             .clone()
             .or_else(|| (r.op == "scale2").then(|| r.v2.clone()))
+            .or_else(|| (r.op == "scale3").then(|| r.v3.clone()))
             .unwrap_or_else(|| "#ffffff".into());
         html.push_str(&format!(
             "<div style=\"display:flex;align-items:center;gap:8px;padding:3px 0;\">\
@@ -173,31 +209,70 @@ pub(crate) fn wire_cond_format_modal(
                             .set_property("display", if show { "flex" } else { "none" });
                     }
                 };
+                let set_val = |sel: &str, v: &str| {
+                    if let Ok(Some(e)) = modal.query_selector(sel) {
+                        if let Ok(i) = e.dyn_into::<HtmlInputElement>() {
+                            i.set_value(v);
+                        }
+                    }
+                };
+                // Default layout: Value row only, style row on, no v2/v3.
+                set_vis(".zs-cf-v1-row", true);
+                set_vis(".zs-cf-v2-row", false);
+                set_vis(".zs-cf-v3-row", false);
+                set_vis(".zs-cf-style-row", true);
+                set_text(".zs-cf-v1-label", "Value");
+                // Re-seed the style defaults so a previous rule type's colors
+                // (e.g. the data bar's blue fill) don't leak into this one.
+                set_val(".zs-cf-bg", "#ffc7ce");
+                set_val(".zs-cf-color", "#9c0006");
                 match op.as_str() {
                     "between" => {
                         set_text(".zs-cf-v1-label", "From");
                         set_text(".zs-cf-v2-label", "To");
                         set_vis(".zs-cf-v2-row", true);
-                        set_vis(".zs-cf-style-row", true);
                     }
                     "scale2" => {
                         set_text(".zs-cf-v1-label", "Min color");
                         set_text(".zs-cf-v2-label", "Max color");
                         set_vis(".zs-cf-v2-row", true);
                         set_vis(".zs-cf-style-row", false);
-                        for (sel, v) in [(".zs-cf-v1", "#ffffff"), (".zs-cf-v2", "#1a73e8")] {
-                            if let Ok(Some(e)) = modal.query_selector(sel) {
-                                if let Ok(i) = e.dyn_into::<HtmlInputElement>() {
-                                    i.set_value(v);
-                                }
-                            }
-                        }
+                        set_val(".zs-cf-v1", "#ffffff");
+                        set_val(".zs-cf-v2", "#1a73e8");
                     }
-                    _ => {
-                        set_text(".zs-cf-v1-label", "Value");
-                        set_vis(".zs-cf-v2-row", false);
-                        set_vis(".zs-cf-style-row", true);
+                    "scale3" => {
+                        set_text(".zs-cf-v1-label", "Min color");
+                        set_text(".zs-cf-v2-label", "Mid color");
+                        set_vis(".zs-cf-v2-row", true);
+                        set_vis(".zs-cf-v3-row", true);
+                        set_vis(".zs-cf-style-row", false);
+                        // Excel's red → yellow → green preset.
+                        set_val(".zs-cf-v1", "#f8696b");
+                        set_val(".zs-cf-v2", "#ffeb84");
+                        set_val(".zs-cf-v3", "#63be7b");
                     }
+                    // Data bar: only the Fill color applies (the bar color).
+                    "databar" => {
+                        set_vis(".zs-cf-v1-row", false);
+                        set_val(".zs-cf-bg", "#638ec6");
+                    }
+                    // Icon sets need no operands or style at all.
+                    "icons-arrows" | "icons-traffic" => {
+                        set_vis(".zs-cf-v1-row", false);
+                        set_vis(".zs-cf-style-row", false);
+                    }
+                    "top" | "bottom" => {
+                        set_text(".zs-cf-v1-label", "N (or N%)");
+                        set_val(".zs-cf-v1", "10");
+                    }
+                    "above-avg" | "below-avg" | "dup" | "unique" => {
+                        set_vis(".zs-cf-v1-row", false);
+                    }
+                    "formula" => {
+                        set_text(".zs-cf-v1-label", "Formula");
+                        set_val(".zs-cf-v1", "");
+                    }
+                    _ => {}
                 }
             });
         }
@@ -243,15 +318,43 @@ pub(crate) fn wire_cond_format_modal(
         }
 
         if elx.closest(".zs-cf-add").ok().flatten().is_some() {
-            let op = modal_node
+            let select_op = modal_node
                 .query_selector(".zs-cf-op")
                 .ok()
                 .flatten()
                 .and_then(|e| e.dyn_into::<HtmlSelectElement>().ok())
                 .map(|s| s.value())
                 .unwrap_or_default();
+            // The two icon-set menu entries share the `icons` op; the set
+            // name travels in v1 (issue #29).
+            let (op, mut v1) = match select_op.as_str() {
+                "icons-arrows" => ("icons".to_string(), "arrows".to_string()),
+                "icons-traffic" => ("icons".to_string(), "traffic".to_string()),
+                _ => (select_op, val(".zs-cf-v1")),
+            };
             let range = val(".zs-cf-range");
-            let scale = op == "scale2";
+            // Scales and icon sets carry no cell style; a data bar uses the
+            // Fill color as its bar color but no text style.
+            let no_style = matches!(op.as_str(), "scale2" | "scale3" | "icons");
+            let bar = op == "databar";
+            if op == "formula" {
+                v1 = v1.trim().to_string();
+                if v1.trim_start_matches('=').trim().is_empty() {
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.alert_with_message("Enter a formula like =B1>100.");
+                    }
+                    return;
+                }
+            }
+            if matches!(op.as_str(), "top" | "bottom") {
+                let n = v1.trim().trim_end_matches('%').trim();
+                if n.parse::<f64>().map(|x| x <= 0.0).unwrap_or(true) {
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.alert_with_message("Enter a positive N like 10 or 10%.");
+                    }
+                    return;
+                }
+            }
             let bold = modal_node
                 .query_selector(".zs-cf-bold")
                 .ok()
@@ -259,14 +362,23 @@ pub(crate) fn wire_cond_format_modal(
                 .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
                 .map(|i| i.checked())
                 .unwrap_or(false);
+            // Only persist the operands the op actually uses, so hidden-field
+            // leftovers from a previously selected rule type don't serialize.
+            let uses_v1 = !matches!(
+                op.as_str(),
+                "databar" | "above-avg" | "below-avg" | "dup" | "unique"
+            );
+            let uses_v2 = matches!(op.as_str(), "between" | "scale2" | "scale3");
+            let uses_v3 = op == "scale3";
             let rule = CondRule {
                 range,
                 op,
-                v1: val(".zs-cf-v1"),
-                v2: val(".zs-cf-v2"),
-                bgcolor: (!scale).then(|| val(".zs-cf-bg")).filter(|s| !s.is_empty()),
-                color: (!scale).then(|| val(".zs-cf-color")).filter(|s| !s.is_empty()),
-                bold: bold && !scale,
+                v1: if uses_v1 { v1 } else { String::new() },
+                v2: if uses_v2 { val(".zs-cf-v2") } else { String::new() },
+                v3: if uses_v3 { val(".zs-cf-v3") } else { String::new() },
+                bgcolor: (!no_style).then(|| val(".zs-cf-bg")).filter(|s| !s.is_empty()),
+                color: (!no_style && !bar).then(|| val(".zs-cf-color")).filter(|s| !s.is_empty()),
+                bold: bold && !no_style && !bar,
             };
             // A rule with an unparsable range can never match — reject it
             // here so the dialog gives immediate feedback.
