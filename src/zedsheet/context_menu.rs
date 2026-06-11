@@ -53,6 +53,8 @@ pub(crate) fn context_menu_html() -> String {
         item("condfmt", "Conditional formatting…"),
         // Issue #16: charts dialog.
         item("chart", "Insert chart…"),
+        // Issue #35: PivotTable dialog.
+        item("pivot", "Insert PivotTable…"),
         // Issue #30: row/column outline groups + Subtotal.
         divider.clone(),
         item("group-rows", "Group rows"),
@@ -85,6 +87,7 @@ pub(crate) fn wire_context_menu(
     dv_open: OpenHandle,
     cf_open: OpenHandle,
     chart_open: OpenHandle,
+    pivot_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -159,6 +162,15 @@ pub(crate) fn wire_context_menu(
             // Charts dialog (issue #16): same open-handle pattern.
             if cmd == "chart" {
                 if let Some(open) = chart_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // PivotTable dialog (issue #35): same open-handle pattern.
+            if cmd == "pivot" {
+                if let Some(open) = pivot_open.borrow().as_ref() {
                     open();
                 }
                 let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");

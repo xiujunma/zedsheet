@@ -29,6 +29,10 @@ pub enum Agg {
     Max,
 }
 
+impl Default for Agg {
+    fn default() -> Self { Agg::Sum }
+}
+
 impl Agg {
     pub fn label(self) -> &'static str {
         match self {

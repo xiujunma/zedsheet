@@ -27,6 +27,7 @@ mod context_menu;
 mod data_validation;
 mod cond_format_modal;
 mod chart_modal;
+mod pivot_modal;
 mod filter_menu;
 mod print;
 mod find_replace;
@@ -41,6 +42,7 @@ pub(crate) use context_menu::*;
 pub(crate) use data_validation::*;
 pub(crate) use cond_format_modal::*;
 pub(crate) use chart_modal::*;
+pub(crate) use pivot_modal::*;
 pub(crate) use filter_menu::*;
 pub(crate) use print::*;
 pub(crate) use find_replace::*;
@@ -483,6 +485,8 @@ impl ZedSheet {
         let cf_open: OpenHandle = Rc::new(RefCell::new(None));
         // …and the Charts dialog (issue #16).
         let chart_open: OpenHandle = Rc::new(RefCell::new(None));
+        // …and the PivotTable dialog (issue #35).
+        let pivot_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -609,7 +613,7 @@ impl ZedSheet {
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone());
+            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone(), pivot_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
             wire_formula_bar(
@@ -749,6 +753,63 @@ impl ZedSheet {
             let renderer_for_open = renderer.clone();
             *chart_open.borrow_mut() = Some(Rc::new(move || {
                 open_chart_modal(&inner, &renderer_for_open);
+            }));
+        }
+
+        // PivotTable modal (issue #35). Mirrors the chart modal mount: a
+        // hidden root, wire once, expose an `OpenHandle` so the context
+        // menu can open it.
+        let mut pivot_modal_root = h("div", Some("zs-pivot-modal-root"));
+        pivot_modal_root.set_inner_html(pivot_modal_html());
+        let pivot_modal_node: Option<web_sys::Element> =
+            pivot_modal_root.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut pivot_modal_root);
+        if let Some(ref node) = pivot_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-pivot-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            // The pivot modal needs a tab-strip re-render callback so the
+            // user sees the new output sheet after Create. We close over the
+            // current `sheets` and `active` and call the bottom-bar's
+            // `render_tabs` against the live `<ul>` node, which is the same
+            // one `wire_bottombar` re-queries.
+            let tabs_re_render: OpenHandle = Rc::new(RefCell::new(None));
+            let tabs_for_re_render = tabs_re_render.clone();
+            wire_pivot_modal(
+                inner.clone(),
+                &renderer,
+                &sheets,
+                *active.borrow(),
+                sync.clone(),
+                tabs_re_render.clone(),
+            );
+            // After `wire_bottombar` ran (above), query the tab node and
+            // populate the open-handle so the modal can re-render the tabs
+            // when Create pivot finishes.
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Ok(Some(menu_node)) = doc.query_selector(".zedsheet-bottombar") {
+                    let sheets_for_tabs = sheets.clone();
+                    let active_for_tabs = active.clone();
+                    *tabs_for_re_render.borrow_mut() = Some(Rc::new(move || {
+                        let names: Vec<String> = sheets_for_tabs
+                            .borrow()
+                            .iter()
+                            .map(|d| d.name.clone())
+                            .collect();
+                        bottom_bar::render_tabs(
+                            &menu_node,
+                            &names,
+                            *active_for_tabs.borrow(),
+                        );
+                    }));
+                }
+            }
+            let renderer_for_open = renderer.clone();
+            let sheets_for_open = sheets.clone();
+            *pivot_open.borrow_mut() = Some(Rc::new(move || {
+                open_pivot_modal(&inner, &renderer_for_open, &sheets_for_open);
             }));
         }
 
