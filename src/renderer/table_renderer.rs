@@ -10,7 +10,7 @@ use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
-use crate::core::data_proxy::{DataProxy, Style as CellStyle, Border as CellBorder};
+use crate::core::data_proxy::{DataProxy, SheetsRegistry, Style as CellStyle, Border as CellBorder};
 use crate::core::cell_range::CellRange;
 use crate::core::cell::Cell as DataCell;
 use crate::core::clipboard_io::ParsedGrid;
@@ -500,6 +500,23 @@ pub struct TableRenderer {
     /// Undo/redo snapshots of the active sheet's data.
     undo_stack: Vec<DataProxy>,
     redo_stack: Vec<DataProxy>,
+    /// Workbook-level undo record for the last pivot operation. The standard
+    /// `undo_stack` only captures the active sheet, but a pivot adds a new
+    /// sheet to the registry — so we stash a copy of the whole pre-pivot
+    /// state here. `undo()` consults this before falling through to the
+    /// stack (issue #35).
+    pivot_undo: Option<PivotUndo>,
+}
+
+/// Workbook snapshot used to undo a pivot (issue #35). Stores the registry
+/// contents + active index so the user can revert "create pivot" and
+/// "refresh pivot" cleanly, even though `set_data` clears the per-sheet
+/// undo stack on a sheet switch.
+#[derive(Clone)]
+pub(crate) struct PivotUndo {
+    pub(crate) sheets: Vec<DataProxy>,
+    pub(crate) active: usize,
+    pub(crate) active_data: DataProxy,
 }
 
 impl TableRenderer {
@@ -581,6 +598,7 @@ impl TableRenderer {
             last_fill_handle: std::cell::Cell::new(None),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            pivot_undo: None,
         };
         // Data may arrive with outline groups (load_data / tests) — size the
         // gutters before the first render (issue #30).
@@ -1390,7 +1408,20 @@ impl TableRenderer {
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.pivot_undo.is_some() || !self.undo_stack.is_empty()
+    }
+
+    /// Take the pending pivot undo record (if any). The caller uses this to
+    /// restore the workbook's sheets registry and active index. After this
+    /// call, `pivot_undo` is `None` again (issue #35).
+    pub fn take_pivot_undo(&mut self) -> Option<PivotUndo> {
+        self.pivot_undo.take()
+    }
+
+    /// Whether a pivot undo is pending — used to decide whether the
+    /// "Refresh pivot" context-menu item should appear (issue #35).
+    pub fn has_pending_pivot_undo(&self) -> bool {
+        self.pivot_undo.is_some()
     }
 
     pub fn can_redo(&self) -> bool {
@@ -1398,6 +1429,19 @@ impl TableRenderer {
     }
 
     pub fn undo(&mut self) {
+        // Pivot undo (issue #35) takes priority: the workbook's sheet
+        // registry was mutated, and a per-sheet `undo_stack` snapshot is
+        // insufficient.
+        if let Some(rec) = self.pivot_undo.take() {
+            self.redo_stack.push(self.data.clone());
+            // The caller is responsible for restoring the registry in
+            // `sheets.borrow_mut()` to `rec.sheets` and resetting
+            // `*active.borrow_mut() = rec.active`. We only swap `self.data`
+            // and re-render here.
+            self.data = rec.active_data;
+            self.refresh_outline_gutters();
+            return;
+        }
         if let Some(prev) = self.undo_stack.pop() {
             // Zoom is view state, not document state — an undo must not
             // revert it to the level captured in the snapshot (issue #32).
@@ -2063,6 +2107,130 @@ impl TableRenderer {
         self.data.charts.push(chart);
     }
 
+    /// Add a new pivot (issue #35). `pt` is the spec; the output is written
+    /// to a fresh `DataProxy` and added to `sheets`. The renderer's active
+    /// sheet becomes the new output sheet. The previous workbook state is
+    /// saved in `pivot_undo` so the user can `undo()` cleanly.
+    ///
+    /// `active` is the index of the current active sheet (before the switch);
+    /// `sheets` is the full registry. The caller is responsible for re-
+    /// rendering the tab strip and calling `sync()`.
+    pub fn add_pivot(
+        &mut self,
+        pt: crate::core::pivot::PivotTable,
+        sheets: &SheetsRegistry,
+        active: usize,
+    ) {
+        if self.data.is_read_only() {
+            return;
+        }
+        // 1. Snapshot the current workbook for undo (issue #35).
+        let (saved_sheets, saved_active) = {
+            let s = sheets.borrow();
+            (s.clone(), active)
+        };
+        let saved_data = self.data.clone();
+        self.pivot_undo = Some(PivotUndo {
+            sheets: saved_sheets,
+            active: saved_active,
+            active_data: saved_data,
+        });
+        // 2. Run the aggregation.
+        let result = match crate::core::pivot::compute(&self.data, &pt) {
+            Ok(r) => r,
+            Err(e) => {
+                // Drop the undo record — the operation didn't happen.
+                self.pivot_undo = None;
+                pivot_alert(&format!("Pivot: {}", e));
+                return;
+            }
+        };
+        let (r0, c0, _r1, c1) = match pt.validate(&self.data) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pivot_undo = None;
+                pivot_alert(&format!("Pivot: {}", e));
+                return;
+            }
+        };
+        let headers = crate::core::pivot::read_field_headers(&self.data, r0, c0, c1);
+        // 3. Materialize to a new DataProxy, set read-only, push to registry.
+        let output_name = pt.output_sheet.clone();
+        let mut out_sheet =
+            crate::core::pivot::materialize(&pt, &result, &headers, &output_name);
+        out_sheet.set_read_only(true);
+        out_sheet.set_sheets(sheets);
+        // 4. Persist current data, push output, switch active, swap renderer's data.
+        let cur = active;
+        let new_idx = {
+            let mut s = sheets.borrow_mut();
+            // If an output sheet with this name already exists, replace it.
+            if let Some(existing_idx) = s.iter().position(|d| d.name == output_name) {
+                s[cur] = self.data.clone();
+                s[existing_idx] = out_sheet;
+                existing_idx
+            } else {
+                s[cur] = self.data.clone();
+                s.push(out_sheet);
+                s.len() - 1
+            }
+        };
+        // 5. Append the pivot spec to the *source* sheet's `pivots` list so it
+        //    survives workbook round-trip and so Refresh can find it.
+        self.data.pivots.push(pt);
+        let new_data = sheets.borrow()[new_idx].clone();
+        self.set_data(new_data);
+        self.render();
+    }
+
+    /// Re-run the pivot whose `output_sheet` matches the currently active
+    /// sheet's name, if any. Called from the "Refresh pivot" context-menu
+    /// item on an output sheet (issue #35).
+    pub fn refresh_active_pivot(&mut self, sheets: &SheetsRegistry, active: usize) -> bool {
+        let active_name = self.data.name.clone();
+        // Find the pivot spec on the *source* sheet. We don't know which
+        // source sheet it is from the active sheet name alone, so we scan
+        // every sheet for a pivot whose `output_sheet` matches.
+        let source_idx = sheets.borrow().iter().position(|d| {
+            d.pivots.iter().any(|p| p.output_sheet == active_name)
+        });
+        let Some(source_idx) = source_idx else { return false; };
+        let source = sheets.borrow()[source_idx].clone();
+        let pt = source.pivots.iter().find(|p| p.output_sheet == active_name).unwrap().clone();
+
+        // Save the workbook state for undo.
+        self.pivot_undo = Some(PivotUndo {
+            sheets: sheets.borrow().clone(),
+            active,
+            active_data: self.data.clone(),
+        });
+
+        let result = match crate::core::pivot::compute(&source, &pt) {
+            Ok(r) => r,
+            Err(e) => {
+                self.pivot_undo = None;
+                pivot_alert(&format!("Pivot refresh: {}", e));
+                return false;
+            }
+        };
+        let (r0, c0, _r1, c1) = match pt.validate(&source) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pivot_undo = None;
+                pivot_alert(&format!("Pivot refresh: {}", e));
+                return false;
+            }
+        };
+        let headers = crate::core::pivot::read_field_headers(&source, r0, c0, c1);
+        let mut new_sheet = crate::core::pivot::materialize(&pt, &result, &headers, &pt.output_sheet);
+        new_sheet.set_read_only(true);
+        new_sheet.set_sheets(sheets);
+        sheets.borrow_mut()[active] = new_sheet;
+        self.set_data(sheets.borrow()[active].clone());
+        self.render();
+        true
+    }
+
     /// Remove the chart at `idx` (issue #16).
     pub fn remove_chart(&mut self, idx: usize) {
         if self.data.is_read_only() {
@@ -2398,6 +2566,14 @@ impl TableRenderer {
 /// Lowercase a single char (first mapping; fine for find/replace use).
 fn lc(c: char) -> char {
     c.to_lowercase().next().unwrap_or(c)
+}
+
+/// Show a JS alert dialog (issue #35 pivot errors). Standalone helper to
+/// avoid a `zedsheet::util` import cycle from the renderer.
+fn pivot_alert(msg: &str) {
+    if let Some(win) = web_sys::window() {
+        let _ = win.alert_with_message(msg);
+    }
 }
 
 /// Map a canvas pixel `p` (already past the `header` gutter) to a track

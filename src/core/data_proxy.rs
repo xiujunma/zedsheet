@@ -141,6 +141,12 @@ pub struct DataProxy {
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
     /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
     pub named_ranges: HashMap<String, String>,
+    /// PivotTables defined on this sheet (issue #35). A pivot is the recipe
+    /// (source range, row/col/value fields, aggregation, output sheet name);
+    /// the materialized output lives on a separate `DataProxy` that's a
+    /// sibling in the workbook's `SheetsRegistry`. This list survives
+    /// workbook round-trip via `#[serde(default)]` so old workbooks load.
+    pub pivots: Vec<crate::core::pivot::PivotTable>,
     /// All sheets in the workbook, used to resolve `Sheet2!A1` references
     /// (issue #4). `None` for tests / standalone use that don't need
     /// cross-sheet refs; `ZedSheet` wires this up at construction time.
@@ -217,6 +223,7 @@ impl Default for DataProxy {
             col_groups: Vec::new(),
             charts: Vec::new(),
             named_ranges: HashMap::new(),
+            pivots: Vec::new(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
             eval_cell: std::cell::Cell::new((0, 0)),

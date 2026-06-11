@@ -329,7 +329,174 @@ fn parse_for_agg(raw: &str) -> Option<f64> {
     None
 }
 
-/// Aggregate one bucket of `Option<f64>` values.
+/// Write the cross-tab from a `PivotResult` into a fresh `DataProxy` that
+/// becomes the pivot's output sheet. The caller is responsible for pushing
+/// the returned `DataProxy` into the workbook's `SheetsRegistry` and
+/// marking it read-only.
+///
+/// Single-header-row layout (Excel-style, simplified):
+/// ```text
+///  [row-field 1] [row-field 2] ... [col key 1] [col key 2] ... [Total]
+///  [row key 1a] [row key 1b]    ... [body]      [body]      ... [row tot]
+///  [row key 2a] [row key 2b]    ... [body]      [body]      ... [row tot]
+///  [Total]      [Total]         ... [col tot]   [col tot]   ... [grand]
+/// ```
+/// Col-field *names* aren't shown separately — the col-keys themselves are
+/// the visible labels (consistent with how a single-col-field Excel pivot
+/// shows just the values). To get the col-field *name* as a header, the
+/// caller can prepend it to the source data; we keep v1 minimal.
+///
+/// `field_headers` is the source range's header row, indexed by the same
+/// field-indexes used in `PivotTable::row_fields` / `col_fields`.
+pub fn materialize(
+    pt: &PivotTable,
+    result: &PivotResult,
+    field_headers: &[String],
+    output_sheet_name: &str,
+) -> DataProxy {
+    use crate::core::data_proxy::Style;
+
+    let mut out = DataProxy::new(output_sheet_name);
+
+    // ---- Build styles once (add_style dedups) ----
+    let header_style_idx = {
+        let mut s = Style::default();
+        s.bold = true;
+        s.bgcolor = Some("#e8eef7".to_string());
+        s.align = "center".to_string();
+        s.valign = "middle".to_string();
+        out.add_style(s)
+    };
+    let total_style_idx = {
+        let mut s = Style::default();
+        s.bold = true;
+        s.bgcolor = Some("#fff3cd".to_string());
+        s.align = "right".to_string();
+        out.add_style(s)
+    };
+    let label_style_idx = {
+        let mut s = Style::default();
+        s.bold = true;
+        s.align = "left".to_string();
+        out.add_style(s)
+    };
+    let body_style_idx = out.add_style(Style::default());
+
+    let nr_keys = result.row_keys.len();
+    let nc_keys = result.col_keys.len();
+    let nr = pt.row_fields.len();
+    let total_col = nr + nc_keys;
+
+    // --- Header row (row 0) ---
+    for (i, &field_idx) in pt.row_fields.iter().enumerate() {
+        let h = field_headers.get(field_idx).cloned().unwrap_or_default();
+        out.set_cell_text(0, i, &h);
+        out.set_cell_style(0, i, header_style_idx);
+    }
+    for (j, ck) in result.col_keys.iter().enumerate() {
+        let s = key_to_display(ck);
+        out.set_cell_text(0, nr + j, &s);
+        out.set_cell_style(0, nr + j, header_style_idx);
+    }
+    out.set_cell_text(0, total_col, "Total");
+    out.set_cell_style(0, total_col, header_style_idx);
+
+    // --- Body rows (1..nr_keys) ---
+    for (i, rk) in result.row_keys.iter().enumerate() {
+        let row = 1 + i;
+        match rk {
+            Key::Single(_) => {
+                if nr > 0 {
+                    out.set_cell_text(row, 0, &key_to_display(rk));
+                    out.set_cell_style(row, 0, label_style_idx);
+                }
+            }
+            Key::Tuple(parts) => {
+                for (j, p) in parts.iter().enumerate() {
+                    if j < nr {
+                        out.set_cell_text(row, j, &prim_to_display(p));
+                        out.set_cell_style(row, j, label_style_idx);
+                    }
+                }
+            }
+        }
+        for (j, _ck) in result.col_keys.iter().enumerate() {
+            write_value_cell(&mut out, row, nr + j, result.body[i][j], body_style_idx);
+        }
+        write_value_cell(&mut out, row, total_col, result.row_totals[i], total_style_idx);
+    }
+
+    // --- Totals row (1 + nr_keys) ---
+    let totals_row = 1 + nr_keys;
+    // The "Total" label only makes sense in the row-label area (the first
+    // `nr` columns). When there are no row fields, the label column is also
+    // where the first col-key lives, so we don't write a redundant label.
+    if nr > 0 {
+        out.set_cell_text(totals_row, 0, "Total");
+        out.set_cell_style(totals_row, 0, total_style_idx);
+        for j in 1..nr {
+            out.set_cell_text(totals_row, j, "");
+            out.set_cell_style(totals_row, j, total_style_idx);
+        }
+    }
+    for (j, _) in result.col_keys.iter().enumerate() {
+        write_value_cell(
+            &mut out,
+            totals_row,
+            nr + j,
+            result.col_totals[j],
+            total_style_idx,
+        );
+    }
+    write_value_cell(&mut out, totals_row, total_col, result.grand_total, total_style_idx);
+
+    // Pad the sheet to at least default rows so it renders.
+    if out.row_count < totals_row + 1 {
+        out.row_count = totals_row + 1;
+    }
+
+    out
+}
+
+/// Write a numeric value as text into a cell and apply the given style.
+/// `None` is written as empty (no number); we'll still apply the style.
+fn write_value_cell(
+    out: &mut DataProxy,
+    ri: usize,
+    ci: usize,
+    v: Option<f64>,
+    style_idx: usize,
+) {
+    match v {
+        Some(n) => {
+            // Use a fixed display: integers without trailing `.0`, floats
+            // with up to 6 significant digits (matches Excel's default).
+            let s = if n == n.trunc() && n.abs() < 1e15 {
+                format!("{}", n as i64)
+            } else {
+                format!("{}", n)
+            };
+            out.set_cell_text(ri, ci, &s);
+        }
+        None => {
+            out.set_cell_text(ri, ci, "");
+        }
+    }
+    out.set_cell_style(ri, ci, style_idx);
+}
+
+/// Read the source range's header row (row `r0`) as `Vec<String>` of
+/// column-header labels (one per source column). Blank headers become `""`.
+pub fn read_field_headers(source: &DataProxy, r0: usize, c0: usize, c1: usize) -> Vec<String> {
+    (c0..=c1)
+        .map(|ci| {
+            let s = source.cell_raw_value(r0, ci);
+            s.trim().to_string()
+        })
+        .collect()
+}
+
+
 fn aggregate(agg: &Agg, vs: &[Option<f64>]) -> Option<f64> {
     match agg {
         Agg::Count => {
@@ -613,5 +780,95 @@ mod tests {
         let dp = sheet_from_rows("S", &[&["A", "B"], &["x", "1"]]);
         let p = pt("S!A1:B2", vec![5], vec![], 0, Agg::Sum); // field 5 out of range
         assert!(compute(&dp, &p).is_err());
+    }
+
+    #[test]
+    fn materialize_writes_header_body_and_totals() {
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Amount"],
+            &["North", "100"],
+            &["North", "200"],
+            &["South", "50"],
+        ]);
+        let p = pt("S!A1:B4", vec![0], vec![], 1, Agg::Sum);
+        let r = compute(&dp, &p).unwrap();
+        let headers = read_field_headers(&dp, 0, 0, 1);
+        assert_eq!(headers, vec!["Region", "Amount"]);
+        let out = materialize(&p, &r, &headers, "Pivot1");
+        // Header row 0: "Region" in (0,0), empty col-key at (0,1), "Total" in (0,2)
+        assert_eq!(out.get_cell_text(0, 0), "Region");
+        assert_eq!(out.get_cell_text(0, 1), "");
+        assert_eq!(out.get_cell_text(0, 2), "Total");
+        // Body row 1: "North" / 300 / 300
+        assert_eq!(out.get_cell_text(1, 0), "North");
+        assert_eq!(out.get_cell_text(1, 1), "300");
+        assert_eq!(out.get_cell_text(1, 2), "300");
+        // Body row 2: "South" / 50 / 50
+        assert_eq!(out.get_cell_text(2, 0), "South");
+        assert_eq!(out.get_cell_text(2, 1), "50");
+        assert_eq!(out.get_cell_text(2, 2), "50");
+        // Totals row 3: "Total" / 350 / 350
+        assert_eq!(out.get_cell_text(3, 0), "Total");
+        assert_eq!(out.get_cell_text(3, 1), "350");
+        assert_eq!(out.get_cell_text(3, 2), "350");
+    }
+
+    #[test]
+    fn materialize_with_col_field_lays_out_header_rows() {
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Quarter", "Amount"],
+            &["North", "Q1", "10"],
+            &["North", "Q2", "20"],
+            &["South", "Q1", "50"],
+        ]);
+        let p = pt("S!A1:C4", vec![0], vec![1], 2, Agg::Sum);
+        let r = compute(&dp, &p).unwrap();
+        let headers = read_field_headers(&dp, 0, 0, 2);
+        let out = materialize(&p, &r, &headers, "Pivot1");
+        // Row 0: col 0 = "Region", col 1 = "Q1", col 2 = "Q2", col 3 = "Total"
+        assert_eq!(out.get_cell_text(0, 0), "Region");
+        assert_eq!(out.get_cell_text(0, 1), "Q1");
+        assert_eq!(out.get_cell_text(0, 2), "Q2");
+        assert_eq!(out.get_cell_text(0, 3), "Total");
+        // Body rows 1..2
+        assert_eq!(out.get_cell_text(1, 0), "North");
+        assert_eq!(out.get_cell_text(1, 1), "10");
+        assert_eq!(out.get_cell_text(1, 2), "20");
+        assert_eq!(out.get_cell_text(1, 3), "30");
+        assert_eq!(out.get_cell_text(2, 0), "South");
+        assert_eq!(out.get_cell_text(2, 1), "50");
+        assert_eq!(out.get_cell_text(2, 2), ""); // None → empty
+        assert_eq!(out.get_cell_text(2, 3), "50");
+        // Totals row 3
+        assert_eq!(out.get_cell_text(3, 0), "Total");
+        assert_eq!(out.get_cell_text(3, 1), "60");
+        assert_eq!(out.get_cell_text(3, 2), "20");
+        assert_eq!(out.get_cell_text(3, 3), "80");
+    }
+
+    #[test]
+    fn materialize_with_no_row_or_col_fields_writes_single_total() {
+        // Single value column, no grouping axes → 1×1 body + grand total.
+        let dp = sheet_from_rows("S", &[
+            &["Amount"],
+            &["10"],
+            &["20"],
+            &["30"],
+        ]);
+        let p = pt("S!A1:A4", vec![], vec![], 0, Agg::Sum);
+        let r = compute(&dp, &p).unwrap();
+        let headers = read_field_headers(&dp, 0, 0, 0);
+        let out = materialize(&p, &r, &headers, "Pivot1");
+        // Header row 0: blank col-key at (0,0), "Total" at (0,1)
+        assert_eq!(out.get_cell_text(0, 0), "");
+        assert_eq!(out.get_cell_text(0, 1), "Total");
+        // Body row 1: with nr=0, the body value lives at col 0 and the
+        // row_total at col 1 (both are 60 here).
+        assert_eq!(out.get_cell_text(1, 0), "60");
+        assert_eq!(out.get_cell_text(1, 1), "60");
+        // Totals row 2: no row-field label column (nr=0), so col 0 holds
+        // the col_total and col 1 holds the grand total — both are 60.
+        assert_eq!(out.get_cell_text(2, 0), "60");
+        assert_eq!(out.get_cell_text(2, 1), "60");
     }
 }
