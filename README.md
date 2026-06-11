@@ -34,6 +34,15 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   into neighboring cells, outlined in blue; an obstructed spill shows
   `#SPILL!` at the anchor, an empty result `#CALC!`, and references into
   the spill range read the spilled values
+- **Tables & structured references** (right-click → Format as table): a
+  named region with a styled header row, banded data rows, header filter
+  dropdowns, an optional totals row (`SUBTOTAL`-based, filter-aware), and
+  auto-expansion when you type just below or right of it. Formulas address
+  it by name: `=SUM(Table1[Amount])`, `Table1[#All]` / `[#Headers]` /
+  `[#Totals]` / `[#Data]`, the this-row forms `[@Amount]` /
+  `Table1[@Amount]`, and combos like `Table1[[#Totals],[Amount]]`.
+  Structured refs stay fixed through row/column edits and copy/fill (they
+  are name-based), and a whole-column ref spills like any dynamic array
 - **Read-only / per-cell locking**: `setSheetReadOnly("sheet1", true)` blocks
   every write to that sheet (editor, paste, clear, insert/delete row/col);
   the per-cell `editable` flag (toggled via the **Cell Editable** context
