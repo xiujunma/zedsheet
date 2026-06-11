@@ -322,6 +322,9 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
         }
 
         let mut style = renderer.data.get_cell_style(row, col);
+        // Table visuals (issue #34): header / banding / totals styling, under
+        // conditional formats so CF rules win.
+        renderer.data.apply_table_style(row, col, &mut style);
         // Conditional formatting (issue #11): a matching rule overrides the
         // fill, text color, and bold before anything is drawn.
         renderer.data.apply_cond_format(row, col, &mut style);

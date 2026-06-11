@@ -915,6 +915,43 @@ impl TableRenderer {
         self.refresh_outline_gutters();
     }
 
+    /// "Format as Table" over the current selection (issue #34).
+    pub fn format_selection_as_table(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let range = self.data.selector.range.clone();
+        self.data.format_as_table(&range);
+    }
+
+    /// Toggle the totals row of the table under the active cell (issue #34).
+    pub fn toggle_table_totals_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        let (ri, ci) = (self.data.selector.ri, self.data.selector.ci);
+        let Some(name) = self.data.table_at(ri, ci).map(|t| t.name.clone()) else {
+            return;
+        };
+        self.snapshot();
+        self.data.toggle_table_totals(&name);
+    }
+
+    /// Convert the table under the active cell back to a plain range
+    /// (issue #34).
+    pub fn convert_table_at_selection(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        let (ri, ci) = (self.data.selector.ri, self.data.selector.ci);
+        let Some(name) = self.data.table_at(ri, ci).map(|t| t.name.clone()) else {
+            return;
+        };
+        self.snapshot();
+        self.data.convert_table_to_range(&name);
+    }
+
     /// Collapse/expand toggles and level buttons. Not snapshotted — Excel
     /// does not put collapse/expand on the undo stack either.
     pub fn toggle_outline(&mut self, hit: OutlineHit) {
@@ -1298,6 +1335,8 @@ impl TableRenderer {
         }
         self.snapshot();
         self.data.set_cell_text(ri, ci, text);
+        // Typing adjacent to a table grows it (issue #34).
+        self.data.maybe_expand_tables(ri, ci);
         Ok(())
     }
 

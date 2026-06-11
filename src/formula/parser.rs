@@ -20,6 +20,11 @@ pub enum Token {
     String(String),
     /// A literal error value like `#DIV/0!` or `#N/A`.
     Error(String),
+    /// A structured table reference (issue #34): `Sales[Amount]`,
+    /// `Sales[#Totals]`, `Sales[@Amount]`, or the bare in-table form
+    /// `[@Amount]` (empty `table`). `spec` is the raw bracket interior —
+    /// the evaluator parses it (`DataProxy::resolve_struct_ref`).
+    StructRef { table: String, spec: String },
 }
 
 pub struct FormulaParser {
@@ -334,6 +339,39 @@ fn read_cell_ref(chars: &[char], i: &mut usize) -> Option<String> {
     Some(s)
 }
 
+/// Read a `[...]`-delimited structured-reference spec starting at `chars[*i]`
+/// (which must be `[`), tracking nesting so `[[#Totals],[Amount]]` reads as
+/// one spec. Returns the interior (outer brackets stripped) and leaves `*i`
+/// past the closing bracket; `None` (with `*i` untouched) when unterminated.
+fn read_bracket_spec(chars: &[char], i: &mut usize) -> Option<String> {
+    let start = *i;
+    let mut depth = 0usize;
+    let mut spec = String::new();
+    let mut j = *i;
+    while j < chars.len() {
+        match chars[j] {
+            '[' => {
+                depth += 1;
+                if depth > 1 {
+                    spec.push('[');
+                }
+            }
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    *i = j + 1;
+                    return Some(spec);
+                }
+                spec.push(']');
+            }
+            ch => spec.push(ch),
+        }
+        j += 1;
+    }
+    *i = start;
+    None
+}
+
 pub fn tokenize(formula: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = formula.chars().collect();
@@ -424,6 +462,19 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
                 }
                 continue;
             }
+            // Structured table reference: `Ident[` … `]` (issue #34). The
+            // bracket interior is kept raw (column names may contain spaces,
+            // `#` items, `@`, and nested `[Col]` parts).
+            if i < chars.len() && chars[i] == '[' {
+                if let Some(spec) = read_bracket_spec(&chars, &mut i) {
+                    tokens.push(Token::StructRef { table: ident, spec });
+                } else {
+                    // Unterminated bracket: emit the name; the leftover text
+                    // is skipped by the unknown-char fallback.
+                    tokens.push(Token::Name(ident));
+                }
+                continue;
+            }
             if i < chars.len() && chars[i] == '(' {
                 tokens.push(Token::Function(ident));
             } else if ident == "TRUE" {
@@ -442,6 +493,17 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
                 // An identifier that isn't a cell ref or function call is a
                 // named-range reference (resolved by the evaluator).
                 tokens.push(Token::Name(ident));
+            }
+            continue;
+        }
+
+        // Bare structured reference `[@Amount]` — shorthand for "this table"
+        // inside a table's own cells (issue #34).
+        if c == '[' {
+            if let Some(spec) = read_bracket_spec(&chars, &mut i) {
+                tokens.push(Token::StructRef { table: String::new(), spec });
+            } else {
+                i += 1;
             }
             continue;
         }
@@ -572,5 +634,39 @@ mod tests {
         // when followed by `!`. (This matches the pre-issue behavior; the
         // test guards against accidentally widening the cell-ref rule.)
         assert_eq!(tokenize("Sheet2"), vec![CellRef("SHEET2".into())]);
+    }
+
+    // Structured table references (issue #34).
+    #[test]
+    fn tokenize_structured_refs() {
+        use Token::*;
+        assert_eq!(
+            tokenize("SUM(Sales[Amount])"),
+            vec![
+                Function("SUM".into()),
+                LeftParen,
+                StructRef { table: "SALES".into(), spec: "Amount".into() },
+                RightParen,
+            ]
+        );
+        // Bare in-table form; spec keeps its raw case and spaces.
+        assert_eq!(
+            tokenize("[@Unit Price]*2"),
+            vec![
+                StructRef { table: "".into(), spec: "@Unit Price".into() },
+                Operator("*".into()),
+                Number(2.0),
+            ]
+        );
+        // Nested combo keeps inner brackets for the evaluator to split.
+        assert_eq!(
+            tokenize("T1[[#Totals],[Amt]]"),
+            vec![StructRef { table: "T1".into(), spec: "[#Totals],[Amt]".into() }]
+        );
+        // Unterminated bracket degrades to names, not a hang.
+        assert_eq!(
+            tokenize("Sales[Amount"),
+            vec![Name("SALES".into()), Name("AMOUNT".into())]
+        );
     }
 }
