@@ -73,6 +73,13 @@ pub(crate) const FUNCTIONS: &[(&str, &str)] = &[
     ("ISNUMBER", "ISNUMBER(value)"),
     ("ISTEXT", "ISTEXT(value)"),
     ("ISBLANK", "ISBLANK(value)"),
+    // Dynamic-array functions — results spill into neighboring cells (issue #33).
+    ("FILTER", "FILTER(array, include, [if_empty])"),
+    ("SORT", "SORT(array, [sort_index], [sort_order], [by_col])"),
+    ("SORTBY", "SORTBY(array, by_array1, [sort_order1], …)"),
+    ("UNIQUE", "UNIQUE(array, [by_col], [exactly_once])"),
+    ("SEQUENCE", "SEQUENCE(rows, [columns], [start], [step])"),
+    ("RANDARRAY", "RANDARRAY([rows], [columns], [min], [max], [whole_number])"),
 ];
 
 /// Characters that can precede a function name — formula start, open paren,

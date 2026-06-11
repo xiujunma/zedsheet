@@ -169,6 +169,30 @@ pub struct DataProxy {
     /// stays consistent everywhere. Stored row heights / column widths remain
     /// in unzoomed model pixels. Transient — not serialized; print stamps 1.0.
     zoom: f64,
+    /// Computed dynamic-array spills (issue #33). A pure function of the
+    /// sheet's cells, rebuilt lazily when `spills_dirty` — so a `clone()`
+    /// (undo snapshots, `find_sheet`) carries a cache consistent with its
+    /// own cell snapshot. Transient — not part of the serialized wire format.
+    spills: RefCell<SpillCache>,
+    /// Set by every value-changing mutation; cleared by `ensure_spills`.
+    spills_dirty: std::cell::Cell<bool>,
+    /// Re-entrancy guard: evaluating anchors during a rebuild must not
+    /// trigger a nested rebuild.
+    spills_computing: std::cell::Cell<bool>,
+}
+
+/// Where dynamic-array results landed (issue #33): which cells are spill
+/// anchors (and whether their spill fit), and the value shown in every cell a
+/// successful spill covers.
+#[derive(Debug, Clone, Default)]
+struct SpillCache {
+    /// Anchor → `Some((rows, cols))` when the array spilled, `None` when the
+    /// target range was obstructed or out of bounds (the anchor shows #SPILL!).
+    anchors: HashMap<(usize, usize), Option<(usize, usize)>>,
+    /// Displayed value for every cell covered by a successful spill,
+    /// including the anchor itself (so volatile RANDARRAY anchors render the
+    /// same numbers as their spilled cells).
+    values: HashMap<(usize, usize), Value>,
 }
 
 impl Default for DataProxy {
@@ -197,6 +221,9 @@ impl Default for DataProxy {
             read_only: Rc::new(RefCell::new(false)),
             eval_cell: std::cell::Cell::new((0, 0)),
             zoom: 1.0,
+            spills: RefCell::new(SpillCache::default()),
+            spills_dirty: std::cell::Cell::new(true),
+            spills_computing: std::cell::Cell::new(false),
         }
     }
 }
@@ -301,6 +328,7 @@ impl DataProxy {
         if !self.is_cell_editable(ri, ci) {
             return;
         }
+        self.mark_spills_dirty();
         let cell = self.get_cell_or_new(ri, ci);
         cell.set_text(text);
     }
@@ -329,19 +357,138 @@ impl DataProxy {
             return text;
         }
         if let Some(expr) = text.strip_prefix('=') {
+            // A spill anchor displays its cached top-left value — or #SPILL!
+            // when the spill range is obstructed (issue #33).
+            self.ensure_spills();
+            match self.spills.borrow().anchors.get(&(ri, ci)) {
+                Some(None) => return EvalErr::Spill.code().to_string(),
+                Some(Some(_)) => {
+                    if let Some(v) = self.spills.borrow().values.get(&(ri, ci)) {
+                        return value_display(v);
+                    }
+                }
+                None => {}
+            }
             let mut visited: Visited = HashSet::new();
             visited.insert((self.name.clone(), ri, ci));
             match self.eval_expr(expr, (ri, ci), &mut visited) {
-                Ok(Value::Number(v)) => format_number(v),
-                Ok(Value::Text(s)) => s,
-                // A formula resolving to a blank shows 0, matching Excel's
-                // `=A1` on an empty cell (issue #36).
-                Ok(Value::Blank) => format_number(0.0),
+                Ok(v) => value_display(&v),
                 Err(e) => e.code().to_string(),
+            }
+        } else if text.is_empty() {
+            // An empty cell covered by a spill shows the spilled value
+            // (issue #33).
+            self.ensure_spills();
+            match self.spills.borrow().values.get(&(ri, ci)) {
+                Some(v) => value_display(v),
+                None => text,
             }
         } else {
             text
         }
+    }
+
+    // --- Dynamic-array spill (issue #33) ---
+
+    /// Flag the spill cache stale. Called by every mutation that can change a
+    /// cell's value or a formula's meaning; cheap — the rebuild is lazy.
+    pub fn mark_spills_dirty(&self) {
+        self.spills_dirty.set(true);
+    }
+
+    /// Successful multi-cell spill ranges, for the renderer's outline.
+    /// Rebuilds the cache first if it is stale.
+    pub fn spill_ranges(&self) -> Vec<CellRange> {
+        self.ensure_spills();
+        let cache = self.spills.borrow();
+        let mut out: Vec<CellRange> = cache
+            .anchors
+            .iter()
+            .filter_map(|(&(r, c), sz)| match sz {
+                Some((rs, cs)) if rs * cs > 1 => {
+                    Some(CellRange::new(r, c, r + rs - 1, c + cs - 1))
+                }
+                _ => None,
+            })
+            .collect();
+        out.sort_by_key(|r| (r.sri, r.sci));
+        out
+    }
+
+    /// Rebuild the spill cache if stale. Anchors are processed in row-major
+    /// order, so a spill can feed a later one; the `spills_computing` guard
+    /// keeps the evaluation those rebuilds trigger from recursing back here.
+    fn ensure_spills(&self) {
+        if self.spills_computing.get() || !self.spills_dirty.get() {
+            return;
+        }
+        self.spills_computing.set(true);
+        {
+            let mut cache = self.spills.borrow_mut();
+            cache.anchors.clear();
+            cache.values.clear();
+        }
+        // Candidate anchors: formulas mentioning an array function. Only
+        // these can evaluate to a `Value::Array` at top level.
+        let mut anchors: Vec<(usize, usize)> = Vec::new();
+        for (&ri, row) in &self.rows {
+            for (&ci, cell) in &row.cells {
+                if cell.text.starts_with('=') && is_spill_candidate(&cell.text) {
+                    anchors.push((ri, ci));
+                }
+            }
+        }
+        anchors.sort_unstable();
+        for (ri, ci) in anchors {
+            let text = self.get_cell_text(ri, ci);
+            let Some(expr) = text.strip_prefix('=') else { continue };
+            let mut visited: Visited = HashSet::new();
+            visited.insert((self.name.clone(), ri, ci));
+            // Scalar results and errors take the ordinary display path; only
+            // a genuine array result is a spill anchor.
+            let Ok(Value::Array(grid)) = self.eval_expr(expr, (ri, ci), &mut visited) else {
+                continue;
+            };
+            let rows = grid.len();
+            let cols = grid.iter().map(Vec::len).max().unwrap_or(0);
+            if rows == 0 || cols == 0 {
+                continue;
+            }
+            let range = CellRange::new(ri, ci, ri + rows - 1, ci + cols - 1);
+            // The grid edge blocks a spill only when crossed from inside —
+            // the cell model itself is sparse and tolerates out-of-bounds
+            // anchors (tests park helper cells there).
+            let blocked = (ri < self.row_count && ri + rows > self.row_count)
+                || (ci < self.cols.len && ci + cols > self.cols.len)
+                || self.merges.intersects(&range)
+                || {
+                    let cache = self.spills.borrow();
+                    (ri..ri + rows).any(|r| {
+                        (ci..ci + cols).any(|c| {
+                            (r, c) != (ri, ci)
+                                && (!self.get_cell_text(r, c).is_empty()
+                                    || cache.values.contains_key(&(r, c))
+                                    || cache.anchors.contains_key(&(r, c)))
+                        })
+                    })
+                };
+            let mut cache = self.spills.borrow_mut();
+            if blocked {
+                cache.anchors.insert((ri, ci), None);
+            } else {
+                cache.anchors.insert((ri, ci), Some((rows, cols)));
+                for (dr, row_vals) in grid.iter().enumerate() {
+                    for dc in 0..cols {
+                        // Pad a ragged row with blanks to keep the spill
+                        // rectangular.
+                        let v = row_vals.get(dc).cloned().unwrap_or(Value::Blank);
+                        cache.values.insert((ri + dr, ci + dc), v);
+                    }
+                }
+            }
+        }
+        self.spills_dirty.set(false);
+        self.spills_computing.set(false);
     }
 
     /// Overlay the first matching conditional-format rule onto `style`
@@ -579,6 +726,20 @@ impl DataProxy {
             return Err(e);
         }
         if let Some(expr) = text.strip_prefix('=') {
+            // A spill anchor resolves to its cached top-left value (a
+            // reference to the anchor sees one cell, like Excel without the
+            // `A1#` spilled-range operator); a blocked anchor propagates
+            // #SPILL! (issue #33).
+            self.ensure_spills();
+            match self.spills.borrow().anchors.get(&(ri, ci)) {
+                Some(None) => return Err(EvalErr::Spill),
+                Some(Some(_)) => {
+                    if let Some(v) = self.spills.borrow().values.get(&(ri, ci)) {
+                        return Ok(v.clone());
+                    }
+                }
+                None => {}
+            }
             visited.insert(key.clone());
             let v = self.eval_expr(expr, (ri, ci), visited);
             visited.remove(&key);
@@ -586,6 +747,13 @@ impl DataProxy {
         } else {
             let t = text.trim();
             if t.is_empty() {
+                // An empty cell covered by a spill resolves to the spilled
+                // value, so `=B2` and ranges over a spill see real values
+                // (issue #33).
+                self.ensure_spills();
+                if let Some(v) = self.spills.borrow().values.get(&(ri, ci)) {
+                    return Ok(v.clone());
+                }
                 Ok(Value::Blank)
             } else if let Ok(n) = t.parse::<f64>() {
                 Ok(Value::Number(n))
@@ -613,7 +781,9 @@ impl DataProxy {
 
     // expr := add ((= | == | <> | > | < | >= | <=) add)* — comparisons yield 1/0.
     // Numbers compare numerically, text case-insensitively; a number never
-    // equals text (and orders before it), matching Excel.
+    // equals text (and orders before it), matching Excel. With an array
+    // operand the comparison broadcasts element-wise (issue #33), which is
+    // what makes `FILTER(A1:A9, B1:B9>5)` work.
     fn parse_cmp(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
         let mut v = self.parse_add(t, pos, vis)?;
         while *pos < t.len() {
@@ -622,18 +792,20 @@ impl DataProxy {
                     let op = op.clone();
                     *pos += 1;
                     let r = self.parse_add(t, pos, vis)?;
-                    use std::cmp::Ordering::*;
-                    let ord = compare_values(&v, &r);
-                    let b = match op.as_str() {
-                        "=" | "==" => ord == Some(Equal),
-                        "<>" => ord != Some(Equal),
-                        ">" => ord == Some(Greater),
-                        "<" => ord == Some(Less),
-                        ">=" => matches!(ord, Some(Greater | Equal)),
-                        "<=" => matches!(ord, Some(Less | Equal)),
-                        _ => false,
-                    };
-                    v = Value::Number(if b { 1.0 } else { 0.0 });
+                    v = broadcast2(&v, &r, &|x, y| {
+                        use std::cmp::Ordering::*;
+                        let ord = compare_values(x, y);
+                        let b = match op.as_str() {
+                            "=" | "==" => ord == Some(Equal),
+                            "<>" => ord != Some(Equal),
+                            ">" => ord == Some(Greater),
+                            "<" => ord == Some(Less),
+                            ">=" => matches!(ord, Some(Greater | Equal)),
+                            "<=" => matches!(ord, Some(Less | Equal)),
+                            _ => false,
+                        };
+                        Ok(Value::Number(if b { 1.0 } else { 0.0 }))
+                    })?;
                     continue;
                 }
             }
@@ -642,16 +814,20 @@ impl DataProxy {
         Ok(v)
     }
 
-    // expr := term (('+' | '-') term)* — arithmetic coerces text to numbers.
+    // expr := term (('+' | '-') term)* — arithmetic coerces text to numbers
+    // and broadcasts element-wise over array operands (issue #33).
     fn parse_add(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
         let mut v = self.parse_mul(t, pos, vis)?;
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
                 if op == "+" || op == "-" {
+                    let plus = op == "+";
                     *pos += 1;
-                    let r = self.parse_mul(t, pos, vis)?.as_number();
-                    let l = v.as_number();
-                    v = Value::Number(if op == "+" { l + r } else { l - r });
+                    let r = self.parse_mul(t, pos, vis)?;
+                    v = broadcast2(&v, &r, &|x, y| {
+                        let (l, r) = (x.as_number(), y.as_number());
+                        Ok(Value::Number(if plus { l + r } else { l - r }))
+                    })?;
                     continue;
                 }
             }
@@ -666,17 +842,19 @@ impl DataProxy {
         while *pos < t.len() {
             if let Token::Operator(op) = &t[*pos] {
                 if op == "*" || op == "/" {
+                    let mul = op == "*";
                     *pos += 1;
-                    let r = self.parse_factor(t, pos, vis)?.as_number();
-                    let l = v.as_number();
-                    if op == "*" {
-                        v = Value::Number(l * r);
-                    } else {
-                        if r == 0.0 {
-                            return Err(EvalErr::Div0);
+                    let r = self.parse_factor(t, pos, vis)?;
+                    v = broadcast2(&v, &r, &|x, y| {
+                        let (l, r) = (x.as_number(), y.as_number());
+                        if mul {
+                            Ok(Value::Number(l * r))
+                        } else if r == 0.0 {
+                            Err(EvalErr::Div0)
+                        } else {
+                            Ok(Value::Number(l / r))
                         }
-                        v = Value::Number(l / r);
-                    }
+                    })?;
                     continue;
                 }
             }
@@ -699,7 +877,9 @@ impl DataProxy {
             }
             Token::Operator(op) if op == "-" => {
                 *pos += 1;
-                Ok(Value::Number(-self.parse_factor(t, pos, vis)?.as_number()))
+                let v = self.parse_factor(t, pos, vis)?;
+                // Negation broadcasts over an array operand (issue #33).
+                broadcast2(&v, &Value::Blank, &|x, _| Ok(Value::Number(-x.as_number())))
             }
             Token::Operator(op) if op == "+" => {
                 *pos += 1;
@@ -756,9 +936,37 @@ impl DataProxy {
                 apply_function(&name, &ok_args)
             }
             Token::CellRef(r) => {
+                // A range in expression position (`A1:A5>2`, top-level
+                // `=A1:B3`) resolves to an array so operators broadcast over
+                // it and the result can spill (issue #33). Bare ranges in
+                // argument position never reach here — `parse_args` keeps
+                // them as `Arg::Range` directly.
+                if let (Some(Token::Colon), Some(Token::CellRef(b))) =
+                    (t.get(*pos + 1), t.get(*pos + 2))
+                {
+                    let b = b.clone();
+                    *pos += 3;
+                    let (c0, r0) = exp2xy(&r);
+                    let (c1, r1) = exp2xy(&b);
+                    let arg =
+                        self.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)?;
+                    return Ok(Value::Array(arg.grid()));
+                }
                 *pos += 1;
                 let (c, row) = exp2xy(&r);
                 self.resolve_value(row, c, vis)
+            }
+            Token::SheetRange { sheet, from, to } => {
+                *pos += 1;
+                // Cross-sheet range in expression position (issue #33).
+                let Some(target) = self.find_sheet(&sheet) else {
+                    return Err(EvalErr::Ref);
+                };
+                let (c0, r0) = exp2xy(&from);
+                let (c1, r1) = exp2xy(&to);
+                let arg =
+                    target.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)?;
+                Ok(Value::Array(arg.grid()))
             }
             Token::SheetCellRef { sheet, ref_ } => {
                 *pos += 1;
@@ -824,10 +1032,14 @@ impl DataProxy {
             return args;
         }
         loop {
-            // Sheet-qualified range: `Sheet2!A1:B3` (issue #4).
+            // Sheet-qualified range: `Sheet2!A1:B3` (issue #4). A range
+            // inside a larger expression (e.g. `A1:A3*2`) falls through to
+            // parse_cmp, which resolves it to an array and broadcasts the
+            // operators over it (issue #33).
             let arg: Result<Arg, EvalErr> = if let Some(Token::SheetRange { sheet, from, to }) =
-                t.get(*pos).cloned()
-            {
+                t.get(*pos).cloned().filter(|_| {
+                    matches!(t.get(*pos + 1), Some(Token::Comma) | Some(Token::RightParen) | None)
+                }) {
                 *pos += 1;
                 match self.find_sheet(&sheet) {
                     // Thread the same sheet-keyed visited set through (issue #4).
@@ -840,7 +1052,16 @@ impl DataProxy {
                 }
             // Range: CellRef ':' CellRef
             } else if let (Some(Token::CellRef(a)), Some(Token::Colon), Some(Token::CellRef(b))) =
-                (t.get(*pos), t.get(*pos + 1), t.get(*pos + 2))
+                (
+                    t.get(*pos).filter(|_| {
+                        matches!(
+                            t.get(*pos + 3),
+                            Some(Token::Comma) | Some(Token::RightParen) | None
+                        )
+                    }),
+                    t.get(*pos + 1),
+                    t.get(*pos + 2),
+                )
             {
                 let (c0, r0) = exp2xy(a);
                 let (c1, r1) = exp2xy(b);
@@ -861,7 +1082,7 @@ impl DataProxy {
                         None => Err(EvalErr::Name),
                     }
                 } else {
-                    self.parse_cmp(t, pos, vis).map(Arg::Scalar)
+                    self.parse_cmp(t, pos, vis).map(Arg::from_value)
                 }
             } else if let Some(Token::Function(f)) = t.get(*pos).cloned() {
                 // A bare OFFSET/INDIRECT argument keeps its (possibly multi-cell)
@@ -883,13 +1104,13 @@ impl DataProxy {
                         self.eval_ref_fn(&upper, t, &spans, vis)
                     } else {
                         *pos = save;
-                        self.parse_cmp(t, pos, vis).map(Arg::Scalar)
+                        self.parse_cmp(t, pos, vis).map(Arg::from_value)
                     }
                 } else {
-                    self.parse_cmp(t, pos, vis).map(Arg::Scalar)
+                    self.parse_cmp(t, pos, vis).map(Arg::from_value)
                 }
             } else {
-                self.parse_cmp(t, pos, vis).map(Arg::Scalar)
+                self.parse_cmp(t, pos, vis).map(Arg::from_value)
             };
             args.push(arg);
 
@@ -1272,6 +1493,7 @@ impl DataProxy {
     }
 
     pub fn set_cell(&mut self, ri: usize, ci: usize, cell: Cell) {
+        self.mark_spills_dirty();
         self.rows.entry(ri).or_insert_with(Row::default).set_cell(ci, cell);
     }
 
@@ -1295,6 +1517,7 @@ impl DataProxy {
 
     /// Define (or replace) a sheet-scoped named range. Names are case-insensitive.
     pub fn set_named_range(&mut self, name: &str, range_expr: &str) {
+        self.mark_spills_dirty();
         self.named_ranges.insert(name.to_uppercase(), range_expr.to_string());
     }
 
@@ -1305,6 +1528,7 @@ impl DataProxy {
 
     /// Remove a named range; returns whether it existed.
     pub fn remove_named_range(&mut self, name: &str) -> bool {
+        self.mark_spills_dirty();
         self.named_ranges.remove(&name.to_uppercase()).is_some()
     }
 
@@ -1322,6 +1546,7 @@ impl DataProxy {
     }
 
     pub fn delete_cell(&mut self, ri: usize, ci: usize) {
+        self.mark_spills_dirty();
         if let Some(row) = self.rows.get_mut(&ri) {
             row.delete_cell(ci);
         }
@@ -1329,6 +1554,7 @@ impl DataProxy {
 
     /// Insert `n` blank rows at `at`, shifting existing rows down.
     pub fn insert_row(&mut self, at: usize, n: usize) {
+        self.mark_spills_dirty();
         let mut new_rows = HashMap::new();
         for (ri, row) in self.rows.drain() {
             let nk = if ri >= at { ri + n } else { ri };
@@ -1343,6 +1569,7 @@ impl DataProxy {
 
     /// Delete the row at `at`, shifting later rows up.
     pub fn delete_row(&mut self, at: usize) {
+        self.mark_spills_dirty();
         let mut new_rows = HashMap::new();
         for (ri, row) in self.rows.drain() {
             if ri == at {
@@ -1406,6 +1633,7 @@ impl DataProxy {
 
     /// Insert `n` blank columns at `at`, shifting existing cells/cols right.
     pub fn insert_col(&mut self, at: usize, n: usize) {
+        self.mark_spills_dirty();
         for row in self.rows.values_mut() {
             let mut nc = HashMap::new();
             for (ci, cell) in row.cells.drain() {
@@ -1428,6 +1656,7 @@ impl DataProxy {
 
     /// Delete the column at `at`, shifting later cells/cols left.
     pub fn delete_col(&mut self, at: usize) {
+        self.mark_spills_dirty();
         for row in self.rows.values_mut() {
             let mut nc = HashMap::new();
             for (ci, cell) in row.cells.drain() {
@@ -1636,6 +1865,7 @@ impl DataProxy {
     /// Delete the rectangle (`r0,c0`)–(`r1,c1`), pulling the cells beyond it
     /// left (`horizontal`) or up.
     pub fn delete_cells(&mut self, r0: usize, c0: usize, r1: usize, c1: usize, horizontal: bool) {
+        self.mark_spills_dirty();
         let (r0, r1) = (r0.min(r1), r0.max(r1));
         let (c0, c1) = (c0.min(c1), c0.max(c1));
         if horizontal {
@@ -1831,6 +2061,12 @@ impl DataProxy {
                 }
             }
         }
+        // Spilled cells hold no text but display values — a trailing spill
+        // extends the extent so CSV export / print include it (issue #33).
+        for range in self.spill_ranges() {
+            let (mr, mc) = out.unwrap_or((0, 0));
+            out = Some((mr.max(range.eri), mc.max(range.eci)));
+        }
         out
     }
 
@@ -1869,6 +2105,7 @@ impl DataProxy {
     /// outside the table stays put (issue #10). Keys are displayed values:
     /// numbers compare numerically, text case-insensitively, blanks last.
     pub fn sort_filter_range(&mut self, ci: usize, asc: bool) {
+        self.mark_spills_dirty();
         let Some(range) = self.auto_filter.range() else { return };
         let (sri, eri) = (range.sri + 1, range.eri);
         if sri > eri {
@@ -1951,6 +2188,7 @@ impl DataProxy {
     /// (the current selection) and by clipboard paste re-applying merges from
     /// pasted HTML.
     pub fn merge_range(&mut self, range: CellRange) {
+        self.mark_spills_dirty();
         let rn = range.eri.saturating_sub(range.sri) + 1;
         let cn = range.eci.saturating_sub(range.sci) + 1;
         if rn <= 1 && cn <= 1 {
@@ -1972,6 +2210,7 @@ impl DataProxy {
     }
 
     pub fn unmerge(&mut self) {
+        self.mark_spills_dirty();
         if !self.is_single_selected() {
             return;
         }
@@ -1990,6 +2229,7 @@ impl DataProxy {
     /// Unlike `Merges::add`'s `delete_within`, this also drops merges that only
     /// partially overlap.
     pub fn unmerge_intersecting(&mut self, range: &CellRange) {
+        self.mark_spills_dirty();
         let anchors: Vec<(usize, usize)> = {
             let mut v = Vec::new();
             self.merges.for_each(|m| {
@@ -2418,6 +2658,33 @@ fn format_number(v: f64) -> String {
     s.to_string()
 }
 
+/// Display string for a computed formula value, shared by the normal and
+/// spilled render paths: a blank shows 0, matching Excel's `=A1` on an empty
+/// cell (issue #36); an array shows its top-left (issue #33).
+fn value_display(v: &Value) -> String {
+    match v {
+        Value::Number(n) => format_number(*n),
+        Value::Text(s) => s.clone(),
+        Value::Blank => format_number(0.0),
+        Value::Array(_) => value_display(&v.top_left()),
+    }
+}
+
+/// Cheap pre-filter for spill anchors (issue #33): only the dynamic-array
+/// functions — or a range in expression position (`=A1:B3`, `=A1:A9*2`),
+/// hence the `:` check — can put a `Value::Array` at a formula's top level.
+/// Over-matching is fine (`=SUM(A1:B3)` evaluates to a scalar and is simply
+/// not an anchor); the filter only avoids evaluating every formula twice.
+fn is_spill_candidate(text: &str) -> bool {
+    if text.contains(':') {
+        return true;
+    }
+    let up = text.to_uppercase();
+    ["FILTER(", "SORT(", "SORTBY(", "UNIQUE(", "SEQUENCE(", "RANDARRAY("]
+        .iter()
+        .any(|f| up.contains(f))
+}
+
 /// A spreadsheet error value (`#DIV/0!`, etc.) produced during evaluation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EvalErr {
@@ -2427,6 +2694,12 @@ pub enum EvalErr {
     Ref,
     Na,
     Num,
+    /// An array function produced an empty result (Excel's #CALC!), e.g.
+    /// `FILTER` with no matches and no `if_empty` (issue #33).
+    Calc,
+    /// A dynamic-array result couldn't spill because its target range is
+    /// obstructed or out of bounds (issue #33).
+    Spill,
 }
 
 impl EvalErr {
@@ -2438,6 +2711,8 @@ impl EvalErr {
             EvalErr::Ref => "#REF!",
             EvalErr::Na => "#N/A",
             EvalErr::Num => "#NUM!",
+            EvalErr::Calc => "#CALC!",
+            EvalErr::Spill => "#SPILL!",
         }
     }
 
@@ -2449,6 +2724,8 @@ impl EvalErr {
             "#REF!" => Some(EvalErr::Ref),
             "#N/A" => Some(EvalErr::Na),
             "#NUM!" => Some(EvalErr::Num),
+            "#CALC!" => Some(EvalErr::Calc),
+            "#SPILL!" => Some(EvalErr::Spill),
             _ => None,
         }
     }
@@ -2463,9 +2740,26 @@ pub(crate) enum Value {
     /// An empty cell. Coerces to `0` / `""` like before, but is distinguishable
     /// by `ISBLANK` / `COUNTA` / `COUNTBLANK` (issue #36).
     Blank,
+    /// A dynamic-array result (row-major, rectangular): FILTER/SORT/UNIQUE/
+    /// SEQUENCE/… (issue #33). At a formula's top level it spills into
+    /// neighboring cells; in scalar context it collapses to its top-left.
+    Array(Vec<Vec<Value>>),
 }
 
 impl Value {
+    /// Scalar view of an array: its top-left element (Excel's implicit
+    /// intersection-free collapse for our scalar contexts). Blank when empty.
+    fn top_left(&self) -> Value {
+        match self {
+            Value::Array(g) => g
+                .first()
+                .and_then(|r| r.first())
+                .cloned()
+                .unwrap_or(Value::Blank),
+            v => v.clone(),
+        }
+    }
+
     /// Numeric coercion, mirroring the engine's historic behavior: numeric
     /// text parses, date text becomes its serial, blanks and anything else 0.
     fn as_number(&self) -> f64 {
@@ -2477,6 +2771,7 @@ impl Value {
                     .unwrap_or_else(|_| crate::core::date::parse_date(t).unwrap_or(0.0))
             }
             Value::Blank => 0.0,
+            Value::Array(_) => self.top_left().as_number(),
         }
     }
 
@@ -2486,6 +2781,7 @@ impl Value {
             Value::Number(n) => format_number(*n),
             Value::Text(s) => s.clone(),
             Value::Blank => String::new(),
+            Value::Array(_) => self.top_left().as_text(),
         }
     }
 
@@ -2502,10 +2798,20 @@ enum Arg {
 }
 
 impl Arg {
+    /// An evaluated expression as an argument: an array result keeps its
+    /// shape as a `Range` so `=SUM(UNIQUE(A1:A9))` sees every element
+    /// (issue #33); everything else is a scalar.
+    fn from_value(v: Value) -> Arg {
+        match v {
+            Value::Array(rows) => Arg::Range(rows),
+            v => Arg::Scalar(v),
+        }
+    }
+
     /// Scalar context: a range collapses to its top-left cell.
     fn into_scalar(self) -> Value {
         match self {
-            Arg::Scalar(v) => v,
+            Arg::Scalar(v) => v.top_left(),
             Arg::Range(rows) => rows
                 .into_iter()
                 .flatten()
@@ -2521,6 +2827,7 @@ impl Arg {
     /// Row-major cells; a scalar is a 1×1 range.
     fn cells(&self) -> Vec<Value> {
         match self {
+            Arg::Scalar(Value::Array(rows)) => rows.iter().flatten().cloned().collect(),
             Arg::Scalar(v) => vec![v.clone()],
             Arg::Range(rows) => rows.iter().flatten().cloned().collect(),
         }
@@ -2529,6 +2836,7 @@ impl Arg {
     /// The grid view (scalars are 1×1).
     fn grid(&self) -> Vec<Vec<Value>> {
         match self {
+            Arg::Scalar(Value::Array(rows)) => rows.clone(),
             Arg::Scalar(v) => vec![vec![v.clone()]],
             Arg::Range(rows) => rows.clone(),
         }
@@ -2540,6 +2848,10 @@ impl Arg {
 /// `None` only for NaN comparisons, where every operator yields false.
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     use std::cmp::Ordering;
+    // Arrays compare by their top-left scalar (issue #33).
+    if matches!(a, Value::Array(_)) || matches!(b, Value::Array(_)) {
+        return compare_values(&a.top_left(), &b.top_left());
+    }
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x.partial_cmp(y),
         (Value::Text(x), Value::Text(y)) => Some(x.to_lowercase().cmp(&y.to_lowercase())),
@@ -2548,6 +2860,66 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         // A blank compares as 0, preserving the historic "empty == 0".
         (Value::Blank, _) => compare_values(&Value::Number(0.0), b),
         (_, Value::Blank) => compare_values(a, &Value::Number(0.0)),
+        // Unreachable: arrays were collapsed to scalars above.
+        (Value::Array(_), _) | (_, Value::Array(_)) => None,
+    }
+}
+
+/// Apply a binary operation, broadcasting element-wise when either side is an
+/// array (issue #33): same-shape arrays pair up element by element, a scalar
+/// (or 1×1 array) pairs against every element, and mismatched shapes are
+/// #VALUE!. Scalar ∘ scalar is just `f`.
+fn broadcast2(
+    l: &Value,
+    r: &Value,
+    f: &dyn Fn(&Value, &Value) -> Result<Value, EvalErr>,
+) -> Result<Value, EvalErr> {
+    match (l, r) {
+        (Value::Array(a), Value::Array(b)) => {
+            let (ar, ac) = (a.len(), a.first().map_or(0, Vec::len));
+            let (br, bc) = (b.len(), b.first().map_or(0, Vec::len));
+            if (ar, ac) == (1, 1) {
+                return broadcast2(&a[0][0], r, f);
+            }
+            if (br, bc) == (1, 1) {
+                return broadcast2(l, &b[0][0], f);
+            }
+            if (ar, ac) != (br, bc) {
+                return Err(EvalErr::Value);
+            }
+            let mut out = Vec::with_capacity(ar);
+            for (ra, rb) in a.iter().zip(b) {
+                let mut row = Vec::with_capacity(ra.len());
+                for (x, y) in ra.iter().zip(rb) {
+                    row.push(f(x, y)?);
+                }
+                out.push(row);
+            }
+            Ok(Value::Array(out))
+        }
+        (Value::Array(a), s) => {
+            let mut out = Vec::with_capacity(a.len());
+            for ra in a {
+                let mut row = Vec::with_capacity(ra.len());
+                for x in ra {
+                    row.push(f(x, s)?);
+                }
+                out.push(row);
+            }
+            Ok(Value::Array(out))
+        }
+        (s, Value::Array(b)) => {
+            let mut out = Vec::with_capacity(b.len());
+            for rb in b {
+                let mut row = Vec::with_capacity(rb.len());
+                for y in rb {
+                    row.push(f(s, y)?);
+                }
+                out.push(row);
+            }
+            Ok(Value::Array(out))
+        }
+        (a, b) => f(a, b),
     }
 }
 
@@ -3065,8 +3437,261 @@ fn find_subsequence(hay: &[char], needle: &[char], start: usize) -> Option<usize
     (start..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
 }
 
+/// Row-major transpose of a rectangular grid.
+fn transpose(grid: &[Vec<Value>]) -> Vec<Vec<Value>> {
+    let cols = grid.first().map_or(0, Vec::len);
+    (0..cols)
+        .map(|c| grid.iter().map(|row| row[c].clone()).collect())
+        .collect()
+}
+
+/// Element-wise row equality with Excel comparison semantics (numbers
+/// numerically, text case-insensitively) for UNIQUE (issue #33).
+fn rows_equal(a: &[Value], b: &[Value]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(x, y)| compare_values(x, y) == Some(std::cmp::Ordering::Equal))
+}
+
+// RANDARRAY's PRNG (issue #33): a tiny splitmix64 stream. `js_sys::Math::random`
+// isn't callable from the native test build, and `SystemTime` panics on
+// wasm32-unknown-unknown, so the stream is seeded with a fixed constant —
+// successive calls differ, which is all a spreadsheet needs here.
+thread_local! {
+    static RAND_STATE: std::cell::Cell<u64> = std::cell::Cell::new(0x9E37_79B9_7F4A_7C15);
+}
+
+/// Uniform in [0, 1).
+fn next_rand() -> f64 {
+    RAND_STATE.with(|s| {
+        let mut z = s.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        s.set(z);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+    })
+}
+
+/// Dynamic-array functions (issue #33): FILTER / SORT / SORTBY / UNIQUE /
+/// SEQUENCE / RANDARRAY return a `Value::Array` that spills at a formula's
+/// top level (see `recompute_spills`) and keeps its shape as a nested
+/// argument. `Ok(None)` means "not an array function" — fall through.
+fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, EvalErr> {
+    // A grid result never leaves here empty: an empty result is #CALC!,
+    // matching Excel.
+    let non_empty = |g: Vec<Vec<Value>>| -> Result<Option<Value>, EvalErr> {
+        if g.is_empty() || g.iter().all(Vec::is_empty) {
+            Err(EvalErr::Calc)
+        } else {
+            Ok(Some(Value::Array(g)))
+        }
+    };
+    match upper {
+        "FILTER" => {
+            let [array, include, ..] = fargs else { return Err(EvalErr::Value) };
+            let grid = array.grid();
+            let inc = include.grid();
+            let (rows, cols) = (grid.len(), grid.first().map_or(0, Vec::len));
+            let (irows, icols) = (inc.len(), inc.first().map_or(0, Vec::len));
+            let kept: Vec<Vec<Value>> = if irows == rows && icols == 1 {
+                // Column-shaped include: keep matching rows.
+                grid.into_iter()
+                    .zip(&inc)
+                    .filter(|(_, i)| i[0].is_truthy())
+                    .map(|(r, _)| r)
+                    .collect()
+            } else if irows == 1 && icols == cols {
+                // Row-shaped include: keep matching columns.
+                let keep: Vec<bool> = inc[0].iter().map(Value::is_truthy).collect();
+                grid.into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .zip(&keep)
+                            .filter(|(_, k)| **k)
+                            .map(|(v, _)| v)
+                            .collect()
+                    })
+                    .collect()
+            } else {
+                return Err(EvalErr::Value);
+            };
+            if kept.is_empty() || kept.iter().all(Vec::is_empty) {
+                // No matches: the if_empty argument, else #CALC!.
+                return match fargs.get(2) {
+                    Some(v) => Ok(Some(v.to_scalar())),
+                    None => Err(EvalErr::Calc),
+                };
+            }
+            Ok(Some(Value::Array(kept)))
+        }
+        "SORT" => {
+            let array = fargs.first().ok_or(EvalErr::Value)?;
+            let by_col = fargs.get(3).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            let mut grid = array.grid();
+            if by_col {
+                grid = transpose(&grid);
+            }
+            let idx = match fargs.get(1) {
+                Some(a) => {
+                    let i = a.to_scalar().as_number();
+                    if i < 1.0 || (i as usize) > grid.first().map_or(0, Vec::len) {
+                        return Err(EvalErr::Value);
+                    }
+                    i as usize - 1
+                }
+                None => 0,
+            };
+            let desc = fargs.get(2).map(|a| a.to_scalar().as_number() < 0.0).unwrap_or(false);
+            grid.sort_by(|a, b| {
+                let ord = compare_values(&a[idx], &b[idx]).unwrap_or(std::cmp::Ordering::Equal);
+                if desc { ord.reverse() } else { ord }
+            });
+            if by_col {
+                grid = transpose(&grid);
+            }
+            non_empty(grid)
+        }
+        "SORTBY" => {
+            let array = fargs.first().ok_or(EvalErr::Value)?;
+            let grid = array.grid();
+            let n = grid.len();
+            // (by_array, ascending) pairs; each sort_order is optional.
+            let mut keys: Vec<(Vec<Value>, bool)> = Vec::new();
+            let mut i = 1;
+            while i < fargs.len() {
+                let by = fargs[i].cells();
+                if by.len() != n {
+                    return Err(EvalErr::Value);
+                }
+                let asc = match fargs.get(i + 1) {
+                    // A length-1 argument here is a sort_order scalar, not
+                    // the next by_array (which must have n elements).
+                    Some(a) if a.cells().len() == 1 && n != 1 => {
+                        i += 2;
+                        a.to_scalar().as_number() >= 0.0
+                    }
+                    _ => {
+                        i += 1;
+                        true
+                    }
+                };
+                keys.push((by, asc));
+            }
+            if keys.is_empty() {
+                return Err(EvalErr::Value);
+            }
+            let mut order: Vec<usize> = (0..n).collect();
+            order.sort_by(|&a, &b| {
+                for (by, asc) in &keys {
+                    let ord = compare_values(&by[a], &by[b]).unwrap_or(std::cmp::Ordering::Equal);
+                    if ord != std::cmp::Ordering::Equal {
+                        return if *asc { ord } else { ord.reverse() };
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+            non_empty(order.into_iter().map(|r| grid[r].clone()).collect())
+        }
+        "UNIQUE" => {
+            let array = fargs.first().ok_or(EvalErr::Value)?;
+            let by_col = fargs.get(1).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            let exactly_once = fargs.get(2).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            let mut grid = array.grid();
+            if by_col {
+                grid = transpose(&grid);
+            }
+            let mut out: Vec<Vec<Value>> = Vec::new();
+            if exactly_once {
+                for row in &grid {
+                    if grid.iter().filter(|r| rows_equal(r, row)).count() == 1 {
+                        out.push(row.clone());
+                    }
+                }
+            } else {
+                for row in &grid {
+                    if !out.iter().any(|r| rows_equal(r, row)) {
+                        out.push(row.clone());
+                    }
+                }
+            }
+            if by_col {
+                out = transpose(&out);
+            }
+            non_empty(out)
+        }
+        "SEQUENCE" => {
+            let num = |i: usize, default: f64| {
+                fargs.get(i).map(|a| a.to_scalar().as_number()).unwrap_or(default)
+            };
+            let rows = num(0, 1.0);
+            let cols = num(1, 1.0);
+            if rows < 0.0 || cols < 0.0 {
+                return Err(EvalErr::Value);
+            }
+            let (rows, cols) = (rows as usize, cols as usize);
+            if rows == 0 || cols == 0 {
+                return Err(EvalErr::Calc);
+            }
+            if rows.saturating_mul(cols) > 1_000_000 {
+                return Err(EvalErr::Num);
+            }
+            let (start, step) = (num(2, 1.0), num(3, 1.0));
+            non_empty(
+                (0..rows)
+                    .map(|r| {
+                        (0..cols)
+                            .map(|c| Value::Number(start + (r * cols + c) as f64 * step))
+                            .collect()
+                    })
+                    .collect(),
+            )
+        }
+        "RANDARRAY" => {
+            let num = |i: usize, default: f64| {
+                fargs.get(i).map(|a| a.to_scalar().as_number()).unwrap_or(default)
+            };
+            let rows = num(0, 1.0);
+            let cols = num(1, 1.0);
+            if rows < 1.0 || cols < 1.0 {
+                return Err(EvalErr::Value);
+            }
+            let (rows, cols) = (rows as usize, cols as usize);
+            if rows.saturating_mul(cols) > 1_000_000 {
+                return Err(EvalErr::Num);
+            }
+            let (min, max) = (num(2, 0.0), num(3, 1.0));
+            if min > max {
+                return Err(EvalErr::Value);
+            }
+            let whole = fargs.get(4).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            non_empty(
+                (0..rows)
+                    .map(|_| {
+                        (0..cols)
+                            .map(|_| {
+                                let v = if whole {
+                                    min.floor() + (next_rand() * (max.floor() - min.floor() + 1.0)).floor()
+                                } else {
+                                    min + next_rand() * (max - min)
+                                };
+                                Value::Number(v)
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            )
+        }
+        _ => Ok(None),
+    }
+}
+
 fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
     let upper = name.to_uppercase();
+    // Dynamic-array functions return grids that spill (issue #33).
+    if let Some(v) = apply_array_function(&upper, fargs)? {
+        return Ok(v);
+    }
     // Text / criteria / lookup functions need values or range shape (issue #2).
     if let Some(v) = apply_special_function(&upper, fargs)? {
         return Ok(v);
@@ -4978,5 +5603,203 @@ mod tests {
         assert_eq!(d.row_last_filled_col(2), 3);
         // An empty row reports column 0 (Home/End collapse to A there).
         assert_eq!(d.row_last_filled_col(7), 0);
+    }
+
+    // --- Dynamic arrays & spill (issue #33) ---
+
+    #[test]
+    fn sequence_spills_into_neighbors() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=SEQUENCE(3,2,10,5)");
+        // Anchor shows the top-left; the rest spills row-major.
+        assert_eq!(d.cell_display_value(0, 0), "10");
+        assert_eq!(d.cell_display_value(0, 1), "15");
+        assert_eq!(d.cell_display_value(1, 0), "20");
+        assert_eq!(d.cell_display_value(1, 1), "25");
+        assert_eq!(d.cell_display_value(2, 0), "30");
+        assert_eq!(d.cell_display_value(2, 1), "35");
+        // Spilled cells stay empty in the model (only the anchor has text).
+        assert_eq!(d.get_cell_text(1, 0), "");
+        // The renderer sees one A1:B3 outline.
+        let ranges = d.spill_ranges();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(
+            (ranges[0].sri, ranges[0].sci, ranges[0].eri, ranges[0].eci),
+            (0, 0, 2, 1)
+        );
+    }
+
+    #[test]
+    fn blocked_spill_shows_spill_error_and_recovers() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 0, "x"); // obstructs A2
+        d.set_cell_text(0, 0, "=SEQUENCE(3)");
+        assert_eq!(d.cell_display_value(0, 0), "#SPILL!");
+        // The obstructing cell keeps its own value.
+        assert_eq!(d.cell_display_value(1, 0), "x");
+        // A reference to a blocked anchor propagates the error.
+        d.set_cell_text(0, 5, "=A1+1");
+        assert_eq!(d.cell_display_value(0, 5), "#SPILL!");
+        // Clearing the obstruction lets the array spill (mutation marks the
+        // cache dirty).
+        d.set_cell_text(1, 0, "");
+        assert_eq!(d.cell_display_value(0, 0), "1");
+        assert_eq!(d.cell_display_value(1, 0), "2");
+        assert_eq!(d.cell_display_value(2, 0), "3");
+        assert_eq!(d.cell_display_value(0, 5), "2");
+    }
+
+    #[test]
+    fn references_and_ranges_see_spilled_values() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=SEQUENCE(3)"); // A1:A3 = 1,2,3
+        d.set_cell_text(0, 2, "=A2*10"); // spilled cell by direct ref
+        assert_eq!(d.cell_display_value(0, 2), "20");
+        d.set_cell_text(1, 2, "=SUM(A1:A3)"); // range over the spill
+        assert_eq!(d.cell_display_value(1, 2), "6");
+        // Spilled cells aren't blank (matching Excel).
+        d.set_cell_text(2, 2, "=COUNTBLANK(A1:A3)");
+        assert_eq!(d.cell_display_value(2, 2), "0");
+    }
+
+    #[test]
+    fn filter_with_broadcast_comparison() {
+        let cells: Vec<(usize, usize, &str)> = vec![
+            (0, 0, "1"),
+            (1, 0, "5"),
+            (2, 0, "3"),
+            (3, 0, "8"),
+        ];
+        // FILTER keeps the rows where the broadcast comparison is true; the
+        // nested array collapses through SUM.
+        assert_eq!(eval_with(&cells, "=SUM(FILTER(A1:A4, A1:A4>2))"), "16");
+        // No matches: the if_empty argument, else #CALC!.
+        assert_eq!(eval_with(&cells, "=FILTER(A1:A4, A1:A4>9, 0)"), "0");
+        assert_eq!(eval_with(&cells, "=FILTER(A1:A4, A1:A4>9)"), "#CALC!");
+        // Shape mismatch between array and include is #VALUE!.
+        assert_eq!(eval_with(&cells, "=FILTER(A1:A4, A1:A3>2)"), "#VALUE!");
+    }
+
+    #[test]
+    fn filter_spills_matching_rows() {
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "1"), (1, "5"), (2, "3"), (3, "8")] {
+            d.set_cell_text(r, 0, v);
+        }
+        d.set_cell_text(0, 2, "=FILTER(A1:A4, A1:A4>2)");
+        assert_eq!(d.cell_display_value(0, 2), "5");
+        assert_eq!(d.cell_display_value(1, 2), "3");
+        assert_eq!(d.cell_display_value(2, 2), "8");
+    }
+
+    #[test]
+    fn sort_orders_rows_and_columns() {
+        let cells: Vec<(usize, usize, &str)> = vec![
+            (0, 0, "b"), (0, 1, "2"),
+            (1, 0, "c"), (1, 1, "3"),
+            (2, 0, "a"), (2, 1, "1"),
+        ];
+        // Default: ascending by the first column; rows travel together.
+        assert_eq!(eval_with(&cells, "=INDEX(SORT(A1:B3), 1, 2)"), "1");
+        // Descending by column 2.
+        assert_eq!(eval_with(&cells, "=INDEX(SORT(A1:B3, 2, -1), 1, 1)"), "c");
+        // sort_index out of range is #VALUE!.
+        assert_eq!(eval_with(&cells, "=SORT(A1:B3, 5)"), "#VALUE!");
+    }
+
+    #[test]
+    fn sortby_uses_parallel_key_arrays() {
+        let cells: Vec<(usize, usize, &str)> = vec![
+            (0, 0, "apple"), (0, 1, "3"),
+            (1, 0, "pear"), (1, 1, "1"),
+            (2, 0, "plum"), (2, 1, "2"),
+        ];
+        // Sort names by the weight column, descending.
+        assert_eq!(eval_with(&cells, "=INDEX(SORTBY(A1:A3, B1:B3, -1), 1, 1)"), "apple");
+        assert_eq!(eval_with(&cells, "=INDEX(SORTBY(A1:A3, B1:B3), 1, 1)"), "pear");
+        // Key array of the wrong length is #VALUE!.
+        assert_eq!(eval_with(&cells, "=SORTBY(A1:A3, B1:B2)"), "#VALUE!");
+    }
+
+    #[test]
+    fn unique_dedupes_and_exactly_once() {
+        let cells: Vec<(usize, usize, &str)> = vec![
+            (0, 0, "a"),
+            (1, 0, "B"),
+            (2, 0, "b"), // same as B, case-insensitively
+            (3, 0, "c"),
+        ];
+        assert_eq!(eval_with(&cells, "=COUNTA(UNIQUE(A1:A4))"), "3");
+        // exactly_once keeps only the values that never repeat.
+        assert_eq!(eval_with(&cells, "=COUNTA(UNIQUE(A1:A4, FALSE, TRUE))"), "2");
+        assert_eq!(eval_with(&cells, "=UNIQUE(A1:A4, FALSE, TRUE)"), "a");
+    }
+
+    #[test]
+    fn randarray_respects_bounds_and_shape() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=RANDARRAY(2, 2, 5, 6, TRUE)");
+        for r in 0..2 {
+            for c in 0..2 {
+                let v: f64 = d.cell_display_value(r, c).parse().unwrap();
+                assert!(v == 5.0 || v == 6.0, "out of range: {v}");
+            }
+        }
+        // min > max is #VALUE!.
+        d.set_cell_text(5, 5, "=RANDARRAY(1, 1, 9, 1)");
+        assert_eq!(d.cell_display_value(5, 5), "#VALUE!");
+    }
+
+    #[test]
+    fn top_level_range_and_arithmetic_spill() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "2");
+        d.set_cell_text(1, 0, "4");
+        // A bare range spills…
+        d.set_cell_text(0, 2, "=A1:A2");
+        assert_eq!(d.cell_display_value(0, 2), "2");
+        assert_eq!(d.cell_display_value(1, 2), "4");
+        // …and so does broadcast arithmetic over one.
+        d.set_cell_text(0, 4, "=A1:A2*10+1");
+        assert_eq!(d.cell_display_value(0, 4), "21");
+        assert_eq!(d.cell_display_value(1, 4), "41");
+        // Range-with-operators inside an argument broadcasts too.
+        d.set_cell_text(5, 0, "=SUM(A1:A2*10)");
+        assert_eq!(d.cell_display_value(5, 0), "60");
+    }
+
+    #[test]
+    fn structural_edits_move_spills() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=SEQUENCE(2)");
+        assert_eq!(d.cell_display_value(1, 0), "2");
+        // Inserting a row above shifts the whole spill down (the formula
+        // reference adjuster rewrites nothing here; the anchor just moves).
+        d.insert_row(0, 1);
+        assert_eq!(d.cell_display_value(0, 0), "");
+        assert_eq!(d.cell_display_value(1, 0), "1");
+        assert_eq!(d.cell_display_value(2, 0), "2");
+    }
+
+    #[test]
+    fn merged_cells_block_spills() {
+        let mut d = DataProxy::new("t");
+        d.merge_range(CellRange::new(1, 0, 1, 1)); // A2:B2 merged
+        d.set_cell_text(0, 0, "=SEQUENCE(3)");
+        assert_eq!(d.cell_display_value(0, 0), "#SPILL!");
+    }
+
+    #[test]
+    fn spill_collision_first_anchor_wins() {
+        let mut d = DataProxy::new("t");
+        // Both want A2; the row-major-first anchor (A1) spills, B1's range
+        // (B1:B2 then A2? no — B1 spills B1:B2) — use overlapping columns.
+        d.set_cell_text(0, 0, "=SEQUENCE(3)"); // A1:A3
+        d.set_cell_text(1, 1, "=SEQUENCE(1,2)"); // wants B2:C2 — free
+        assert_eq!(d.cell_display_value(1, 1), "1");
+        assert_eq!(d.cell_display_value(1, 2), "2");
+        // A later anchor whose range hits an existing spill blocks.
+        d.set_cell_text(0, 1, "=SEQUENCE(2)"); // wants B1:B2, but B2 is taken
+        assert_eq!(d.cell_display_value(0, 1), "#SPILL!");
     }
 }
