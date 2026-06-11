@@ -55,6 +55,8 @@ pub(crate) fn context_menu_html() -> String {
         item("chart", "Insert chart…"),
         // Issue #35: PivotTable dialog.
         item("pivot", "Insert PivotTable…"),
+        // Issue #35: refresh the pivot whose output sheet is the active one.
+        item("refresh-pivot", "Refresh pivot"),
         // Issue #30: row/column outline groups + Subtotal.
         divider.clone(),
         item("group-rows", "Group rows"),
@@ -83,6 +85,8 @@ pub(crate) fn wire_context_menu(
     canvas_el: &mut Element,
     menu_node: web_sys::Element,
     renderer: &SharedRenderer,
+    sheets: &Sheets,
+    active: &ActiveSheet,
     sync: &SyncFn,
     dv_open: OpenHandle,
     cf_open: OpenHandle,
@@ -93,6 +97,7 @@ pub(crate) fn wire_context_menu(
     {
         let renderer = renderer.clone();
         let menu = menu_node.clone();
+        let sheets = sheets.clone();
         canvas_el.add_event_listener("contextmenu", move |event: web_sys::Event| {
             event.prevent_default();
             let me: MouseEvent = event.dyn_into().unwrap();
@@ -112,6 +117,19 @@ pub(crate) fn wire_context_menu(
             let _ = style.set_property("display", "block");
             let _ = style.set_property("left", &format!("{}px", x));
             let _ = style.set_property("top", &format!("{}px", y));
+            // Hide "Refresh pivot" if the active sheet isn't a pivot output
+            // (issue #35). The query is by data-cmenu so the row's
+            // display is toggled directly.
+            let active_name = renderer.borrow().data.name.clone();
+            let any_pivot = sheets.borrow().iter().any(|d| {
+                d.pivots.iter().any(|p| p.output_sheet == active_name)
+            });
+            if let Ok(Some(item)) = menu.query_selector("[data-cmenu='refresh-pivot']") {
+                let _ = item
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", if any_pivot { "block" } else { "none" });
+            }
         });
     }
 
@@ -121,6 +139,8 @@ pub(crate) fn wire_context_menu(
         let sync = sync.clone();
         let menu = menu_node.clone();
         let menu_for_click = menu_node.clone();
+        let sheets = sheets.clone();
+        let active = active.clone();
         let mut menu_el: Element = menu_node.clone().into();
         menu_el.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
@@ -172,6 +192,20 @@ pub(crate) fn wire_context_menu(
             if cmd == "pivot" {
                 if let Some(open) = pivot_open.borrow().as_ref() {
                     open();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // PivotTable refresh (issue #35): re-runs the pivot whose
+            // output sheet is the currently active sheet.
+            if cmd == "refresh-pivot" {
+                let refreshed = {
+                    let mut r = renderer.borrow_mut();
+                    r.refresh_active_pivot(&sheets, *active.borrow())
+                };
+                if refreshed {
+                    sync();
                 }
                 let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
                 return;

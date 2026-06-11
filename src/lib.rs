@@ -17,7 +17,7 @@ mod renderer;
 mod component;
 mod zedsheet;
 mod config;
-mod core;
+pub mod core;
 mod formula;
 mod persist;
 

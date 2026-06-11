@@ -2276,6 +2276,11 @@ impl DataProxy {
             "rowGroups": serde_json::to_value(&self.row_groups).unwrap_or_default(),
             "colGroups": serde_json::to_value(&self.col_groups).unwrap_or_default(),
             "charts": serde_json::to_value(&self.charts).unwrap_or_default(),
+            // PivotTable specs (issue #35). The materialised cells live on
+            // a separate `DataProxy` in the workbook's `SheetsRegistry`;
+            // this list is the *recipe* on the source sheet, so Refresh
+            // can find it after a workbook round-trip.
+            "pivots": serde_json::to_value(&self.pivots).unwrap_or_default(),
             // Active cell (ri, ci) + selection rectangle, so a host can
             // round-trip selection state through get_data/load_data and read
             // the active cell from an on_change payload (issue #44).
@@ -2363,6 +2368,15 @@ impl DataProxy {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.charts = ch;
+        }
+        if let Some(pv) = data
+            .get("pivots")
+            .and_then(|v| serde_json::from_value::<Vec<crate::core::pivot::PivotTable>>(v.clone()).ok())
+        {
+            // PivotTable specs on this source sheet (issue #35). The
+            // materialised cells live on the output sheet; this list is
+            // the recipe that `refresh_active_pivot` reads to re-run.
+            self.pivots = pv;
         }
         // Restore the active cell + selection range (issue #44). Absent `sel`
         // (older payloads) leaves the default A1 selection.

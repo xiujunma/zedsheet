@@ -8,7 +8,10 @@ repository = "https://github.com/xiujunma/zedsheet"
 keywords = ["spreadsheet", "wasm", "webassembly", "canvas", "excel"]
 
 [lib]
-crate-type = ["cdylib"]
+# `cdylib` is the WASM target (consumed by `wasm-bindgen` / `trunk`).
+# `rlib` is added so `tests/*.rs` integration tests can link against the
+# host-side logic (issue #35). It has no runtime effect on the WASM build.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 js-sys = "0.3"
