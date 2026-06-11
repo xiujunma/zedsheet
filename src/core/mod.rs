@@ -20,3 +20,4 @@ pub mod xlsx;
 pub mod chart;
 pub mod html_util;
 pub mod clipboard_io;
+pub mod table;

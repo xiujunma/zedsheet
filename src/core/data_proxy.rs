@@ -16,6 +16,7 @@ use crate::core::auto_filter::AutoFilter;
 use crate::core::cond_format::{lerp3_hex, lerp_hex, CondRule};
 use crate::core::outline::OutlineGroup;
 use crate::core::chart::Chart;
+use crate::core::table::Table;
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
 /// referenced by every `DataProxy` so cross-sheet formulas can resolve
@@ -138,6 +139,10 @@ pub struct DataProxy {
     pub col_groups: Vec<OutlineGroup>,
     /// Charts floating over the grid, anchored at cells (issue #16).
     pub charts: Vec<Chart>,
+    /// Excel-style Tables (issue #34): named regions with a header row,
+    /// banded data rows, an optional totals row, and structured-reference
+    /// support in formulas.
+    pub tables: Vec<Table>,
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
     /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
     pub named_ranges: HashMap<String, String>,
@@ -222,6 +227,7 @@ impl Default for DataProxy {
             row_groups: Vec::new(),
             col_groups: Vec::new(),
             charts: Vec::new(),
+            tables: Vec::new(),
             named_ranges: HashMap::new(),
             pivots: Vec::new(),
             sheets: None,
@@ -998,6 +1004,16 @@ impl DataProxy {
                     None => Err(EvalErr::Name),
                 }
             }
+            Token::StructRef { table, spec } => {
+                *pos += 1;
+                // Structured table reference (issue #34): `[@Col]` yields the
+                // intersecting cell; everything else yields an array, which
+                // broadcasts in expressions and spills at top level.
+                match self.resolve_struct_ref(&table, &spec, vis)? {
+                    Arg::Scalar(v) => Ok(v),
+                    Arg::Range(rows) => Ok(Value::Array(rows)),
+                }
+            }
             Token::String(s) => {
                 *pos += 1;
                 Ok(Value::Text(s))
@@ -1552,6 +1568,308 @@ impl DataProxy {
         Some(parse_range_expr(expr))
     }
 
+    // --- Excel-style tables & structured references (issue #34) ---
+
+    /// The table covering `(ri, ci)`, if any.
+    pub fn table_at(&self, ri: usize, ci: usize) -> Option<&Table> {
+        self.tables.iter().find(|t| t.contains(ri, ci))
+    }
+
+    /// Find a table by name (case-insensitive), searching this sheet first
+    /// and then the whole workbook — table names are workbook-global, like
+    /// Excel's. An empty name is the in-table shorthand (`[@Col]`): it means
+    /// "the table containing the cell whose formula is being evaluated".
+    fn find_table(&self, name: &str) -> Option<(DataProxy, Table)> {
+        if name.is_empty() {
+            let (ri, ci) = self.eval_cell.get();
+            let t = self.tables.iter().find(|t| t.contains(ri, ci))?.clone();
+            return Some((self.clone(), t));
+        }
+        let upper = name.to_uppercase();
+        if let Some(t) = self.tables.iter().find(|t| t.name.to_uppercase() == upper) {
+            return Some((self.clone(), t.clone()));
+        }
+        let reg = self.sheets.as_ref()?.upgrade()?;
+        let found = reg
+            .borrow()
+            .iter()
+            .find_map(|d| {
+                d.tables
+                    .iter()
+                    .find(|t| t.name.to_uppercase() == upper)
+                    .map(|t| (d.clone(), t.clone()))
+            });
+        found
+    }
+
+    /// The column index for a header titled `name` (trimmed,
+    /// case-insensitive) in `t`, read from the owner sheet's header row.
+    fn table_col_by_name(owner: &DataProxy, t: &Table, name: &str) -> Option<usize> {
+        let want = name.trim().to_uppercase();
+        (t.sci..=t.eci)
+            .find(|&c| owner.get_cell_text(t.header_row(), c).trim().to_uppercase() == want)
+    }
+
+    /// Resolve a structured reference (issue #34) to an argument: a grid for
+    /// range-shaped specs, a scalar for the this-row form `[@Col]`.
+    ///
+    /// Supported spec shapes (the raw bracket interior from the tokenizer):
+    /// `Col`, `` (empty — data body), `#All`, `#Headers`, `#Totals`,
+    /// `#Data`, `@` (this row), `@Col` (this row ∩ column), and the
+    /// bracketed combination `[#Item],[Col]`. Unknown tables, columns, or a
+    /// missing totals row are #REF!; `@` outside the table's data rows is
+    /// #VALUE!.
+    fn resolve_struct_ref(
+        &self,
+        table: &str,
+        spec: &str,
+        vis: &mut Visited,
+    ) -> Result<Arg, EvalErr> {
+        let (owner, t) = self.find_table(table).ok_or(EvalErr::Ref)?;
+
+        // Split `[#Totals],[Amount]`-style specs into segments at top-level
+        // commas, dropping the per-segment brackets; a plain spec is one
+        // segment.
+        let mut item: Option<String> = None;
+        let mut column: Option<String> = None;
+        let mut this_row = false;
+        let mut depth = 0usize;
+        let mut seg = String::new();
+        let mut segs: Vec<String> = Vec::new();
+        for ch in spec.chars() {
+            match ch {
+                '[' => depth += 1,
+                ']' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => {
+                    segs.push(seg.trim().to_string());
+                    seg.clear();
+                }
+                _ => seg.push(ch),
+            }
+        }
+        segs.push(seg.trim().to_string());
+        for s in segs {
+            if s.is_empty() {
+                continue;
+            } else if let Some(it) = s.strip_prefix('#') {
+                item = Some(it.trim().to_uppercase());
+            } else if let Some(col) = s.strip_prefix('@') {
+                this_row = true;
+                if !col.trim().is_empty() {
+                    column = Some(col.trim().to_string());
+                }
+            } else {
+                column = Some(s);
+            }
+        }
+
+        // Column bounds.
+        let (c0, c1) = match &column {
+            Some(name) => {
+                let c = Self::table_col_by_name(&owner, &t, name).ok_or(EvalErr::Ref)?;
+                (c, c)
+            }
+            None => (t.sci, t.eci),
+        };
+
+        // Row bounds.
+        if this_row {
+            // `[@…]` only means something for a formula inside the table's
+            // own sheet, on one of its data rows.
+            let (ri, _) = self.eval_cell.get();
+            let (first, last) = t.data_rows().ok_or(EvalErr::Ref)?;
+            if owner.name != self.name || ri < first || ri > last {
+                return Err(EvalErr::Value);
+            }
+            if c0 == c1 {
+                return Ok(Arg::Scalar(owner.resolve_value(ri, c0, vis)?));
+            }
+            return owner.resolve_grid(ri, c0, ri, c1, vis);
+        }
+        let (r0, r1) = match item.as_deref() {
+            Some("ALL") => (t.sri, t.eri),
+            Some("HEADERS") => (t.header_row(), t.header_row()),
+            Some("TOTALS") => {
+                let r = t.totals_row_index().ok_or(EvalErr::Ref)?;
+                (r, r)
+            }
+            Some("DATA") | None => t.data_rows().ok_or(EvalErr::Ref)?,
+            Some(_) => return Err(EvalErr::Ref),
+        };
+        owner.resolve_grid(r0, c0, r1, c1, vis)
+    }
+
+    /// The next free `TableN` name, unique workbook-wide (case-insensitive).
+    fn next_table_name(&self) -> String {
+        let mut taken: HashSet<String> =
+            self.tables.iter().map(|t| t.name.to_uppercase()).collect();
+        if let Some(reg) = self.sheets.as_ref().and_then(Weak::upgrade) {
+            for d in reg.borrow().iter() {
+                taken.extend(d.tables.iter().map(|t| t.name.to_uppercase()));
+            }
+        }
+        let mut n = 1usize;
+        loop {
+            if !taken.contains(&format!("TABLE{n}")) {
+                return format!("Table{n}");
+            }
+            n += 1;
+        }
+    }
+
+    /// "Format as Table" (issue #34): the range's first row becomes the
+    /// header (empty header cells are filled with Column1, Column2, …), the
+    /// table is registered under a fresh `TableN` name, and the sheet
+    /// autofilter is pointed at it so the headers get dropdowns (issue #10).
+    /// A single-row range grows one data row. Overlapping an existing table
+    /// is a no-op that returns the existing name, like Excel refusing to
+    /// nest tables.
+    pub fn format_as_table(&mut self, range: &CellRange) -> String {
+        let (sri, sci, mut eri, eci) = (range.sri, range.sci, range.eri, range.eci);
+        if eri == sri {
+            eri = sri + 1;
+        }
+        if let Some(t) = self
+            .tables
+            .iter()
+            .find(|t| t.sri <= eri && sri <= t.eri && t.sci <= eci && sci <= t.eci)
+        {
+            return t.name.clone();
+        }
+        let name = self.next_table_name();
+        for (k, c) in (sci..=eci).enumerate() {
+            if self.get_cell_text(sri, c).trim().is_empty() {
+                self.set_cell_text(sri, c, &format!("Column{}", k + 1));
+            }
+        }
+        self.tables.push(Table::new(&name, sri, sci, eri, eci));
+        self.auto_filter.ref_ = Some(CellRange::new(sri, sci, eri, eci).to_string());
+        self.mark_spills_dirty();
+        name
+    }
+
+    /// Toggle the table's totals row (issue #34). Enabling extends the table
+    /// one row down, labels it "Total" under the first column, and writes
+    /// `=SUBTOTAL(9, …)` under the last column — SUBTOTAL so rows hidden by
+    /// the header filter drop out of the sum. Disabling clears those cells
+    /// and shrinks the range back.
+    pub fn toggle_table_totals(&mut self, name: &str) {
+        let upper = name.to_uppercase();
+        let Some(idx) = self.tables.iter().position(|t| t.name.to_uppercase() == upper) else {
+            return;
+        };
+        let t = self.tables[idx].clone();
+        if t.totals_row {
+            let r = t.eri;
+            for c in t.sci..=t.eci {
+                self.delete_cell(r, c);
+            }
+            let nt = &mut self.tables[idx];
+            nt.totals_row = false;
+            nt.eri -= 1;
+        } else {
+            let r = t.eri + 1;
+            self.set_cell_text(r, t.sci, "Total");
+            if t.eci > t.sci {
+                let from = crate::renderer::alphabets::xy2expr(t.eci, t.sri + 1);
+                let to = crate::renderer::alphabets::xy2expr(t.eci, t.eri);
+                self.set_cell_text(r, t.eci, &format!("=SUBTOTAL(9,{from}:{to})"));
+            }
+            let nt = &mut self.tables[idx];
+            nt.totals_row = true;
+            nt.eri += 1;
+        }
+        self.mark_spills_dirty();
+    }
+
+    /// "Convert to Range" (issue #34): drop the table layer, keeping every
+    /// cell. The header autofilter is cleared when it was the table's.
+    pub fn convert_table_to_range(&mut self, name: &str) {
+        let upper = name.to_uppercase();
+        let Some(idx) = self.tables.iter().position(|t| t.name.to_uppercase() == upper) else {
+            return;
+        };
+        let t = self.tables.remove(idx);
+        if let Some(r) = self.auto_filter.range() {
+            if r.sri == t.sri && r.sci == t.sci {
+                self.auto_filter.ref_ = None;
+                self.auto_filter.filters.clear();
+                self.auto_filter.sort = None;
+                // Filtered-out rows would otherwise stay hidden forever.
+                for ri in t.sri..=t.eri {
+                    self.set_row_hidden(ri, false);
+                }
+            }
+        }
+        self.mark_spills_dirty();
+    }
+
+    /// Auto-expansion (issue #34): after committing a non-empty value in the
+    /// row just below a table's data body (within its columns) or the column
+    /// just right of it (within its rows), the table grows to absorb the
+    /// cell, Excel-style. New columns get a generated header. Tables with a
+    /// totals row don't grow downward (the cell below the body is the totals
+    /// row itself).
+    pub fn maybe_expand_tables(&mut self, ri: usize, ci: usize) {
+        if self.get_cell_text(ri, ci).trim().is_empty() {
+            return;
+        }
+        let mut grown: Option<usize> = None;
+        for idx in 0..self.tables.len() {
+            let t = self.tables[idx].clone();
+            if !t.totals_row && ri == t.eri + 1 && ci >= t.sci && ci <= t.eci {
+                self.tables[idx].eri += 1;
+                grown = Some(idx);
+            } else if ci == t.eci + 1 && ri >= t.sri && ri <= t.growth_row() {
+                self.tables[idx].eci += 1;
+                if ri != t.sri && self.get_cell_text(t.sri, ci).trim().is_empty() {
+                    let coln = ci - t.sci + 1;
+                    self.set_cell_text(t.sri, ci, &format!("Column{coln}"));
+                }
+                grown = Some(idx);
+            }
+        }
+        if let Some(idx) = grown {
+            let t = self.tables[idx].clone();
+            // Keep the header dropdowns tracking the table when the
+            // autofilter is anchored at it.
+            if let Some(r) = self.auto_filter.range() {
+                if r.sri == t.sri && r.sci == t.sci {
+                    self.auto_filter.ref_ =
+                        Some(CellRange::new(t.sri, t.sci, t.growth_row(), t.eci).to_string());
+                }
+            }
+            self.mark_spills_dirty();
+        }
+    }
+
+    /// Overlay table visuals onto a cell's style (issue #34) — called by the
+    /// render path before conditional formats, so CF rules win. The fixed
+    /// look approximates Excel's default "TableStyleMedium2": blue header
+    /// with bold white text, banded data rows, bold shaded totals row.
+    pub fn apply_table_style(&self, ri: usize, ci: usize, style: &mut Style) {
+        let Some(t) = self.table_at(ri, ci) else { return };
+        if ri == t.header_row() {
+            style.bgcolor = Some("#4472c4".to_string());
+            style.color = "#ffffff".to_string();
+            style.bold = true;
+        } else if t.totals_row_index() == Some(ri) {
+            style.bgcolor = Some("#d9e1f2".to_string());
+            style.bold = true;
+        } else if t.banded {
+            if let Some((first, _)) = t.data_rows() {
+                // Shade odd body rows, but never over an explicit cell fill.
+                let plain = match style.bgcolor.as_deref() {
+                    None | Some("#ffffff") | Some("#fff") => true,
+                    _ => false,
+                };
+                if (ri - first) % 2 == 1 && plain {
+                    style.bgcolor = Some("#d9e1f2".to_string());
+                }
+            }
+        }
+    }
+
     pub fn delete_cell(&mut self, ri: usize, ci: usize) {
         self.mark_spills_dirty();
         if let Some(row) = self.rows.get_mut(&ri) {
@@ -1572,6 +1890,7 @@ impl DataProxy {
         self.merges.shift("row", at, n as isize, |_, _, _, _| {});
         self.adjust_all_formulas(true, at, n as isize, None);
         shift_groups_for_insert(&mut self.row_groups, at, n);
+        crate::core::table::shift_tables_for_insert(&mut self.tables, true, at, n);
     }
 
     /// Delete the row at `at`, shifting later rows up.
@@ -1590,6 +1909,7 @@ impl DataProxy {
         self.merges.shift("row", at, -1, |_, _, _, _| {});
         self.adjust_all_formulas(true, at + 1, -1, Some(at));
         shift_groups_for_delete(&mut self.row_groups, at);
+        crate::core::table::shift_tables_for_delete(&mut self.tables, true, at);
     }
 
     /// Insert SUBTOTAL rows into `r0..=r1` (issue #30): at each change of
@@ -1659,6 +1979,7 @@ impl DataProxy {
         self.merges.shift("column", at, n as isize, |_, _, _, _| {});
         self.adjust_all_formulas(false, at, n as isize, None);
         shift_groups_for_insert(&mut self.col_groups, at, n);
+        crate::core::table::shift_tables_for_insert(&mut self.tables, false, at, n);
     }
 
     /// Delete the column at `at`, shifting later cells/cols left.
@@ -1688,6 +2009,7 @@ impl DataProxy {
         self.merges.shift("column", at, -1, |_, _, _, _| {});
         self.adjust_all_formulas(false, at + 1, -1, Some(at));
         shift_groups_for_delete(&mut self.col_groups, at);
+        crate::core::table::shift_tables_for_delete(&mut self.tables, false, at);
     }
 
     // --- Hide / unhide rows & columns (issue #14) ---
@@ -2281,6 +2603,8 @@ impl DataProxy {
             // this list is the *recipe* on the source sheet, so Refresh
             // can find it after a workbook round-trip.
             "pivots": serde_json::to_value(&self.pivots).unwrap_or_default(),
+            // Excel-style tables (issue #34).
+            "tables": serde_json::to_value(&self.tables).unwrap_or_default(),
             // Active cell (ri, ci) + selection rectangle, so a host can
             // round-trip selection state through get_data/load_data and read
             // the active cell from an on_change payload (issue #44).
@@ -2378,6 +2702,12 @@ impl DataProxy {
             // the recipe that `refresh_active_pivot` reads to re-run.
             self.pivots = pv;
         }
+        if let Some(ts) = data
+            .get("tables")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.tables = ts;
+        }
         // Restore the active cell + selection range (issue #44). Absent `sel`
         // (older payloads) leaves the default A1 selection.
         if let Some(sel) = data.get("sel") {
@@ -2422,7 +2752,9 @@ fn adjust_formula_refs(
     delta: isize,
     deleted: Option<usize>,
 ) -> String {
-    let (masked, placeholders) = mask_sheet_prefixes(text);
+    let (masked, mut placeholders) = mask_sheet_prefixes(text);
+    // Structured refs are name-based and never shift (issue #34).
+    let masked = mask_struct_refs(&masked, &mut placeholders);
     let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
     let shifted = re
         .replace_all(&masked, |caps: &regex::Captures| {
@@ -2483,7 +2815,10 @@ pub(crate) fn cmp_cell_values(a: &str, b: &str, asc: bool) -> std::cmp::Ordering
 }
 
 fn shift_formula_refs(text: &str, drow: isize, dcol: isize) -> String {
-    let (masked, placeholders) = mask_sheet_prefixes(text);
+    let (masked, mut placeholders) = mask_sheet_prefixes(text);
+    // Structured refs are name-based: copy/fill leaves them as-is, which is
+    // exactly Excel's behavior for `Table1[Col]` and `[@Col]` (issue #34).
+    let masked = mask_struct_refs(&masked, &mut placeholders);
     let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
     let shifted = re
         .replace_all(&masked, |caps: &regex::Captures| {
@@ -2527,6 +2862,61 @@ fn mask_sheet_prefixes(text: &str) -> (String, Vec<(String, String)>) {
         })
         .to_string();
     (masked, placeholders)
+}
+
+/// Mask structured table references (issue #34) — `Sales[Amount]`,
+/// `T1[[#Totals],[Amt]]`, `[@Col]` — with the same placeholder scheme as
+/// `mask_sheet_prefixes`, so the cell-ref regex can't mangle them: a table
+/// name like `Table1` is letters+digits, exactly cell-ref-shaped, and the
+/// column names inside the brackets may be too.
+fn mask_struct_refs(text: &str, placeholders: &mut Vec<(String, String)>) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            // The span includes the identifier directly before the bracket
+            // (absent for the bare `[@Col]` form). `\u{0001}` delimits
+            // already-masked placeholders, so the walk can't eat into one.
+            let mut start = out.len();
+            while let Some(prev) = out[..start].chars().next_back() {
+                if prev.is_alphanumeric() || prev == '_' {
+                    start -= prev.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            // Find the matching close bracket (specs nest one level).
+            let mut depth = 0usize;
+            let mut end = None;
+            for (j, &ch) in chars.iter().enumerate().skip(i) {
+                match ch {
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(end) = end {
+                let mut span = out[start..].to_string();
+                out.truncate(start);
+                span.extend(&chars[i..=end]);
+                let key = format!("\u{0001}#{}#\u{0001}", placeholders.len());
+                placeholders.push((span, key.clone()));
+                out.push_str(&key);
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Inverse of `mask_sheet_prefixes`: substitute each placeholder back with
@@ -2697,7 +3087,9 @@ fn value_display(v: &Value) -> String {
 /// Over-matching is fine (`=SUM(A1:B3)` evaluates to a scalar and is simply
 /// not an anchor); the filter only avoids evaluating every formula twice.
 fn is_spill_candidate(text: &str) -> bool {
-    if text.contains(':') {
+    // `:` catches expression-position ranges; `[` catches structured table
+    // references like `=Sales[Amount]` (issue #34), which are also arrays.
+    if text.contains(':') || text.contains('[') {
         return true;
     }
     let up = text.to_uppercase();
@@ -5052,6 +5444,23 @@ mod tests {
     }
 
     #[test]
+    fn adjusters_leave_structured_refs_alone() {
+        // `Table1` is cell-ref-shaped (letters+digits): without masking, a
+        // column insert would rewrite it to `TABLF1` (issue #34). Plain refs
+        // around the structured ref still shift.
+        assert_eq!(
+            adjust_formula_refs("=SUM(Table1[Qty])+A1", false, 0, 1, None),
+            "=SUM(Table1[Qty])+B1"
+        );
+        assert_eq!(
+            adjust_formula_refs("=Table1[[#Totals],[Q1]]", true, 0, 5, None),
+            "=Table1[[#Totals],[Q1]]"
+        );
+        // Copy/fill keeps structured refs fixed too, like Excel.
+        assert_eq!(shift_formula_refs("=[@Qty]*B1", 1, 0), "=[@Qty]*B2");
+    }
+
+    #[test]
     fn shift_formula_refs_preserves_sheet_prefix() {
         // The fill-handle shift must not corrupt cross-sheet refs.
         assert_eq!(shift_formula_refs("=Sheet2!A1", 1, 0), "=Sheet2!A2");
@@ -5808,6 +6217,214 @@ mod tests {
         d.merge_range(CellRange::new(1, 0, 1, 1)); // A2:B2 merged
         d.set_cell_text(0, 0, "=SEQUENCE(3)");
         assert_eq!(d.cell_display_value(0, 0), "#SPILL!");
+    }
+
+    // --- Excel-style tables & structured references (issue #34) ---
+
+    /// A 3-column sales table at A1:C4: headers Item/Qty/Price, three data
+    /// rows.
+    fn sales_table(d: &mut DataProxy) -> String {
+        for (r, item, qty, price) in [
+            (0, "Item", "Qty", "Price"),
+            (1, "pen", "2", "10"),
+            (2, "book", "1", "25"),
+            (3, "ink", "4", "5"),
+        ] {
+            d.set_cell_text(r, 0, item);
+            d.set_cell_text(r, 1, qty);
+            d.set_cell_text(r, 2, price);
+        }
+        d.format_as_table(&CellRange::new(0, 0, 3, 2))
+    }
+
+    #[test]
+    fn format_as_table_names_headers_and_autofilter() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "Name"); // B1 header left empty on purpose
+        let name = d.format_as_table(&CellRange::new(0, 0, 2, 1));
+        assert_eq!(name, "Table1");
+        // Empty header cells are filled with generated names.
+        assert_eq!(d.get_cell_text(0, 1), "Column2");
+        // Header dropdowns: the autofilter is pointed at the table.
+        assert!(d.auto_filter.active());
+        // Overlapping ranges refuse to nest and return the existing table.
+        assert_eq!(d.format_as_table(&CellRange::new(1, 0, 5, 5)), "Table1");
+        // A second, disjoint table gets the next free name.
+        assert_eq!(d.format_as_table(&CellRange::new(10, 0, 12, 1)), "Table2");
+    }
+
+    #[test]
+    fn structured_refs_resolve_columns_items_and_errors() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        d.set_cell_text(10, 0, "=SUM(Table1[Qty])");
+        assert_eq!(d.cell_display_value(10, 0), "7");
+        // Empty spec = data body; #All adds the header row.
+        d.set_cell_text(10, 1, "=COUNTA(Table1[])");
+        assert_eq!(d.cell_display_value(10, 1), "9");
+        d.set_cell_text(10, 2, "=COUNTA(Table1[#All])");
+        assert_eq!(d.cell_display_value(10, 2), "12");
+        d.set_cell_text(10, 3, "=COUNTA(Table1[#Headers])");
+        assert_eq!(d.cell_display_value(10, 3), "3");
+        // Column names match case-insensitively; unknown ones are #REF!.
+        d.set_cell_text(11, 0, "=SUM(Table1[qty])");
+        assert_eq!(d.cell_display_value(11, 0), "7");
+        d.set_cell_text(11, 1, "=SUM(Table1[Nope])");
+        assert_eq!(d.cell_display_value(11, 1), "#REF!");
+        d.set_cell_text(11, 2, "=SUM(NoTable[Qty])");
+        assert_eq!(d.cell_display_value(11, 2), "#REF!");
+        // No totals row yet → #Totals is #REF!.
+        d.set_cell_text(11, 3, "=SUM(Table1[#Totals])");
+        assert_eq!(d.cell_display_value(11, 3), "#REF!");
+        // Structured refs broadcast like ranges (issue #33).
+        d.set_cell_text(12, 0, "=SUM(Table1[Qty]*Table1[Price])");
+        assert_eq!(d.cell_display_value(12, 0), "65");
+    }
+
+    #[test]
+    fn this_row_reference_intersects_current_row() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        // The bare shorthand only exists inside the table's own cells.
+        d.set_cell_text(2, 1, "=[@Price]*3"); // book row, price 25
+        assert_eq!(d.cell_display_value(2, 1), "75");
+        // The named form works from any cell on the sheet, using the
+        // formula's row.
+        d.set_cell_text(3, 4, "=Table1[@Qty]*Table1[@Price]");
+        assert_eq!(d.cell_display_value(3, 4), "20");
+        // `[@…]` outside the table's data rows is #VALUE!.
+        d.set_cell_text(20, 0, "=Table1[@Qty]");
+        assert_eq!(d.cell_display_value(20, 0), "#VALUE!");
+        // Bare shorthand outside any table has nothing to bind to: #REF!.
+        d.set_cell_text(20, 1, "=[@Qty]");
+        assert_eq!(d.cell_display_value(20, 1), "#REF!");
+    }
+
+    #[test]
+    fn table_column_spills_as_dynamic_array() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        d.set_cell_text(0, 5, "=Table1[Qty]");
+        assert_eq!(d.cell_display_value(0, 5), "2");
+        assert_eq!(d.cell_display_value(1, 5), "1");
+        assert_eq!(d.cell_display_value(2, 5), "4");
+    }
+
+    #[test]
+    fn totals_row_toggles_and_resolves() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        d.toggle_table_totals("Table1");
+        assert_eq!(d.get_cell_text(4, 0), "Total");
+        assert_eq!(d.get_cell_text(4, 2), "=SUBTOTAL(9,C2:C4)");
+        assert_eq!(d.cell_display_value(4, 2), "40");
+        d.set_cell_text(10, 0, "=SUM(Table1[#Totals])");
+        assert_eq!(d.cell_display_value(10, 0), "40");
+        // The data body still excludes the totals row.
+        d.set_cell_text(10, 1, "=SUM(Table1[Price])");
+        assert_eq!(d.cell_display_value(10, 1), "40");
+        // The bracketed combo addresses one column of the totals row.
+        d.set_cell_text(10, 2, "=Table1[[#Totals],[Price]]");
+        assert_eq!(d.cell_display_value(10, 2), "40");
+        // Toggling off clears the cells and shrinks the table.
+        d.toggle_table_totals("Table1");
+        assert_eq!(d.get_cell_text(4, 0), "");
+        assert_eq!(d.tables[0].eri, 3);
+    }
+
+    #[test]
+    fn typing_adjacent_expands_the_table() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        // Below the body: table grows a row, and the new row joins [@…] math.
+        d.set_cell_text(4, 0, "pad");
+        d.maybe_expand_tables(4, 0);
+        assert_eq!(d.tables[0].eri, 4);
+        d.set_cell_text(4, 1, "10");
+        d.set_cell_text(10, 0, "=SUM(Table1[Qty])");
+        assert_eq!(d.cell_display_value(10, 0), "17");
+        // Right of the table: grows a column and generates its header.
+        d.set_cell_text(2, 3, "x");
+        d.maybe_expand_tables(2, 3);
+        assert_eq!(d.tables[0].eci, 3);
+        assert_eq!(d.get_cell_text(0, 3), "Column4");
+        // A cell that isn't adjacent leaves the table alone.
+        d.set_cell_text(20, 20, "far");
+        d.maybe_expand_tables(20, 20);
+        assert_eq!((d.tables[0].eri, d.tables[0].eci), (4, 3));
+    }
+
+    #[test]
+    fn table_style_header_banding_and_explicit_fill() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        let mut style = Style::default();
+        d.apply_table_style(0, 0, &mut style);
+        assert_eq!(style.bgcolor.as_deref(), Some("#4472c4"));
+        assert!(style.bold);
+        // First body row plain, second banded.
+        let mut s1 = Style::default();
+        d.apply_table_style(1, 0, &mut s1);
+        assert_eq!(s1.bgcolor.as_deref(), Some("#ffffff"));
+        let mut s2 = Style::default();
+        d.apply_table_style(2, 0, &mut s2);
+        assert_eq!(s2.bgcolor.as_deref(), Some("#d9e1f2"));
+        // An explicit fill on a banded row survives.
+        let mut s3 = Style::default();
+        s3.bgcolor = Some("#ff0000".to_string());
+        d.apply_table_style(2, 0, &mut s3);
+        assert_eq!(s3.bgcolor.as_deref(), Some("#ff0000"));
+        // Outside the table: untouched.
+        let mut s4 = Style::default();
+        d.apply_table_style(20, 20, &mut s4);
+        assert_eq!(s4.bgcolor.as_deref(), Some("#ffffff"));
+    }
+
+    #[test]
+    fn tables_roundtrip_through_workbook_json() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        d.toggle_table_totals("Table1");
+        let json = crate::core::workbook::serialize(&[d]);
+        let sheets = crate::core::workbook::deserialize(&json);
+        assert_eq!(sheets[0].tables.len(), 1);
+        let t = &sheets[0].tables[0];
+        assert_eq!(t.name, "Table1");
+        assert_eq!((t.sri, t.sci, t.eri, t.eci), (0, 0, 4, 2));
+        assert!(t.totals_row && t.banded);
+        // Structured refs still resolve after the round-trip.
+        let mut s = sheets.into_iter().next().unwrap();
+        s.set_cell_text(10, 0, "=SUM(Table1[Qty])");
+        assert_eq!(s.cell_display_value(10, 0), "7");
+    }
+
+    #[test]
+    fn convert_to_range_drops_table_and_filter() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        d.convert_table_to_range("Table1");
+        assert!(d.tables.is_empty());
+        assert!(!d.auto_filter.active());
+        // Cells stay; structured refs are now #REF!.
+        assert_eq!(d.get_cell_text(1, 0), "pen");
+        d.set_cell_text(10, 0, "=SUM(Table1[Qty])");
+        assert_eq!(d.cell_display_value(10, 0), "#REF!");
+    }
+
+    #[test]
+    fn structural_edits_shift_tables() {
+        let mut d = DataProxy::new("t");
+        sales_table(&mut d);
+        d.insert_row(0, 2);
+        assert_eq!((d.tables[0].sri, d.tables[0].eri), (2, 5));
+        d.set_cell_text(10, 0, "=SUM(Table1[Qty])");
+        assert_eq!(d.cell_display_value(10, 0), "7");
+        d.delete_row(3); // first data row ("pen") — the probe shifts to row 9
+        assert_eq!((d.tables[0].sri, d.tables[0].eri), (2, 4));
+        assert_eq!(d.cell_display_value(9, 0), "5");
+        d.insert_col(0, 1); // …and right to column 1
+        assert_eq!((d.tables[0].sci, d.tables[0].eci), (1, 3));
+        assert_eq!(d.cell_display_value(9, 1), "5");
     }
 
     #[test]

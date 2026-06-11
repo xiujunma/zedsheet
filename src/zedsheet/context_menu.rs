@@ -64,6 +64,11 @@ pub(crate) fn context_menu_html() -> String {
         item("group-cols", "Group columns"),
         item("ungroup-cols", "Ungroup columns"),
         item("subtotal", "Subtotal by first column"),
+        // Issue #34: Excel-style tables.
+        divider.clone(),
+        item("format-table", "Format as table"),
+        item("table-totals", "Toggle table total row"),
+        item("table-to-range", "Convert table to range"),
         // Text alignment helpers (issue #25). The "set_rotation" /
         // "bump_indent" / "toggle_shrink_to_fit" actions are wired in
         // `wire_context_menu`.
@@ -286,6 +291,10 @@ pub(crate) fn wire_context_menu(
                     "group-cols" if !read_only => r.group_cols(),
                     "ungroup-cols" if !read_only => r.ungroup_cols(),
                     "subtotal" if !read_only => r.subtotal_selection(),
+                    // Issue #34: Excel-style tables.
+                    "format-table" if !read_only => r.format_selection_as_table(),
+                    "table-totals" if !read_only => r.toggle_table_totals_at_selection(),
+                    "table-to-range" if !read_only => r.convert_table_at_selection(),
                     _ => {}
                 }
                 r.render();
