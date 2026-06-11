@@ -28,6 +28,12 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   (`=SUM(Revenue)`) or type the name to jump to it
 - **Cross-sheet references**: `=Sheet2!A1` and `=SUM(Sheet2!A1:B3)` resolve
   against the named sheet; an unknown sheet surfaces as `#REF!`
+- **Dynamic arrays & spill**: `FILTER`, `SORT`, `SORTBY`, `UNIQUE`,
+  `SEQUENCE`, `RANDARRAY` — plus bare ranges (`=A1:B3`) and broadcast
+  arithmetic/comparisons (`=A1:A9*2`, `FILTER(A1:A9, B1:B9>5)`) — spill
+  into neighboring cells, outlined in blue; an obstructed spill shows
+  `#SPILL!` at the anchor, an empty result `#CALC!`, and references into
+  the spill range read the spilled values
 - **Read-only / per-cell locking**: `setSheetReadOnly("sheet1", true)` blocks
   every write to that sheet (editor, paste, clear, insert/delete row/col);
   the per-cell `editable` flag (toggled via the **Cell Editable** context

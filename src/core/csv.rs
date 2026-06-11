@@ -116,6 +116,15 @@ mod tests {
     }
 
     #[test]
+    fn export_includes_trailing_spilled_cells() {
+        let mut d = DataProxy::new("t");
+        // The spill extends the used extent past the only stored cell
+        // (issue #33).
+        d.set_cell_text(0, 0, "=SEQUENCE(3)");
+        assert_eq!(to_csv(&d), "1\r\n2\r\n3\r\n");
+    }
+
+    #[test]
     fn import_parses_quotes_commas_and_newlines() {
         let d = from_csv("t", "a,\"b,1\",\"say \"\"hi\"\"\"\r\n\"multi\nline\",x\n");
         assert_eq!(d.get_cell_text(0, 0), "a");

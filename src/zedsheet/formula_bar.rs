@@ -21,7 +21,11 @@ pub(crate) fn formula_bar_html() -> String {
 
 /// Functions offered by the formula-bar fx picker.
 pub(crate) fn fx_menu_html() -> String {
-    let fns = ["SUM", "AVERAGE", "MAX", "MIN", "COUNT", "PRODUCT", "ABS", "ROUND", "IF"];
+    let fns = [
+        "SUM", "AVERAGE", "MAX", "MIN", "COUNT", "PRODUCT", "ABS", "ROUND", "IF",
+        // Dynamic-array functions (issue #33).
+        "FILTER", "SORT", "UNIQUE", "SEQUENCE",
+    ];
     let mut s = String::new();
     for f in fns {
         s.push_str(&format!(

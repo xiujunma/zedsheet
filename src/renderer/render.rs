@@ -121,6 +121,56 @@ pub fn render_selector(canvas: &Canvas, _selector: &SelectorRect, viewport: &cra
     }
 }
 
+/// Outline every dynamic-array spill range in blue (issue #33), the way Excel
+/// marks a spilled result. Same per-area clamping as `render_selector`, but a
+/// thinner stroke and no fill handle, so the selection still reads on top.
+pub fn render_spill_outlines(canvas: &Canvas, viewport: &crate::renderer::viewport::Viewport, renderer: &TableRenderer) {
+    for range in renderer.data.spill_ranges() {
+        for area in &viewport.areas {
+            if area.range.start_row >= area.range.end_row || area.range.start_col >= area.range.end_col {
+                continue;
+            }
+            let area_last_row = area.range.end_row - 1;
+            let area_last_col = area.range.end_col - 1;
+            if range.eri < area.range.start_row || range.sri > area_last_row ||
+               range.eci < area.range.start_col || range.sci > area_last_col {
+                continue;
+            }
+
+            let min_r = range.sri.max(area.range.start_row);
+            let max_r = range.eri.min(area_last_row);
+            let min_c = range.sci.max(area.range.start_col);
+            let max_c = range.eci.min(area_last_col);
+
+            let mut x = area.x;
+            let mut y = area.y;
+            let mut width = 0f64;
+            let mut height = 0f64;
+            for row in min_r..=max_r {
+                if row == min_r {
+                    y += area.row_map.get(&row).map_or(0f64, |(y, _)| *y);
+                }
+                height += area.row_map.get(&row).map_or(0f64, |(_, h)| *h);
+            }
+            for col in min_c..=max_c {
+                if col == min_c {
+                    x += area.col_map.get(&col).map_or(0f64, |(x, _)| *x);
+                }
+                width += area.col_map.get(&col).map_or(0f64, |(_, w)| *w);
+            }
+
+            canvas.save();
+            canvas.set_stroke_style("#4a90e2");
+            canvas.set_line_width(1.0);
+            canvas.begin_path();
+            canvas.rect(x + 0.5, y + 0.5, width - 1.0, height - 1.0);
+            canvas.stroke();
+            canvas.restore();
+            break;
+        }
+    }
+}
+
 pub fn render_cell_grid_line(canvas: &Canvas, gridline: &Gridline, rect: &Rect) {
     render_lines(canvas, gridline, || {
         canvas
@@ -964,6 +1014,9 @@ pub fn render(renderer: &TableRenderer) {
                 if frow > 0 { canvas.line(0.0, area4.y, width, area4.y); }
             });
         }
+
+        // Spill-range outlines (issue #33), under the selection rectangle.
+        render_spill_outlines(&canvas, viewport, renderer);
 
         // Selection rectangle.
         let selector = renderer.get_selector();
