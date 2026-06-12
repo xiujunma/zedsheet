@@ -12,6 +12,8 @@ use super::*;
 pub(crate) fn wire_events(
     canvas_el: &mut Element,
     renderer: &SharedRenderer,
+    sheets: &SheetsRegistry,
+    active: &ActiveSheet,
     textarea: &HtmlTextAreaElement,
     editing: &EditingCell,
     editor_error_node: Option<HtmlElement>,
@@ -385,6 +387,8 @@ pub(crate) fn wire_events(
     // window keydown: arrow navigation + Enter-to-edit when not editing.
     {
         let renderer = renderer.clone();
+        let sheets = sheets.clone();
+        let active = active.clone();
         let textarea = textarea.clone();
         let editing = editing.clone();
         let editor_error = editor_error_node.clone();
@@ -421,9 +425,19 @@ pub(crate) fn wire_events(
                         // native paste event in `system_clipboard`.
                         "v" if ke.shift_key() => r.paste_special(PasteMode::Values),
                         // Ctrl/Cmd+Z undo; Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redo.
-                        "z" if ke.shift_key() => r.redo(),
-                        "z" => r.undo(),
-                        "y" => r.redo(),
+                        // Pivot operations (issue #35, issue #53) change the
+                        // workbook's sheets registry, so the undo must also
+                        // restore `sheets` + `active` from the saved
+                        // `PivotUndo` record, not just `self.data`.
+                        "z" if ke.shift_key() => {
+                            perform_redo(&mut r, &sheets, &active);
+                        }
+                        "z" => {
+                            perform_undo(&mut r, &sheets, &active);
+                        }
+                        "y" => {
+                            perform_redo(&mut r, &sheets, &active);
+                        }
                         // Ctrl/Cmd+Home → A1; Ctrl/Cmd+End → last used cell (#41).
                         "home" => r.select_and_reveal(0, 0),
                         "end" => {
@@ -624,4 +638,33 @@ pub(crate) fn apply_scroll_drag(renderer: &SharedRenderer, kind: DragKind, x: f6
         _ => {}
     }
     r.render();
+}
+
+/// Ctrl+Z / undo: if a pivot undo is pending, restore the workbook's
+/// sheets registry and active index from the saved record *before*
+/// letting the renderer swap its local `self.data` (issue #53).
+/// Without this, the new output sheet stays orphaned in the registry
+/// while the canvas flips back to the source.
+fn perform_undo(
+    renderer: &mut std::cell::RefMut<TableRenderer>,
+    sheets: &SheetsRegistry,
+    active: &ActiveSheet,
+) {
+    if let Some(rec) = renderer.take_pivot_undo() {
+        *sheets.borrow_mut() = rec.sheets;
+        *active.borrow_mut() = rec.active;
+        // `r.undo()` now does the rest: swap self.data and re-render.
+    }
+    renderer.undo();
+}
+
+/// Redo: no-op for pivot undo (we don't have a pivot redo record yet);
+/// falls through to the renderer.
+fn perform_redo(
+    renderer: &mut std::cell::RefMut<TableRenderer>,
+    sheets: &SheetsRegistry,
+    active: &ActiveSheet,
+) {
+    let _ = (sheets, active);
+    renderer.redo();
 }

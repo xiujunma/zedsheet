@@ -23,6 +23,12 @@ use crate::core::table::Table;
 /// `Sheet2!A1` against the right sheet (issue #4).
 pub type SheetsRegistry = Rc<RefCell<Vec<DataProxy>>>;
 
+/// Workbook-wide index of the currently-active sheet (issue #35). Held in a
+/// `Rc<RefCell<…>>` so the renderer (which only sees a clone) and the
+/// `ZedSheet` orchestrator (which owns the registry) can both update the
+/// selection without a borrow check fight.
+pub type ActiveSheet = Rc<RefCell<usize>>;
+
 /// The circular-reference guard for formula evaluation. Keyed by
 /// `(sheet_name, row, col)` — the sheet component is essential so a cross-sheet
 /// cycle (`Sheet1!A1 = Sheet2!A1`, `Sheet2!A1 = Sheet1!A1`) is detected instead

@@ -71,7 +71,7 @@ pub(crate) struct DragState {
 pub(crate) type SharedRenderer = Rc<RefCell<TableRenderer>>;
 pub(crate) type EditingCell = Rc<RefCell<Option<(usize, usize)>>>;
 pub(crate) type Sheets = Rc<RefCell<Vec<DataProxy>>>;
-pub(crate) type ActiveSheet = Rc<RefCell<usize>>;
+pub(crate) use crate::core::data_proxy::ActiveSheet;
 /// Refreshes the formula bar + toolbar state from the active cell.
 pub(crate) type SyncFn = Rc<dyn Fn()>;
 /// Open-a-dialog handle, populated once its modal is mounted (issues #9, #11).
@@ -603,6 +603,8 @@ impl ZedSheet {
         wire_events(
             &mut canvas_el,
             &renderer,
+            &sheets,
+            &active,
             &textarea,
             &editing,
             editor_error_node.clone(),
@@ -650,7 +652,7 @@ impl ZedSheet {
         }
 
         if let Some(mut tb) = toolbar_el {
-            wire_toolbar(&mut tb, &renderer, palette_node.clone(), &palette_mode, menus, &sync);
+            wire_toolbar(&mut tb, &renderer, &sheets, &active, palette_node.clone(), &palette_mode, menus, &sync);
         }
         if let Some(bm) = border_menu_node {
             wire_border_menu(bm, &renderer, &sync);

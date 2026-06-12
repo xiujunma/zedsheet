@@ -10,7 +10,9 @@ use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
-use crate::core::data_proxy::{DataProxy, SheetsRegistry, Style as CellStyle, Border as CellBorder};
+use crate::core::data_proxy::{
+    ActiveSheet, DataProxy, SheetsRegistry, Style as CellStyle, Border as CellBorder,
+};
 use crate::core::cell_range::CellRange;
 use crate::core::cell::Cell as DataCell;
 use crate::core::clipboard_io::ParsedGrid;
@@ -2151,25 +2153,27 @@ impl TableRenderer {
     /// sheet becomes the new output sheet. The previous workbook state is
     /// saved in `pivot_undo` so the user can `undo()` cleanly.
     ///
-    /// `active` is the index of the current active sheet (before the switch);
-    /// `sheets` is the full registry. The caller is responsible for re-
-    /// rendering the tab strip and calling `sync()`.
+    /// The spec is appended to the *source* sheet's `pivots` list (held in
+    /// the registry, not the renderer's local `self.data`) before the
+    /// `set_data` swap, so Refresh and the workbook's `get_data` round-trip
+    /// can find it (issue #50). The workbook's active index is updated to
+    /// the new output sheet's index so the tab strip highlights the
+    /// right tab (issue #54).
+    ///
+    /// The caller is responsible for re-rendering the tab strip and calling
+    /// `sync()`.
     pub fn add_pivot(
         &mut self,
         pt: crate::core::pivot::PivotTable,
         sheets: &SheetsRegistry,
-        active: usize,
+        active: &ActiveSheet,
     ) {
         if self.data.is_read_only() {
             return;
         }
-        // 1. Snapshot the current workbook for undo (issue #35). The snapshot
-        //    captures the pre-pivot source WITHOUT the spec, so an undo
-        //    restores the user's original view.
-        let (saved_sheets, saved_active) = {
-            let s = sheets.borrow();
-            (s.clone(), active)
-        };
+        // 1. Snapshot the current workbook for undo (issue #35).
+        let saved_active = *active.borrow();
+        let saved_sheets = sheets.borrow().clone();
         let saved_data = self.data.clone();
         self.pivot_undo = Some(PivotUndo {
             sheets: saved_sheets,
@@ -2205,8 +2209,26 @@ impl TableRenderer {
         //    must land on the REGISTRY's source entry, not on the renderer's
         //    transient self.data, which is replaced with the output below —
         //    otherwise Refresh and save/load lose the spec (issue #50).
-        let new_idx =
-            install_pivot_into_registry(sheets, active, self.data.clone(), pt, out_sheet);
+        //    Also updates *active to point at the new output sheet so the
+        //    tab strip and the canvas stay in sync (issue #54).
+        let new_idx = match install_pivot_into_registry(
+            sheets,
+            active,
+            self.data.clone(),
+            pt,
+            out_sheet,
+        ) {
+            Ok(idx) => idx,
+            Err(()) => {
+                // Source/output name collision (issue #51). The modal
+                // should have caught this earlier; defensively refuse.
+                self.pivot_undo = None;
+                pivot_alert(
+                    "Pivot: output sheet name is the same as the source sheet — pick a different name.",
+                );
+                return;
+            }
+        };
         // 5. Switch the renderer's active data to the new output.
         let new_data = sheets.borrow()[new_idx].clone();
         self.set_data(new_data);
@@ -2216,7 +2238,11 @@ impl TableRenderer {
     /// Re-run the pivot whose `output_sheet` matches the currently active
     /// sheet's name, if any. Called from the "Refresh pivot" context-menu
     /// item on an output sheet (issue #35).
-    pub fn refresh_active_pivot(&mut self, sheets: &SheetsRegistry, active: usize) -> bool {
+    pub fn refresh_active_pivot(
+        &mut self,
+        sheets: &SheetsRegistry,
+        active: &ActiveSheet,
+    ) -> bool {
         let active_name = self.data.name.clone();
         // Find the pivot spec on the *source* sheet. We don't know which
         // source sheet it is from the active sheet name alone, so we scan
@@ -2229,9 +2255,10 @@ impl TableRenderer {
         let pt = source.pivots.iter().find(|p| p.output_sheet == active_name).unwrap().clone();
 
         // Save the workbook state for undo.
+        let cur = *active.borrow();
         self.pivot_undo = Some(PivotUndo {
             sheets: sheets.borrow().clone(),
-            active,
+            active: cur,
             active_data: self.data.clone(),
         });
 
@@ -2255,8 +2282,8 @@ impl TableRenderer {
         let mut new_sheet = crate::core::pivot::materialize(&pt, &result, &headers, &pt.output_sheet);
         new_sheet.set_read_only(true);
         new_sheet.set_sheets(sheets);
-        sheets.borrow_mut()[active] = new_sheet;
-        self.set_data(sheets.borrow()[active].clone());
+        sheets.borrow_mut()[cur] = new_sheet;
+        self.set_data(sheets.borrow()[cur].clone());
         self.render();
         true
     }
@@ -2617,14 +2644,32 @@ fn pivot_alert(msg: &str) {
 /// NOT read the source from `sheets[cur]` — passing it in keeps the spec
 /// attached to the caller's view, even if `cur` is stale relative to the
 /// registry (issue #52, separate fix).
+///
+/// Reads the *current* active index from `active` (not the caller's snapshot)
+/// so a tab switch between opening the modal and clicking Create pivot
+/// routes the pivot against the sheet the user is actually on, and writes
+/// the new output sheet's index back into `active` so the tab strip and
+/// the canvas stay in sync (issue #54).
+///
+/// Returns the index of the new (or replaced) output sheet. Returns
+/// `Err(())` if the user tried to use the source sheet's name as the
+/// output (issue #51) — the caller drops the pivot_undo record and
+/// shows an alert.
 fn install_pivot_into_registry(
     sheets: &SheetsRegistry,
-    cur: usize,
+    active: &ActiveSheet,
     source: DataProxy,
     pt: crate::core::pivot::PivotTable,
     out_sheet: DataProxy,
-) -> usize {
+) -> Result<usize, ()> {
+    let cur = *active.borrow();
     let output_name = out_sheet.name.clone();
+    // Defensively refuse to clobber the active source sheet (issue #51).
+    if let Some(existing_idx) = sheets.borrow().iter().position(|d| d.name == output_name) {
+        if existing_idx == cur {
+            return Err(());
+        }
+    }
     // Build a source snapshot WITH the spec appended. This is the entry
     // that gets written to s[cur] so Refresh can find it. Pushing onto
     // self.data instead would lose the spec at the very next set_data
@@ -2632,16 +2677,22 @@ fn install_pivot_into_registry(
     // in add_pivot before this fix (issue #50).
     let mut updated_source = source;
     updated_source.pivots.push(pt);
-    let mut s = sheets.borrow_mut();
-    if let Some(existing_idx) = s.iter().position(|d| d.name == output_name) {
-        s[cur] = updated_source;
-        s[existing_idx] = out_sheet;
-        existing_idx
-    } else {
-        s[cur] = updated_source;
-        s.push(out_sheet);
-        s.len() - 1
-    }
+    let new_idx = {
+        let mut s = sheets.borrow_mut();
+        if let Some(existing_idx) = s.iter().position(|d| d.name == output_name) {
+            s[cur] = updated_source;
+            s[existing_idx] = out_sheet;
+            existing_idx
+        } else {
+            s[cur] = updated_source;
+            s.push(out_sheet);
+            s.len() - 1
+        }
+    };
+    // Update the workbook's active index so the tab strip and the canvas
+    // agree (issue #54).
+    *active.borrow_mut() = new_idx;
+    Ok(new_idx)
 }
 
 /// Map a canvas pixel `p` (already past the `header` gutter) to a track
@@ -2824,9 +2875,10 @@ mod tests {
         out.set_read_only(true);
         out.set_sheets(&sheets);
 
-        let new_idx = install_pivot_into_registry(&sheets, 0, src.clone(), pt.clone(), out);
+        let new_idx = install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt.clone(), out);
 
         // The source in the registry has the spec, so Refresh / save/load work.
+        let new_idx = new_idx.expect("install should succeed");
         let after = sheets.borrow();
         assert_eq!(after.len(), 2, "output should be appended");
         assert_eq!(new_idx, 1);
@@ -2875,7 +2927,8 @@ mod tests {
         out.set_read_only(true);
         out.set_sheets(&sheets);
 
-        let new_idx = install_pivot_into_registry(&sheets, 0, src.clone(), pt.clone(), out);
+        let new_idx = install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt.clone(), out)
+            .expect("install should succeed");
 
         let after = sheets.borrow();
         assert_eq!(after.len(), 2, "no append — the existing sheet was replaced");
@@ -2912,7 +2965,7 @@ mod tests {
         let headers = read_field_headers(&src, 0, 0, 1);
         let out = materialize(&pt, &result, &headers, "Pivot1");
 
-        let _ = install_pivot_into_registry(&sheets, 0, src.clone(), pt, out);
+        let _ = install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt, out);
 
         // Caller's source is unchanged — the registry got a separate, spec-
         // bearing clone.
@@ -2967,7 +3020,7 @@ mod tests {
         let out1 = materialize(&pt1, &r1, &h1, "P_from_1");
         let _ = install_pivot_into_registry(
             &sheets,
-            *active.borrow(),
+            &active,
             src1.clone(),
             pt1,
             out1,
@@ -2992,7 +3045,7 @@ mod tests {
         let out2 = materialize(&pt2, &r2, &h2, "P_from_2");
         let _ = install_pivot_into_registry(
             &sheets,
-            *active.borrow(),
+            &active,
             src2,
             pt2,
             out2,

@@ -207,7 +207,7 @@ pub(crate) fn wire_context_menu(
             if cmd == "refresh-pivot" {
                 let refreshed = {
                     let mut r = renderer.borrow_mut();
-                    r.refresh_active_pivot(&sheets, *active.borrow())
+                    r.refresh_active_pivot(&sheets, &active)
                 };
                 if refreshed {
                     sync();

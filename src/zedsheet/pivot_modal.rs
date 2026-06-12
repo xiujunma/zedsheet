@@ -527,17 +527,24 @@ pub(crate) fn wire_pivot_modal(
             }
             let v = state.value.unwrap();
 
-            // Validate that the output name doesn't collide.
-            if sheets_for_save.borrow().iter().any(|d| d.name == output) {
-                // Allow overwrite only if the existing sheet is itself a
-                // pivot output (handled by the renderer's add_pivot, which
-                // replaces by name). We still pass through.
+            // Validate that the output name doesn't collide with the
+            // source sheet (issue #51). The renderer also defensively
+            // refuses this case, but the modal-level check gives a
+            // cleaner error before any work happens.
+            if output == renderer_for_save.borrow().data.name {
+                pivot_alert(&format!(
+                    "Output sheet name {:?} is the same as the source sheet — pick a different name.",
+                    output
+                ));
+                return;
             }
+            // Otherwise allow overwrite (e.g. re-running with the same
+            // output name refreshes the pivot in place); add_pivot
+            // handles the registry swap.
 
-            // Read the live active index here, not the one captured at
-            // wire time — switching tabs between Open and Create pivot
-            // must not route against a stale sheet (issue #52).
-            let live_active = *active_for_save.borrow();
+            // The live active index is read inside the save handler via
+            // `active_for_save` (issue #52: a tab switch between Open and
+            // Create pivot must not route against a stale sheet).
             let source_sheet = renderer_for_save.borrow().data.name.clone();
             let pt = PivotTable {
                 source_range: range,
@@ -551,7 +558,7 @@ pub(crate) fn wire_pivot_modal(
 
             {
                 let mut r = renderer_for_save.borrow_mut();
-                r.add_pivot(pt, &sheets_for_save, live_active);
+                r.add_pivot(pt, &sheets_for_save, &active_for_save);
                 r.render();
             }
             // Re-render the bottom-bar tabs so the new sheet appears.

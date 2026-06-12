@@ -70,12 +70,16 @@ pub(crate) fn wire_tooltip(toolbar: web_sys::Element, tooltip: web_sys::Element)
 pub(crate) fn wire_toolbar(
     toolbar_el: &mut Element,
     renderer: &SharedRenderer,
+    sheets: &SheetsRegistry,
+    active: &ActiveSheet,
     palette: Option<web_sys::Element>,
     palette_mode: &Rc<RefCell<String>>,
     menus: Vec<(String, web_sys::Element)>,
     sync: &SyncFn,
 ) {
     let renderer = renderer.clone();
+    let sheets = sheets.clone();
+    let active = active.clone();
     let palette_mode = palette_mode.clone();
     let sync = sync.clone();
     toolbar_el.add_event_listener("click", move |event: web_sys::Event| {
@@ -135,7 +139,17 @@ pub(crate) fn wire_toolbar(
 
         let mut r = renderer.borrow_mut();
         match action.as_str() {
-            "undo" => r.undo(),
+            // Undo/redo with workbook-restore (issue #53): when the most
+            // recent op was a pivot, the renderer's undo() drops the
+            // pivot's saved registry/active record. Restore them first
+            // so the workbook stays consistent with the canvas.
+            "undo" => {
+                if let Some(rec) = r.take_pivot_undo() {
+                    *sheets.borrow_mut() = rec.sheets;
+                    *active.borrow_mut() = rec.active;
+                }
+                r.undo();
+            }
             "redo" => r.redo(),
             "font-bold" => r.toggle_bold(),
             "font-italic" => r.toggle_italic(),
