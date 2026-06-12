@@ -3083,6 +3083,9 @@ fn value_display(v: &Value) -> String {
         Value::Number(n) => format_number(*n),
         Value::Text(s) => s.clone(),
         Value::Blank => format_number(0.0),
+        // Per-cell errors render as their Excel code so a spill like
+        // `=A1:A3/0` shows `#DIV/0!` in every spilled cell (issue #56).
+        Value::Error(e) => e.code().to_string(),
         Value::Array(_) => value_display(&v.top_left()),
     }
 }
@@ -3159,6 +3162,11 @@ pub(crate) enum Value {
     /// An empty cell. Coerces to `0` / `""` like before, but is distinguishable
     /// by `ISBLANK` / `COUNTA` / `COUNTBLANK` (issue #36).
     Blank,
+    /// A per-cell error (`#DIV/0!`, `#VALUE!`, …). Spilled into neighbouring
+    /// cells just like any other `Value` so a formula like `=A1:A3/0`
+    /// produces three #DIV/0! cells instead of collapsing to a single
+    /// #DIV/0! at the anchor (issue #56).
+    Error(EvalErr),
     /// A dynamic-array result (row-major, rectangular): FILTER/SORT/UNIQUE/
     /// SEQUENCE/… (issue #33). At a formula's top level it spills into
     /// neighboring cells; in scalar context it collapses to its top-left.
@@ -3190,6 +3198,7 @@ impl Value {
                     .unwrap_or_else(|_| crate::core::date::parse_date(t).unwrap_or(0.0))
             }
             Value::Blank => 0.0,
+            Value::Error(_) => 0.0,
             Value::Array(_) => self.top_left().as_number(),
         }
     }
@@ -3200,6 +3209,8 @@ impl Value {
             Value::Number(n) => format_number(*n),
             Value::Text(s) => s.clone(),
             Value::Blank => String::new(),
+            // Error values render as their Excel code (issue #56).
+            Value::Error(e) => e.code().to_string(),
             Value::Array(_) => self.top_left().as_text(),
         }
     }
@@ -3279,6 +3290,14 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         // A blank compares as 0, preserving the historic "empty == 0".
         (Value::Blank, _) => compare_values(&Value::Number(0.0), b),
         (_, Value::Blank) => compare_values(a, &Value::Number(0.0)),
+        // An error sorts *after* everything else and is only equal to
+        // itself (issue #56). Two equal errors are Equal; mixed errors
+        // are Less (consistent with number-vs-text ordering).
+        (Value::Error(x), Value::Error(y)) => {
+            if x == y { Some(Ordering::Equal) } else { Some(Ordering::Less) }
+        }
+        (Value::Error(_), _) => Some(Ordering::Greater),
+        (_, Value::Error(_)) => Some(Ordering::Less),
         // Unreachable: arrays were collapsed to scalars above.
         (Value::Array(_), _) | (_, Value::Array(_)) => None,
     }
@@ -3310,7 +3329,14 @@ fn broadcast2(
             for (ra, rb) in a.iter().zip(b) {
                 let mut row = Vec::with_capacity(ra.len());
                 for (x, y) in ra.iter().zip(rb) {
-                    row.push(f(x, y)?);
+                    // Per-cell errors stay per-cell: emit `Value::Error`
+                    // so the spill renders the right code in every cell
+                    // (issue #56). Whole-array errors (shape mismatch
+                    // above) still propagate via `?`.
+                    row.push(match f(x, y) {
+                        Ok(v) => v,
+                        Err(e) => Value::Error(e),
+                    });
                 }
                 out.push(row);
             }
@@ -3321,7 +3347,10 @@ fn broadcast2(
             for ra in a {
                 let mut row = Vec::with_capacity(ra.len());
                 for x in ra {
-                    row.push(f(x, s)?);
+                    row.push(match f(x, s) {
+                        Ok(v) => v,
+                        Err(e) => Value::Error(e),
+                    });
                 }
                 out.push(row);
             }
@@ -3332,7 +3361,10 @@ fn broadcast2(
             for rb in b {
                 let mut row = Vec::with_capacity(rb.len());
                 for y in rb {
-                    row.push(f(s, y)?);
+                    row.push(match f(s, y) {
+                        Ok(v) => v,
+                        Err(e) => Value::Error(e),
+                    });
                 }
                 out.push(row);
             }
@@ -6202,6 +6234,36 @@ mod tests {
         // Range-with-operators inside an argument broadcasts too.
         d.set_cell_text(5, 0, "=SUM(A1:A2*10)");
         assert_eq!(d.cell_display_value(5, 0), "60");
+    }
+
+    #[test]
+    fn broadcast_per_cell_errors_spill_per_cell() {
+        // Regression for issue #56: =A1:A3/0 used to collapse to a single
+        // #DIV/0! at the anchor. Now each cell in the broadcast result
+        // is its own per-cell #DIV/0! (Excel behavior).
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "10");
+        d.set_cell_text(1, 0, "20");
+        d.set_cell_text(2, 0, "30");
+        d.set_cell_text(0, 2, "=A1:A3/0");
+        // The spill renders per-cell #DIV/0! at every spilled cell.
+        assert_eq!(d.cell_display_value(0, 2), "#DIV/0!");
+        assert_eq!(d.cell_display_value(1, 2), "#DIV/0!");
+        assert_eq!(d.cell_display_value(2, 2), "#DIV/0!");
+    }
+
+    #[test]
+    fn broadcast_mixed_errors_spill_per_cell() {
+        // A mixed broadcast: 10/0 = #DIV/0!, 20/2 = 10. Per-cell errors
+        // don't poison the whole expression.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "10");
+        d.set_cell_text(1, 0, "20");
+        d.set_cell_text(0, 1, "0");
+        d.set_cell_text(1, 1, "2");
+        d.set_cell_text(0, 2, "=A1:A2/B1:B2");
+        assert_eq!(d.cell_display_value(0, 2), "#DIV/0!");
+        assert_eq!(d.cell_display_value(1, 2), "10");
     }
 
     #[test]
