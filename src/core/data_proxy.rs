@@ -3986,7 +3986,15 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
             let idx = match fargs.get(1) {
                 Some(a) => {
                     let i = a.to_scalar().as_number();
-                    if i < 1.0 || (i as usize) > grid.first().map_or(0, Vec::len) {
+                    // Reject non-finite (NaN / ±inf) up front: a `NaN as
+                    // usize` saturates to 0, which would slip past
+                    // `i < 1.0` and trigger `0_usize - 1` integer
+                    // underflow on the next line (issue #55). `is_finite`
+                    // catches NaN, +inf, and -inf uniformly.
+                    if !i.is_finite()
+                        || i < 1.0
+                        || (i as usize) > grid.first().map_or(0, Vec::len)
+                    {
                         return Err(EvalErr::Value);
                     }
                     i as usize - 1
@@ -6173,6 +6181,25 @@ mod tests {
         assert_eq!(eval_with(&cells, "=INDEX(SORT(A1:B3, 2, -1), 1, 1)"), "c");
         // sort_index out of range is #VALUE!.
         assert_eq!(eval_with(&cells, "=SORT(A1:B3, 5)"), "#VALUE!");
+    }
+
+    #[test]
+    fn sort_rejects_non_finite_sort_index() {
+        // Regression for issue #55: a non-finite sort_index used to
+        // pass the `i < 1.0` check (NaN < 1.0 is false), saturate to
+        // 0 via `as usize`, and then underflow on the `0_usize - 1`
+        // line — debug-panicking and out-of-bounds in release.
+        // The user-side path: =SORT(A1:B3, B1) where B1 is "NaN"
+        // (a plausible action — looking up the sort column from
+        // another cell).
+        let cells: Vec<(usize, usize, &str)> = vec![
+            (0, 0, "b"), (0, 1, "NaN"),
+            (1, 0, "c"),
+            (2, 0, "a"),
+        ];
+        // Per-cell parse of "NaN" → f64::NAN, which should now be
+        // caught by the `is_finite()` guard and surfaced as #VALUE!.
+        assert_eq!(eval_with(&cells, "=SORT(A1:A3, B1)"), "#VALUE!");
     }
 
     #[test]
