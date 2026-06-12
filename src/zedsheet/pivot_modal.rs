@@ -34,6 +34,16 @@ struct PivotState {
     cols: Vec<usize>,
     value: Option<usize>,
     agg: Agg,
+    /// Page-level filters (issue #58). Each entry is a field index with
+    /// the set of values currently checked (all-checked = "All", which
+    /// is modeled as an empty list at the engine layer). The chip UI
+    /// is identical to the other zones; the save handler inverts the
+    /// "checked" set into the engine's `selected_values` form.
+    filters: Vec<usize>,
+    /// Last set of source unique values per filter field, so the
+    /// checkbox list is stable across re-renders. Cached lazily by
+    /// reading the source's header row + the field's column.
+    filter_uniques: std::collections::HashMap<usize, Vec<String>>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -42,6 +52,8 @@ enum Zone {
     Rows,
     Columns,
     Values,
+    /// Page-level Filters zone (issue #58).
+    Filters,
 }
 
 impl Zone {
@@ -50,6 +62,7 @@ impl Zone {
             Zone::Rows => "Rows",
             Zone::Columns => "Columns",
             Zone::Values => "Values",
+            Zone::Filters => "Filters",
         }
     }
     fn attr(self) -> &'static str {
@@ -57,6 +70,7 @@ impl Zone {
             Zone::Rows => "rows",
             Zone::Columns => "cols",
             Zone::Values => "values",
+            Zone::Filters => "filters",
         }
     }
 }
@@ -96,6 +110,7 @@ pub(crate) fn pivot_modal_html() -> String {
                             <button class="zs-pivot-zone" data-zone="rows" style="flex:1;padding:3px;cursor:pointer;">Rows</button>
                             <button class="zs-pivot-zone" data-zone="cols" style="flex:1;padding:3px;cursor:pointer;">Columns</button>
                             <button class="zs-pivot-zone" data-zone="values" style="flex:1;padding:3px;cursor:pointer;">Values</button>
+                            <button class="zs-pivot-zone" data-zone="filters" style="flex:1;padding:3px;cursor:pointer;">Filters</button>
                         </div>
                         <div class="zs-pivot-zones" style="border:1px solid #e6e6e6;border-radius:4px;padding:6px;min-height:120px;"></div>
                         <div style="margin-top:6px;">
@@ -132,7 +147,10 @@ fn render_chips(
                 if let Some(bel) = bel {
                     if let Some(zone_attr) = bel.get_attribute("data-zone") {
                         let active = match (zone_attr.as_str(), state.target_zone) {
-                            ("rows", Zone::Rows) | ("cols", Zone::Columns) | ("values", Zone::Values) => true,
+                            ("rows", Zone::Rows)
+                            | ("cols", Zone::Columns)
+                            | ("values", Zone::Values)
+                            | ("filters", Zone::Filters) => true,
                             _ => false,
                         };
                         let _ = bel.unchecked_ref::<HtmlElement>().style().set_property(
@@ -147,7 +165,7 @@ fn render_chips(
 
     // Available: any field not currently in a zone.
     let mut used = vec![false; headers.len()];
-    for &ci in state.rows.iter().chain(state.cols.iter()) {
+    for &ci in state.rows.iter().chain(state.cols.iter()).chain(state.filters.iter()) {
         if ci < used.len() {
             used[ci] = true;
         }
@@ -229,6 +247,21 @@ fn render_chips(
     } else {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;\">(empty)</div>");
     }
+    // Filters zone (issue #58) — same chip model as Rows/Columns. The
+    // saved_values is intentionally not shown in v1; an empty list at the
+    // engine layer means "All", and the default is empty.
+    zh.push_str(&format!(
+        "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Filters</div>"
+    ));
+    if state.filters.is_empty() {
+        zh.push_str(
+            "<div style=\"color:#bbb;font-size:11px;margin-bottom:4px;\">(empty)</div>",
+        );
+    } else {
+        for &ci in &state.filters {
+            zh.push_str(&chip_in_zone(ci, "filters", &headers[ci]));
+        }
+    }
     zones.set_inner_html(&zh);
 }
 
@@ -298,6 +331,8 @@ thread_local! {
         cols: vec![],
         value: None,
         agg: Agg::Sum,
+        filters: vec![],
+        filter_uniques: std::collections::HashMap::new(),
     });
 }
 
@@ -385,6 +420,7 @@ pub(crate) fn wire_pivot_modal(
                         "rows" => Zone::Rows,
                         "cols" => Zone::Columns,
                         "values" => Zone::Values,
+                        "filters" => Zone::Filters,
                         _ => Zone::Rows,
                     };
                 });
@@ -403,6 +439,7 @@ pub(crate) fn wire_pivot_modal(
                         let mut st = s.borrow_mut();
                         st.rows.retain(|&x| x != ci);
                         st.cols.retain(|&x| x != ci);
+                        st.filters.retain(|&x| x != ci);
                         if st.value == Some(ci) {
                             st.value = None;
                         }
@@ -425,6 +462,7 @@ pub(crate) fn wire_pivot_modal(
                         // Make sure the field is only in one zone.
                         st.rows.retain(|&x| x != ci);
                         st.cols.retain(|&x| x != ci);
+                        st.filters.retain(|&x| x != ci);
                         if st.value == Some(ci) { st.value = None; }
                         match target {
                             Zone::Rows => {
@@ -435,6 +473,14 @@ pub(crate) fn wire_pivot_modal(
                             }
                             Zone::Values => {
                                 st.value = Some(ci);
+                            }
+                            // Filters (issue #58): every field in the
+                            // Filters zone scopes which source rows are
+                            // aggregated. The user's value selections
+                            // default to "All" (empty engine-level list)
+                            // — they aren't editable in v1.
+                            Zone::Filters => {
+                                if !st.filters.contains(&ci) { st.filters.push(ci); }
                             }
                         }
                     });
@@ -546,6 +592,19 @@ pub(crate) fn wire_pivot_modal(
             // `active_for_save` (issue #52: a tab switch between Open and
             // Create pivot must not route against a stale sheet).
             let source_sheet = renderer_for_save.borrow().data.name.clone();
+            // Filters zone (issue #58): every field in `state.filters`
+            // becomes a `FilterField` with an empty `selected_values` —
+            // the engine treats empty as "All", so v1 ships with the
+            // non-filtering default. Editing the per-value checkboxes is
+            // a follow-up.
+            let filter_fields: Vec<crate::core::pivot::FilterField> = state
+                .filters
+                .iter()
+                .map(|&field_idx| crate::core::pivot::FilterField {
+                    field_idx,
+                    selected_values: vec![],
+                })
+                .collect();
             let pt = PivotTable {
                 source_range: range,
                 source_sheet,
@@ -553,6 +612,7 @@ pub(crate) fn wire_pivot_modal(
                 col_fields: state.cols.clone(),
                 value_field: v,
                 agg: state.agg,
+                filter_fields,
                 output_sheet: output,
             };
 
@@ -579,6 +639,8 @@ pub(crate) fn wire_pivot_modal(
                     cols: vec![],
                     value: None,
                     agg: Agg::Sum,
+                    filters: vec![],
+                    filter_uniques: std::collections::HashMap::new(),
                 };
             });
         });

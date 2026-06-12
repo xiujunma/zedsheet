@@ -31,6 +31,7 @@ fn pt(source: &str, row_fields: Vec<usize>, col_fields: Vec<usize>, value: usize
         col_fields,
         value_field: value,
         agg,
+        filter_fields: vec![],
         output_sheet: "Pivot1".into(),
     }
 }

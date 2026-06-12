@@ -70,10 +70,31 @@ pub struct PivotTable {
     /// The single value field for MVP (issue #35).
     pub value_field: usize,
     pub agg: Agg,
+    /// Page-level filters (issue #58): a field placed in the Filters zone
+    /// scopes which source rows are aggregated. Each entry holds the field
+    /// index and the user's selected values — when the list is empty, no
+    /// filter applies (Excel's "All" / "(Multiple Items)" default). The
+    /// default-value deserializer (empty vec) keeps old workbooks
+    /// loadable.
+    #[serde(default)]
+    pub filter_fields: Vec<FilterField>,
     /// Name of the output sheet this pivot is currently rendered on. The
     /// renderer updates this when the user Refreshes (in MVP, the output
     /// sheet's name never changes — Refresh overwrites in place).
     pub output_sheet: String,
+}
+
+/// A page-level filter on the source (issue #58). The selected values are
+/// stored as the strings the user sees in the source cells (so a refresh
+/// after the user changes a label picks up the new value list).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterField {
+    /// Column index (relative to the source range) the filter applies to.
+    pub field_idx: usize,
+    /// The values the user has selected. Empty = "All" (no filter).
+    /// Stored as `String` rather than `Value` so dates and numbers survive
+    /// JSON round-trip with their display form.
+    pub selected_values: Vec<String>,
 }
 
 impl PivotTable {
@@ -212,11 +233,37 @@ pub struct PivotResult {
 pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, String> {
     let (r0, c0, r1, _c1) = pt.validate(source)?;
 
+    // Build the filter predicate once (issue #58). A row passes when every
+    // active filter's value is in its `selected_values` list — an empty
+    // `selected_values` is the "All" / "(Multiple Items)" default and
+    // matches every row.
+    let filter_pred: Box<dyn Fn(usize) -> bool> = if pt.filter_fields.is_empty() {
+        Box::new(|_| true)
+    } else {
+        // Pre-compute the raw text for each filter field, per row, so the
+        // predicate is a cheap pointer comparison inside the loop.
+        let filters: Vec<(usize, std::collections::HashSet<String>)> = pt
+            .filter_fields
+            .iter()
+            .map(|f| (c0 + f.field_idx, f.selected_values.iter().cloned().collect()))
+            .collect();
+        Box::new(move |ri: usize| {
+            filters.iter().all(|(ci, allowed)| {
+                // An empty `allowed` set is the "All" sentinel — passes.
+                allowed.is_empty() || allowed.contains(&source.cell_raw_value(ri, *ci))
+            })
+        })
+    };
+
     // First pass: bucket values by (row_key, col_key). `Vec<f64>` per bucket
     // (text that doesn't parse as a number is dropped from numeric aggs;
-    // Count counts non-blank entries).
+    // Count counts non-blank entries). Rows that fail the filter predicate
+    // are skipped entirely (issue #58).
     let mut buckets: HashMap<(Key, Key), Vec<Option<f64>>> = HashMap::new();
     for ri in (r0 + 1)..=r1 {
+        if !filter_pred(ri) {
+            continue;
+        }
         let rk = make_key(source, ri, c0, &pt.row_fields);
         let ck = make_key(source, ri, c0, &pt.col_fields);
         let raw = source.cell_raw_value(ri, c0 + pt.value_field);
@@ -224,12 +271,15 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         buckets.entry((rk, ck)).or_default().push(v);
     }
 
-    // Second pass: distinct keys in first-appearance order.
+    // Second pass: distinct keys in first-appearance order. Same filter.
     let mut row_keys: Vec<Key> = Vec::new();
     let mut col_keys: Vec<Key> = Vec::new();
     let mut seen_r: HashSet<Key> = HashSet::new();
     let mut seen_c: HashSet<Key> = HashSet::new();
     for ri in (r0 + 1)..=r1 {
+        if !filter_pred(ri) {
+            continue;
+        }
         let rk = make_key(source, ri, c0, &pt.row_fields);
         let ck = make_key(source, ri, c0, &pt.col_fields);
         if seen_r.insert(rk.clone()) {
@@ -564,6 +614,7 @@ mod tests {
             col_fields,
             value_field: value,
             agg,
+            filter_fields: vec![],
             output_sheet: "Pivot1".into(),
         }
     }
@@ -663,6 +714,123 @@ mod tests {
         assert_eq!(r.row_totals, vec![Some(60.0)]);
         assert_eq!(r.col_totals, vec![Some(60.0)]);
         assert_eq!(r.grand_total, Some(60.0));
+    }
+
+    // -----------------------------------------------------------------
+    // Page-level filter (issue #58)
+    // -----------------------------------------------------------------
+
+    /// Helper: a pivot with one filter field on column `field_idx`,
+    /// `selected_values` as the "currently checked" set. Empty list means
+    /// "All" (every row passes).
+    fn pt_filtered(
+        source: &str,
+        row_fields: Vec<usize>,
+        col_fields: Vec<usize>,
+        value: usize,
+        agg: Agg,
+        field_idx: usize,
+        selected_values: Vec<&str>,
+    ) -> PivotTable {
+        let mut p = pt(source, row_fields, col_fields, value, agg);
+        p.filter_fields.push(FilterField {
+            field_idx,
+            selected_values: selected_values.into_iter().map(String::from).collect(),
+        });
+        p
+    }
+
+    #[test]
+    fn filter_with_no_selected_values_passes_all_rows() {
+        // Empty `selected_values` is the "All" sentinel — every row passes.
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Amount"],
+            &["North", "10"],
+            &["South", "20"],
+        ]);
+        let p = pt_filtered(
+            "S!A1:B3",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+            0,
+            vec![],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.grand_total, Some(30.0));
+        assert_eq!(r.row_keys.len(), 2);
+    }
+
+    #[test]
+    fn filter_excludes_rows_not_in_selected_values() {
+        // Filter Region ∈ {North} — South rows drop out.
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Amount"],
+            &["North", "10"],
+            &["South", "20"],
+            &["North", "5"],
+        ]);
+        let p = pt_filtered(
+            "S!A1:B4",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+            0,
+            vec!["North"],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.grand_total, Some(15.0));
+        // Only the North row_key survives.
+        assert_eq!(r.row_keys.len(), 1);
+        assert_eq!(key_to_display(&r.row_keys[0]), "North");
+    }
+
+    #[test]
+    fn filter_grand_total_excludes_filtered_rows() {
+        // The grand total must also reflect the filter — not the unfiltered sum.
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Amount"],
+            &["North", "10"],
+            &["South", "20"],
+            &["East", "30"],
+            &["West", "40"],
+        ]);
+        let p = pt_filtered(
+            "S!A1:B5",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+            0,
+            vec!["North", "South"],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.grand_total, Some(30.0));
+    }
+
+    #[test]
+    fn filter_with_no_matching_values_yields_empty_body() {
+        // The filter selection excludes every row — body cells are None,
+        // but the row_keys still reflect the surviving source.
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Amount"],
+            &["North", "10"],
+        ]);
+        let p = pt_filtered(
+            "S!A1:B2",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+            0,
+            vec!["Mars"],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.grand_total, None);
+        // No row_keys survive — the only source row failed the filter.
+        assert_eq!(r.row_keys.len(), 0);
     }
 
     #[test]
@@ -768,6 +936,7 @@ mod tests {
             col_fields: vec![2],
             value_field: 3,
             agg: Agg::Avg,
+            filter_fields: vec![],
             output_sheet: "Pivot1".into(),
         };
         let s = serde_json::to_string(&p).unwrap();

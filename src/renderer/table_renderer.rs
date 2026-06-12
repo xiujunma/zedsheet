@@ -2841,6 +2841,7 @@ mod tests {
             col_fields,
             value_field,
             agg,
+            filter_fields: vec![],
             output_sheet: output_sheet.into(),
         }
     }
