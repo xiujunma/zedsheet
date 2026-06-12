@@ -129,24 +129,23 @@ fn refresh_recomputes_against_modified_source() {
 }
 
 #[test]
-fn output_sheet_name_collision_keeps_pivot_spec_on_source() {
-    // When the caller passes an output_sheet name that already exists, the
-    // spec is still appended to the source's `pivots` list (the renderer
-    // decides whether to overwrite). This is what the renderer's
-    // `add_pivot` does: spec on source, output on a new or replaced
-    // sheet.
+fn spec_on_source_round_trips_through_get_data_set_data() {
+    // A pivot spec on the source sheet survives a `get_data` → `set_data`
+    // round-trip (the same path the JS API uses for `get_data`/`load_data`).
+    // The renderer's `install_pivot_into_registry` relies on this — it
+    // pushes the spec onto the source so the registry persists it; the
+    // round-trip below is what proves the persistence is real.
     let mut src = sheet_from_rows("Sales", &[
         &["Name", "Score"],
         &["Alice", "10"],
     ]);
-    let mut out = DataProxy::new("Pivot1");
-    out.set_cell_text(0, 0, "old");
-    let _ = out; // (silence unused)
     let p = pt("Sales!A1:B2", vec![0], vec![], 1, Agg::Sum);
     src.pivots.push(p);
 
-    // Just confirm the spec is on the source after the cycle.
-    assert_eq!(src.pivots[0].output_sheet, "Pivot1");
-    // The pivot spec is now visible to the renderer's Refresh path.
-    assert!(src.pivots.iter().any(|p| p.output_sheet == "Pivot1"));
+    let json = src.get_data_json();
+    let v: serde_json::Value = serde_json::from_str(&json).expect("get_data JSON parses");
+    let mut back = DataProxy::new("Sales");
+    back.set_data(v);
+    assert_eq!(back.pivots.len(), 1);
+    assert_eq!(back.pivots[0].output_sheet, "Pivot1");
 }

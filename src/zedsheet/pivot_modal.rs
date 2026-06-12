@@ -347,7 +347,12 @@ pub(crate) fn wire_pivot_modal(
     modal: web_sys::Element,
     renderer: &SharedRenderer,
     sheets: &SheetsRegistry,
-    active: usize,
+    // `active` is shared by Rc so the save handler can read the *current*
+    // active index at click time. If we captured a plain `usize` at wire
+    // time instead, switching tabs between Open and Create pivot would
+    // route the pivot against the wrong sheet and clobber the original
+    // source (issue #52).
+    active: ActiveSheet,
     sync: SyncFn,
     rerender_tabs: OpenHandle,
 ) {
@@ -482,6 +487,7 @@ pub(crate) fn wire_pivot_modal(
         let sheets_for_save = sheets.clone();
         let sync_for_save = sync.clone();
         let tabs_for_save = rerender_tabs.clone();
+        let active_for_save = active.clone();
         let mut el4: Element = Element::from(modal_node.clone());
         el4.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
@@ -528,6 +534,10 @@ pub(crate) fn wire_pivot_modal(
                 // replaces by name). We still pass through.
             }
 
+            // Read the live active index here, not the one captured at
+            // wire time — switching tabs between Open and Create pivot
+            // must not route against a stale sheet (issue #52).
+            let live_active = *active_for_save.borrow();
             let source_sheet = renderer_for_save.borrow().data.name.clone();
             let pt = PivotTable {
                 source_range: range,
@@ -541,7 +551,7 @@ pub(crate) fn wire_pivot_modal(
 
             {
                 let mut r = renderer_for_save.borrow_mut();
-                r.add_pivot(pt, &sheets_for_save, active);
+                r.add_pivot(pt, &sheets_for_save, live_active);
                 r.render();
             }
             // Re-render the bottom-bar tabs so the new sheet appears.

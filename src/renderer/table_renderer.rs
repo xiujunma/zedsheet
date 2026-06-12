@@ -2163,7 +2163,9 @@ impl TableRenderer {
         if self.data.is_read_only() {
             return;
         }
-        // 1. Snapshot the current workbook for undo (issue #35).
+        // 1. Snapshot the current workbook for undo (issue #35). The snapshot
+        //    captures the pre-pivot source WITHOUT the spec, so an undo
+        //    restores the user's original view.
         let (saved_sheets, saved_active) = {
             let s = sheets.borrow();
             (s.clone(), active)
@@ -2199,24 +2201,13 @@ impl TableRenderer {
             crate::core::pivot::materialize(&pt, &result, &headers, &output_name);
         out_sheet.set_read_only(true);
         out_sheet.set_sheets(sheets);
-        // 4. Persist current data, push output, switch active, swap renderer's data.
-        let cur = active;
-        let new_idx = {
-            let mut s = sheets.borrow_mut();
-            // If an output sheet with this name already exists, replace it.
-            if let Some(existing_idx) = s.iter().position(|d| d.name == output_name) {
-                s[cur] = self.data.clone();
-                s[existing_idx] = out_sheet;
-                existing_idx
-            } else {
-                s[cur] = self.data.clone();
-                s.push(out_sheet);
-                s.len() - 1
-            }
-        };
-        // 5. Append the pivot spec to the *source* sheet's `pivots` list so it
-        //    survives workbook round-trip and so Refresh can find it.
-        self.data.pivots.push(pt);
+        // 4. Install: spec on the source, output appended/replaced. The spec
+        //    must land on the REGISTRY's source entry, not on the renderer's
+        //    transient self.data, which is replaced with the output below —
+        //    otherwise Refresh and save/load lose the spec (issue #50).
+        let new_idx =
+            install_pivot_into_registry(sheets, active, self.data.clone(), pt, out_sheet);
+        // 5. Switch the renderer's active data to the new output.
         let new_data = sheets.borrow()[new_idx].clone();
         self.set_data(new_data);
         self.render();
@@ -2615,6 +2606,44 @@ fn pivot_alert(msg: &str) {
     }
 }
 
+/// Install a freshly-materialized pivot output into the workbook's sheet
+/// registry (issue #35 / #50). The pivot spec is appended to the source
+/// sheet's `pivots` list so the spec survives workbook round-trip and is
+/// discoverable by Refresh. Returns the registry index of the new (or
+/// replaced) output sheet.
+///
+/// `source` is the source `DataProxy` snapshot the caller was looking at
+/// when Create was clicked (the renderer's active data). The function does
+/// NOT read the source from `sheets[cur]` — passing it in keeps the spec
+/// attached to the caller's view, even if `cur` is stale relative to the
+/// registry (issue #52, separate fix).
+fn install_pivot_into_registry(
+    sheets: &SheetsRegistry,
+    cur: usize,
+    source: DataProxy,
+    pt: crate::core::pivot::PivotTable,
+    out_sheet: DataProxy,
+) -> usize {
+    let output_name = out_sheet.name.clone();
+    // Build a source snapshot WITH the spec appended. This is the entry
+    // that gets written to s[cur] so Refresh can find it. Pushing onto
+    // self.data instead would lose the spec at the very next set_data
+    // (which replaces self.data with the output sheet) — that was the bug
+    // in add_pivot before this fix (issue #50).
+    let mut updated_source = source;
+    updated_source.pivots.push(pt);
+    let mut s = sheets.borrow_mut();
+    if let Some(existing_idx) = s.iter().position(|d| d.name == output_name) {
+        s[cur] = updated_source;
+        s[existing_idx] = out_sheet;
+        existing_idx
+    } else {
+        s[cur] = updated_source;
+        s.push(out_sheet);
+        s.len() - 1
+    }
+}
+
 /// Map a canvas pixel `p` (already past the `header` gutter) to a track
 /// (row or column) index, accounting for frozen panes.
 ///
@@ -2716,9 +2745,269 @@ fn replace_ci(haystack: &str, find: &str, replace: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        paste_cell_plan, replace_ci, track_at, track_offset, transpose_clipboard, CellWrite,
-        ClipboardData, DataCell, PasteMode,
+        install_pivot_into_registry, paste_cell_plan, replace_ci, track_at, track_offset,
+        transpose_clipboard, CellWrite, ClipboardData, DataCell, PasteMode,
     };
+    use crate::core::data_proxy::{DataProxy, SheetsRegistry};
+    use crate::core::pivot::{compute, materialize, read_field_headers, Agg, PivotTable};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Build a registry with one source sheet holding the given rows and wire
+    /// every sheet's back-reference to it. Returns the source DataProxy and
+    /// the registry; the caller must hold the registry Rc alive.
+    fn source_only_workbook(name: &str, rows: &[&[&str]]) -> (DataProxy, SheetsRegistry) {
+        let mut src = DataProxy::new(name);
+        for (ri, row) in rows.iter().enumerate() {
+            for (ci, cell) in row.iter().enumerate() {
+                if !cell.is_empty() {
+                    src.set_cell_text(ri, ci, cell);
+                }
+            }
+        }
+        let sheets: SheetsRegistry = Rc::new(RefCell::new(vec![src.clone()]));
+        for d in sheets.borrow_mut().iter_mut() {
+            d.set_sheets(&sheets);
+        }
+        src.set_sheets(&sheets);
+        (src, sheets)
+    }
+
+    /// Build a pivot spec with the given source range and field layout.
+    fn pt_for(
+        source_range: &str,
+        source_sheet: &str,
+        output_sheet: &str,
+        row_fields: Vec<usize>,
+        col_fields: Vec<usize>,
+        value_field: usize,
+        agg: Agg,
+    ) -> PivotTable {
+        PivotTable {
+            source_range: source_range.into(),
+            source_sheet: source_sheet.into(),
+            row_fields,
+            col_fields,
+            value_field,
+            agg,
+            output_sheet: output_sheet.into(),
+        }
+    }
+
+    #[test]
+    fn install_pivot_puts_spec_on_registry_source() {
+        // Issue #50: the spec must land on the source sheet in the registry,
+        // not on the renderer's transient self.data — otherwise Refresh and
+        // workbook round-trip can't find it.
+        let (src, sheets) = source_only_workbook(
+            "Sales",
+            &[
+                &["Region", "Amount"],
+                &["North", "100"],
+                &["North", "200"],
+                &["South", "50"],
+            ],
+        );
+
+        let pt = pt_for(
+            "Sales!A1:B4",
+            "Sales",
+            "Pivot1",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+        );
+        let result = compute(&src, &pt).unwrap();
+        let headers = read_field_headers(&src, 0, 0, 1);
+        let mut out = materialize(&pt, &result, &headers, "Pivot1");
+        out.set_read_only(true);
+        out.set_sheets(&sheets);
+
+        let new_idx = install_pivot_into_registry(&sheets, 0, src.clone(), pt.clone(), out);
+
+        // The source in the registry has the spec, so Refresh / save/load work.
+        let after = sheets.borrow();
+        assert_eq!(after.len(), 2, "output should be appended");
+        assert_eq!(new_idx, 1);
+        assert_eq!(after[0].pivots.len(), 1, "spec must land on the source");
+        assert_eq!(after[0].pivots[0].output_sheet, "Pivot1");
+        assert_eq!(after[0].pivots[0].row_fields, vec![0]);
+        assert_eq!(after[0].pivots[0].value_field, 1);
+        assert_eq!(after[0].pivots[0].agg, Agg::Sum);
+        // Source's cells and name are otherwise unchanged.
+        assert_eq!(after[0].name, "Sales");
+        assert_eq!(after[0].get_cell_text(1, 0), "North");
+        // Output lands at new_idx.
+        assert_eq!(after[new_idx].name, "Pivot1");
+        assert!(after[new_idx].is_read_only());
+    }
+
+    #[test]
+    fn install_pivot_replaces_existing_output() {
+        // The output name already exists in the registry (a different sheet
+        // than the source). The function overwrites that sheet in place and
+        // still appends the spec to the source.
+        let (mut src, sheets) = source_only_workbook(
+            "Sales",
+            &[&["Region", "Amount"], &["North", "100"], &["South", "50"]],
+        );
+        // Add a stale "Pivot1" sheet at index 1 that should be overwritten.
+        let stale = DataProxy::new("Pivot1");
+        sheets.borrow_mut().push(stale);
+        for d in sheets.borrow_mut().iter_mut() {
+            d.set_sheets(&sheets);
+        }
+        src.set_sheets(&sheets);
+
+        let pt = pt_for(
+            "Sales!A1:B3",
+            "Sales",
+            "Pivot1",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+        );
+        let result = compute(&src, &pt).unwrap();
+        let headers = read_field_headers(&src, 0, 0, 1);
+        let mut out = materialize(&pt, &result, &headers, "Pivot1");
+        out.set_read_only(true);
+        out.set_sheets(&sheets);
+
+        let new_idx = install_pivot_into_registry(&sheets, 0, src.clone(), pt.clone(), out);
+
+        let after = sheets.borrow();
+        assert_eq!(after.len(), 2, "no append — the existing sheet was replaced");
+        assert_eq!(new_idx, 1);
+        assert_eq!(after[0].pivots.len(), 1, "source still gets the spec");
+        assert_eq!(after[1].name, "Pivot1");
+        assert!(after[1].is_read_only());
+        // The output should hold the fresh materialization, not the stale one.
+        assert_eq!(after[1].get_cell_text(0, 0), "Region");
+    }
+
+    #[test]
+    fn install_pivot_does_not_mutate_caller_source() {
+        // The helper receives `source` by value but should not modify the
+        // caller's clone — the caller's view of the source is independent
+        // of the registry's view. This matters for the renderer's
+        // pivot_undo record, which keeps its own pre-pivot snapshot.
+        let (src, sheets) = source_only_workbook(
+            "Sales",
+            &[&["Region", "Amount"], &["North", "100"], &["South", "50"]],
+        );
+        let src_pivots_before = src.pivots.len();
+
+        let pt = pt_for(
+            "Sales!A1:B3",
+            "Sales",
+            "Pivot1",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+        );
+        let result = compute(&src, &pt).unwrap();
+        let headers = read_field_headers(&src, 0, 0, 1);
+        let out = materialize(&pt, &result, &headers, "Pivot1");
+
+        let _ = install_pivot_into_registry(&sheets, 0, src.clone(), pt, out);
+
+        // Caller's source is unchanged — the registry got a separate, spec-
+        // bearing clone.
+        assert_eq!(src.pivots.len(), src_pivots_before);
+    }
+
+    #[test]
+    fn install_pivot_routes_to_the_active_index_it_was_given() {
+        // Issue #52: wire_pivot_modal used to capture `active: usize` at
+        // wire time, so if the user switched tabs between Open and Create
+        // pivot the spec was routed against the wrong source. The fix
+        // makes `active` an `Rc<RefCell<usize>>` that the save handler
+        // re-reads. This test documents the model contract: the install
+        // helper, called with the *current* (live) active value, routes
+        // the spec to that sheet — not to a stale one.
+        //
+        // We simulate the exact shape of the bug: the workbook has two
+        // sheets, the user opens the modal while on Sheet1 (active=0),
+        // switches to Sheet2 (active=1), then clicks Create. The install
+        // helper must put the spec on Sheet2.
+        let (src1, sheets) = source_only_workbook(
+            "Sheet1",
+            &[&["Region", "Amount"], &["North", "100"], &["South", "50"]],
+        );
+        // Add a second sheet at index 1 with its own data, so each pivot
+        // has a real source to aggregate against.
+        let mut src2 = DataProxy::new("Sheet2");
+        src2.set_cell_text(0, 0, "Item");
+        src2.set_cell_text(0, 1, "Qty");
+        src2.set_cell_text(1, 0, "A");
+        src2.set_cell_text(1, 1, "7");
+        src2.set_cell_text(2, 0, "B");
+        src2.set_cell_text(2, 1, "3");
+        sheets.borrow_mut().push(src2.clone());
+        for d in sheets.borrow_mut().iter_mut() {
+            d.set_sheets(&sheets);
+        }
+        let active: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+
+        // First pivot: active=0 → spec lands on Sheet1.
+        let pt1 = pt_for(
+            "Sheet1!A1:B3",
+            "Sheet1",
+            "P_from_1",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+        );
+        let r1 = compute(&src1, &pt1).unwrap();
+        let h1 = read_field_headers(&src1, 0, 0, 1);
+        let out1 = materialize(&pt1, &r1, &h1, "P_from_1");
+        let _ = install_pivot_into_registry(
+            &sheets,
+            *active.borrow(),
+            src1.clone(),
+            pt1,
+            out1,
+        );
+
+        // User switches tabs — the wiring re-reads the live active.
+        *active.borrow_mut() = 1;
+
+        // Second pivot: active=1 → spec lands on Sheet2.
+        let src2 = sheets.borrow()[1].clone();
+        let pt2 = pt_for(
+            "Sheet2!A1:B3",
+            "Sheet2",
+            "P_from_2",
+            vec![0],
+            vec![],
+            1,
+            Agg::Sum,
+        );
+        let r2 = compute(&src2, &pt2).unwrap();
+        let h2 = read_field_headers(&src2, 0, 0, 1);
+        let out2 = materialize(&pt2, &r2, &h2, "P_from_2");
+        let _ = install_pivot_into_registry(
+            &sheets,
+            *active.borrow(),
+            src2,
+            pt2,
+            out2,
+        );
+
+        // Each sheet has its own spec, routed by the active value the
+        // helper was given at the time of the call. A stale `active=0`
+        // (the original bug) would have overwritten Sheet1 with Sheet2's
+        // spec and lost Sheet1's.
+        let after = sheets.borrow();
+        assert_eq!(after[0].pivots.len(), 1);
+        assert_eq!(after[0].pivots[0].output_sheet, "P_from_1");
+        assert_eq!(after[1].pivots.len(), 1);
+        assert_eq!(after[1].pivots[0].output_sheet, "P_from_2");
+    }
 
     #[test]
     fn paste_cell_plan_picks_the_right_write_per_mode() {

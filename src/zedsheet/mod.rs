@@ -781,7 +781,10 @@ impl ZedSheet {
                 inner.clone(),
                 &renderer,
                 &sheets,
-                *active.borrow(),
+                // Pass the shared active index, not a snapshot — the modal
+                // re-reads it at save time so tab switches between Open and
+                // Create pivot don't route against a stale source (issue #52).
+                active.clone(),
                 sync.clone(),
                 tabs_re_render.clone(),
             );
