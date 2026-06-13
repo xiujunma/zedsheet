@@ -184,8 +184,9 @@ fn render_chips(
         any = true;
         html.push_str(&format!(
             "<span class=\"zs-pivot-chip zs-pivot-available-chip\" data-field=\"{}\" \
+              draggable=\"true\" \
               style=\"display:inline-block;padding:2px 8px;margin:2px;border:1px solid #ccc;\
-              border-radius:10px;background:#f7f7f7;cursor:pointer;\">{}</span>",
+              border-radius:10px;background:#f7f7f7;cursor:grab;\">{}</span>",
             i,
             esc(h),
         ));
@@ -268,8 +269,9 @@ fn render_chips(
 fn chip_in_zone(ci: usize, zone: &str, header: &str) -> String {
     format!(
         "<span class=\"zs-pivot-chip zs-pivot-zone-chip\" data-field=\"{}\" data-zone=\"{}\" \
+          draggable=\"true\" \
           style=\"display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;\
-          border:1px solid #ccc;border-radius:10px;background:#f7f7f7;\">\
+          border:1px solid #ccc;border-radius:10px;background:#f7f7f7;cursor:grab;\">\
           <span>{}</span>\
           <span class=\"zs-pivot-remove\" data-field=\"{}\" data-zone=\"{}\" \
             style=\"cursor:pointer;color:#999;font-weight:bold;\">×</span>\
@@ -523,6 +525,74 @@ pub(crate) fn wire_pivot_modal(
             let state = STATE.with(|s| s.borrow().clone());
             let headers = read_source_headers(&renderer_for_input.borrow().data, &state);
             render_chips(&modal_for_input, &state, &headers);
+        });
+    }
+
+    // HTML5 drag-and-drop (issue #57). A drop on `.zs-pivot-available`
+    // returns the chip to the available list; a drop on `.zs-pivot-zones`
+    // moves it to whichever zone is the current target. The
+    // click-to-move path stays intact — drag is the upgrade.
+    {
+        let modal_for_drag = modal_node.clone();
+        let renderer_for_drag = renderer.clone();
+        let mut el4: Element = Element::from(modal_node.clone());
+        el4.add_event_listener("dragstart", move |event: web_sys::Event| {
+            let Some(target) = event.target() else { return };
+            let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+            // The dragstart fires on the chip span (or its inner label);
+            // climb to the closest chip.
+            let Some(chip) = elx.closest(".zs-pivot-chip").ok().flatten() else { return };
+            let Some(field_str) = chip.get_attribute("data-field") else { return };
+            let de: web_sys::DataTransfer = event.unchecked_into();
+            let _ = de.set_data("text/plain", &field_str);
+        });
+        el4.add_event_listener("dragover", move |event: web_sys::Event| {
+            // dragover needs preventDefault to enable drop, on every
+            // potential target.
+            event.prevent_default();
+        });
+        el4.add_event_listener("drop", move |event: web_sys::Event| {
+            event.prevent_default();
+            let Some(target) = event.target() else { return };
+            let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+            // The drop's dataTransfer carries the field_idx string.
+            let de: web_sys::DataTransfer = event.unchecked_into();
+            let field_str = de.get_data("text/plain").unwrap_or_default();
+            let Ok(ci) = field_str.parse::<usize>() else { return };
+            // The actual drop target — chip moved here. Find which
+            // container the drop landed in.
+            let in_available = elx.closest(".zs-pivot-available").ok().flatten().is_some();
+            let in_zones = elx.closest(".zs-pivot-zones").ok().flatten().is_some();
+            // Move the field:
+            //   drop on available → remove from all zones
+            //   drop on zones     → move to the current target zone
+            STATE.with(|s| {
+                let mut st = s.borrow_mut();
+                st.rows.retain(|&x| x != ci);
+                st.cols.retain(|&x| x != ci);
+                st.filters.retain(|&x| x != ci);
+                if st.value == Some(ci) { st.value = None; }
+                if in_zones && !in_available {
+                    let target = st.target_zone;
+                    match target {
+                        Zone::Rows => {
+                            if !st.rows.contains(&ci) { st.rows.push(ci); }
+                        }
+                        Zone::Columns => {
+                            if !st.cols.contains(&ci) { st.cols.push(ci); }
+                        }
+                        Zone::Values => {
+                            st.value = Some(ci);
+                        }
+                        Zone::Filters => {
+                            if !st.filters.contains(&ci) { st.filters.push(ci); }
+                        }
+                    }
+                }
+            });
+            let state = STATE.with(|s| s.borrow().clone());
+            let headers = read_source_headers(&renderer_for_drag.borrow().data, &state);
+            render_chips(&modal_for_drag, &state, &headers);
         });
     }
 
