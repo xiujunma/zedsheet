@@ -67,9 +67,18 @@ pub struct PivotTable {
     pub row_fields: Vec<usize>,
     /// Column indexes used as column labels. Empty = single "Total" column.
     pub col_fields: Vec<usize>,
-    /// The single value field for MVP (issue #35).
+    /// The single value field for the original MVP (issue #35). Kept for
+    /// backward-compat with old workbooks — when `value_fields` is empty,
+    /// the engine uses `{ field: value_field, agg }` as a one-element
+    /// list. When `value_fields` is non-empty, it is authoritative.
     pub value_field: usize,
     pub agg: Agg,
+    /// Multiple value fields (issue #59). Each entry is one (field, agg)
+    /// pair; the cross-tab body widens by `len(value_fields)`. Empty
+    /// means "use the legacy `value_field`/`agg` above". The
+    /// default-value deserializer keeps old workbooks loadable.
+    #[serde(default)]
+    pub value_fields: Vec<ValueField>,
     /// Page-level filters (issue #58): a field placed in the Filters zone
     /// scopes which source rows are aggregated. Each entry holds the field
     /// index and the user's selected values — when the list is empty, no
@@ -84,6 +93,17 @@ pub struct PivotTable {
     pub output_sheet: String,
 }
 
+/// One value field + its aggregation (issue #59). The cross-tab body
+/// widens by `len(pivot.value_fields)`: each entry gets its own
+/// column block, side-by-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValueField {
+    /// Column index (relative to the source range) to aggregate.
+    pub field: usize,
+    /// Aggregation to apply over each bucket.
+    pub agg: Agg,
+}
+
 /// A page-level filter on the source (issue #58). The selected values are
 /// stored as the strings the user sees in the source cells (so a refresh
 /// after the user changes a label picks up the new value list).
@@ -95,6 +115,23 @@ pub struct FilterField {
     /// Stored as `String` rather than `Value` so dates and numbers survive
     /// JSON round-trip with their display form.
     pub selected_values: Vec<String>,
+}
+
+impl PivotTable {
+    /// Effective list of value fields (issue #59). If `value_fields` is
+    /// non-empty, that's authoritative; otherwise we synthesize a
+    /// one-element list from the legacy `value_field`/`agg` pair so old
+    /// workbooks keep working.
+    pub fn effective_value_fields(&self) -> Vec<ValueField> {
+        if self.value_fields.is_empty() {
+            vec![ValueField {
+                field: self.value_field,
+                agg: self.agg,
+            }]
+        } else {
+            self.value_fields.clone()
+        }
+    }
 }
 
 impl PivotTable {
@@ -128,8 +165,16 @@ impl PivotTable {
                 return Err(format!("field index {ci} out of source range"));
             }
         }
-        if self.value_field > max_field {
-            return Err(format!("value field index {} out of source range", self.value_field));
+        // Validate every value field (issue #59) — both the multi-value list
+        // and the legacy single-value field, since a workbook may carry
+        // either or both.
+        for vf in self.effective_value_fields() {
+            if vf.field > max_field {
+                return Err(format!(
+                    "value field index {} out of source range",
+                    vf.field
+                ));
+            }
         }
         // Touch `source` so the borrow checker / clippy doesn't complain
         // about the unused parameter — the data may be re-read in follow-up
@@ -215,15 +260,24 @@ pub struct PivotResult {
     pub row_keys: Vec<Key>,
     /// Distinct column labels in first-appearance order. Always at least one.
     pub col_keys: Vec<Key>,
-    /// `body[row_idx][col_idx]` is the aggregated value for the
-    /// `(row_key, col_key)` bucket. `None` means the bucket was empty.
+    /// Number of value fields the result was computed with. Cached so the
+    /// materializer doesn't have to recompute `pt.effective_value_fields()`
+    /// (issue #59).
+    pub nv: usize,
+    /// `body[row_idx][v * nc + col_idx]` is the aggregated value for the
+    /// `(row_key, col_key)` bucket under value field `v`. `None` means
+    /// the bucket was empty. For `nv == 1` the inner layout is
+    /// `body[r][c]` — same as the pre-#59 single-value shape.
     pub body: Vec<Vec<Option<f64>>>,
-    /// Row grand totals: aggregate of every value whose row_key matches.
-    pub row_totals: Vec<Option<f64>>,
-    /// Column grand totals: aggregate of every value whose col_key matches.
-    pub col_totals: Vec<Option<f64>>,
-    /// Grand total: aggregate of every value in the source.
-    pub grand_total: Option<f64>,
+    /// `row_totals[row_idx][v]` — aggregate of every value in row `row_idx`
+    /// under value field `v` (any col_key).
+    pub row_totals: Vec<Vec<Option<f64>>>,
+    /// `col_totals[col_idx][v]` — aggregate of every value in col `col_idx`
+    /// under value field `v` (any row_key).
+    pub col_totals: Vec<Vec<Option<f64>>>,
+    /// `grand_total[v]` — aggregate of every value in the source under
+    /// value field `v`.
+    pub grand_total: Vec<Option<f64>>,
 }
 
 /// Compute the cross-tab for a given `PivotTable` against a `DataProxy`.
@@ -232,6 +286,13 @@ pub struct PivotResult {
 /// the source are evaluated) and groups on `Value`-typed keys.
 pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, String> {
     let (r0, c0, r1, _c1) = pt.validate(source)?;
+
+    // Resolve the effective value-field list (issue #59). When the spec
+    // carries an empty `value_fields` (legacy workbook), this falls back to
+    // a one-element list built from the `value_field`/`agg` pair — so old
+    // workbooks keep working without a migration step.
+    let value_fields = pt.effective_value_fields();
+    let nv = value_fields.len();
 
     // Build the filter predicate once (issue #58). A row passes when every
     // active filter's value is in its `selected_values` list — an empty
@@ -255,20 +316,29 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         })
     };
 
-    // First pass: bucket values by (row_key, col_key). `Vec<f64>` per bucket
-    // (text that doesn't parse as a number is dropped from numeric aggs;
-    // Count counts non-blank entries). Rows that fail the filter predicate
-    // are skipped entirely (issue #58).
-    let mut buckets: HashMap<(Key, Key), Vec<Option<f64>>> = HashMap::new();
+    // First pass: bucket values by (row_key, col_key, value_field_idx).
+    // Each bucket holds one `Option<f64>` per source row in that bucket
+    // and per value field, so a single value field produces one `Option`
+    // per source row, two value fields produce two, and so on. Text that
+    // doesn't parse as a number is dropped from numeric aggs; Count counts
+    // non-blank entries. Rows that fail the filter predicate are skipped
+    // entirely (issue #58).
+    let mut buckets: HashMap<(Key, Key), Vec<Vec<Option<f64>>>> = HashMap::new();
     for ri in (r0 + 1)..=r1 {
         if !filter_pred(ri) {
             continue;
         }
         let rk = make_key(source, ri, c0, &pt.row_fields);
         let ck = make_key(source, ri, c0, &pt.col_fields);
-        let raw = source.cell_raw_value(ri, c0 + pt.value_field);
-        let v = parse_for_agg(&raw);
-        buckets.entry((rk, ck)).or_default().push(v);
+        let entry = buckets.entry((rk, ck)).or_insert_with(|| Vec::with_capacity(nv));
+        // Grow lazily on first encounter so the value-field index lines up.
+        for (v_idx, vf) in value_fields.iter().enumerate() {
+            if v_idx >= entry.len() {
+                entry.push(Vec::new());
+            }
+            let raw = source.cell_raw_value(ri, c0 + vf.field);
+            entry[v_idx].push(parse_for_agg(&raw));
+        }
     }
 
     // Second pass: distinct keys in first-appearance order. Same filter.
@@ -290,49 +360,83 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         }
     }
 
-    // Materialize the body.
-    let mut body = vec![vec![None; col_keys.len()]; row_keys.len()];
+    // Materialize the body. `body[r]` has `nv * nc_keys` entries; the body
+    // value for `(r, v, c)` lives at `body[r][v * nc + c]`. For `nv == 1`
+    // this collapses to `body[r][c]`, matching the pre-#59 single-value
+    // shape.
+    let nc = col_keys.len();
+    let mut body: Vec<Vec<Option<f64>>> = vec![vec![None; nv * nc]; row_keys.len()];
     for (ri, rk) in row_keys.iter().enumerate() {
         for (ci, ck) in col_keys.iter().enumerate() {
-            if let Some(vs) = buckets.get(&(rk.clone(), ck.clone())) {
-                body[ri][ci] = aggregate(&pt.agg, vs);
+            if let Some(per_v) = buckets.get(&(rk.clone(), ck.clone())) {
+                for (v_idx, vs) in per_v.iter().enumerate() {
+                    body[ri][v_idx * nc + ci] = aggregate(&value_fields[v_idx].agg, vs);
+                }
             }
         }
     }
 
-    // Row totals: aggregate every value with the same row_key (any col_key).
-    let row_totals: Vec<Option<f64>> = row_keys
+    // Row totals: aggregate every value with the same row_key (any col_key)
+    // per value field.
+    let row_totals: Vec<Vec<Option<f64>>> = row_keys
         .iter()
         .map(|rk| {
-            let all: Vec<Option<f64>> = buckets
-                .iter()
-                .filter(|((rk2, _), _)| rk2 == rk)
-                .flat_map(|(_, vs)| vs.iter().cloned())
-                .collect();
-            aggregate(&pt.agg, &all)
+            (0..nv)
+                .map(|v_idx| {
+                    let all: Vec<Option<f64>> = buckets
+                        .iter()
+                        .filter(|((rk2, _), _)| rk2 == rk)
+                        .flat_map(|(_, per_v)| {
+                            per_v.get(v_idx).into_iter().flat_map(|v| v.iter().cloned())
+                        })
+                        .collect();
+                    aggregate(&value_fields[v_idx].agg, &all)
+                })
+                .collect()
         })
         .collect();
 
     // Column totals: symmetric.
-    let col_totals: Vec<Option<f64>> = col_keys
+    let col_totals: Vec<Vec<Option<f64>>> = col_keys
         .iter()
         .map(|ck| {
-            let all: Vec<Option<f64>> = buckets
-                .iter()
-                .filter(|((_, ck2), _)| ck2 == ck)
-                .flat_map(|(_, vs)| vs.iter().cloned())
-                .collect();
-            aggregate(&pt.agg, &all)
+            (0..nv)
+                .map(|v_idx| {
+                    let all: Vec<Option<f64>> = buckets
+                        .iter()
+                        .filter(|((_, ck2), _)| ck2 == ck)
+                        .flat_map(|(_, per_v)| {
+                            per_v.get(v_idx).into_iter().flat_map(|v| v.iter().cloned())
+                        })
+                        .collect();
+                    aggregate(&value_fields[v_idx].agg, &all)
+                })
+                .collect()
         })
         .collect();
 
-    // Grand total: aggregate every value.
-    let grand_total: Option<f64> = {
-        let all: Vec<Option<f64>> = buckets.values().flat_map(|v| v.iter().cloned()).collect();
-        aggregate(&pt.agg, &all)
-    };
+    // Grand total: aggregate every value per value field.
+    let grand_total: Vec<Option<f64>> = (0..nv)
+        .map(|v_idx| {
+            let all: Vec<Option<f64>> = buckets
+                .values()
+                .flat_map(|per_v| {
+                    per_v.get(v_idx).into_iter().flat_map(|v| v.iter().cloned())
+                })
+                .collect();
+            aggregate(&value_fields[v_idx].agg, &all)
+        })
+        .collect();
 
-    Ok(PivotResult { row_keys, col_keys, body, row_totals, col_totals, grand_total })
+    Ok(PivotResult {
+        row_keys,
+        col_keys,
+        nv,
+        body,
+        row_totals,
+        col_totals,
+        grand_total,
+    })
 }
 
 /// Build the grouping key for one source row. Reads the columns named by
@@ -388,20 +492,19 @@ fn parse_for_agg(raw: &str) -> Option<f64> {
 /// the returned `DataProxy` into the workbook's `SheetsRegistry` and
 /// marking it read-only.
 ///
-/// Single-header-row layout (Excel-style, simplified):
+/// **Single-value layout** (`nv == 1`, issue #35) — one header row:
 /// ```text
 ///  [row-field 1] [row-field 2] ... [col key 1] [col key 2] ... [Total]
 ///  [row key 1a] [row key 1b]    ... [body]      [body]      ... [row tot]
 ///  [row key 2a] [row key 2b]    ... [body]      [body]      ... [row tot]
 ///  [Total]      [Total]         ... [col tot]   [col tot]   ... [grand]
 /// ```
-/// Col-field *names* aren't shown separately — the col-keys themselves are
-/// the visible labels (consistent with how a single-col-field Excel pivot
-/// shows just the values). To get the col-field *name* as a header, the
-/// caller can prepend it to the source data; we keep v1 minimal.
 ///
-/// `field_headers` is the source range's header row, indexed by the same
-/// field-indexes used in `PivotTable::row_fields` / `col_fields`.
+/// **Multi-value layout** (`nv > 1`, issue #59) — two header rows: the
+/// first carries the value-field name spanning its `nc_keys + 1` block
+/// (e.g. "Sum of Amount"), the second repeats the col-keys + "Total"
+/// for each value-field block. Each block sits side-by-side after the
+/// row-key columns.
 pub fn materialize(
     pt: &PivotTable,
     result: &PivotResult,
@@ -439,25 +542,62 @@ pub fn materialize(
     let nr_keys = result.row_keys.len();
     let nc_keys = result.col_keys.len();
     let nr = pt.row_fields.len();
-    let total_col = nr + nc_keys;
+    let value_fields = pt.effective_value_fields();
+    let nv = value_fields.len();
+    // Each value-field block is `nc_keys + 1` columns wide (the trailing
+    // column is that value field's row total). The row-key columns sit
+    // to the left of every block.
+    let block_width = nc_keys + 1;
+    let multi_value = nv > 1;
 
-    // --- Header row (row 0) ---
+    // --- Optional top header row (multi-value only) ---
+    // Row 0 carries the value-field name in the first cell of each block;
+    // the rest of the row stays blank. Row-key cells are also blanked so
+    // the band reads as a banner.
+    let (data_row_offset, totals_row_idx): (usize, usize) = if multi_value {
+        for j in 0..nr {
+            out.set_cell_text(0, j, "");
+            out.set_cell_style(0, j, header_style_idx);
+        }
+        for (v_idx, vf) in value_fields.iter().enumerate() {
+            let first_col = nr + v_idx * block_width;
+            let field_name = field_headers.get(vf.field).cloned().unwrap_or_default();
+            let label = format!("{} of {}", vf.agg.label(), field_name);
+            out.set_cell_text(0, first_col, &label);
+            out.set_cell_style(0, first_col, header_style_idx);
+            for c in 1..block_width {
+                out.set_cell_text(0, first_col + c, "");
+                out.set_cell_style(0, first_col + c, header_style_idx);
+            }
+        }
+        (1usize, 1 + nr_keys + 1)
+    } else {
+        (0usize, 1 + nr_keys)
+    };
+
+    // --- Main header row (row `data_row_offset`) ---
+    // Single-value: row-key field names on the left, col-keys + "Total" on
+    // the right. Multi-value: row-key field names + col-keys + "Total"
+    // repeated for every value-field block.
     for (i, &field_idx) in pt.row_fields.iter().enumerate() {
         let h = field_headers.get(field_idx).cloned().unwrap_or_default();
-        out.set_cell_text(0, i, &h);
-        out.set_cell_style(0, i, header_style_idx);
+        out.set_cell_text(data_row_offset, i, &h);
+        out.set_cell_style(data_row_offset, i, header_style_idx);
     }
-    for (j, ck) in result.col_keys.iter().enumerate() {
-        let s = key_to_display(ck);
-        out.set_cell_text(0, nr + j, &s);
-        out.set_cell_style(0, nr + j, header_style_idx);
+    for (v_idx, _vf) in value_fields.iter().enumerate() {
+        let block_start = nr + v_idx * block_width;
+        for (j, ck) in result.col_keys.iter().enumerate() {
+            let s = key_to_display(ck);
+            out.set_cell_text(data_row_offset, block_start + j, &s);
+            out.set_cell_style(data_row_offset, block_start + j, header_style_idx);
+        }
+        out.set_cell_text(data_row_offset, block_start + nc_keys, "Total");
+        out.set_cell_style(data_row_offset, block_start + nc_keys, header_style_idx);
     }
-    out.set_cell_text(0, total_col, "Total");
-    out.set_cell_style(0, total_col, header_style_idx);
 
-    // --- Body rows (1..nr_keys) ---
+    // --- Body rows ---
     for (i, rk) in result.row_keys.iter().enumerate() {
-        let row = 1 + i;
+        let row = data_row_offset + 1 + i;
         match rk {
             Key::Single(_) => {
                 if nr > 0 {
@@ -474,39 +614,68 @@ pub fn materialize(
                 }
             }
         }
-        for (j, _ck) in result.col_keys.iter().enumerate() {
-            write_value_cell(&mut out, row, nr + j, result.body[i][j], body_style_idx);
+        for (v_idx, _vf) in value_fields.iter().enumerate() {
+            let block_start = nr + v_idx * block_width;
+            for (j, _ck) in result.col_keys.iter().enumerate() {
+                write_value_cell(
+                    &mut out,
+                    row,
+                    block_start + j,
+                    result.body[i][v_idx * nc_keys + j],
+                    body_style_idx,
+                );
+            }
+            write_value_cell(
+                &mut out,
+                row,
+                block_start + nc_keys,
+                result.row_totals[i][v_idx],
+                total_style_idx,
+            );
         }
-        write_value_cell(&mut out, row, total_col, result.row_totals[i], total_style_idx);
     }
 
-    // --- Totals row (1 + nr_keys) ---
-    let totals_row = 1 + nr_keys;
+    // --- Totals row ---
     // The "Total" label only makes sense in the row-label area (the first
     // `nr` columns). When there are no row fields, the label column is also
     // where the first col-key lives, so we don't write a redundant label.
     if nr > 0 {
-        out.set_cell_text(totals_row, 0, "Total");
-        out.set_cell_style(totals_row, 0, total_style_idx);
+        out.set_cell_text(totals_row_idx, 0, "Total");
+        out.set_cell_style(totals_row_idx, 0, total_style_idx);
         for j in 1..nr {
-            out.set_cell_text(totals_row, j, "");
-            out.set_cell_style(totals_row, j, total_style_idx);
+            out.set_cell_text(totals_row_idx, j, "");
+            out.set_cell_style(totals_row_idx, j, total_style_idx);
         }
     }
-    for (j, _) in result.col_keys.iter().enumerate() {
+    for (v_idx, _vf) in value_fields.iter().enumerate() {
+        let block_start = nr + v_idx * block_width;
+        for (j, _) in result.col_keys.iter().enumerate() {
+            write_value_cell(
+                &mut out,
+                totals_row_idx,
+                block_start + j,
+                result.col_totals[j][v_idx],
+                total_style_idx,
+            );
+        }
         write_value_cell(
             &mut out,
-            totals_row,
-            nr + j,
-            result.col_totals[j],
+            totals_row_idx,
+            block_start + nc_keys,
+            result.grand_total[v_idx],
             total_style_idx,
         );
     }
-    write_value_cell(&mut out, totals_row, total_col, result.grand_total, total_style_idx);
 
     // Pad the sheet to at least default rows so it renders.
-    if out.row_count < totals_row + 1 {
-        out.row_count = totals_row + 1;
+    if out.row_count < totals_row_idx + 1 {
+        out.row_count = totals_row_idx + 1;
+    }
+    // Pad columns too — multi-value blocks widen the sheet, and the
+    // renderer's default column count (26) is the single-value case.
+    let total_cols = nr + nv * block_width;
+    if out.cols.len < total_cols {
+        out.cols.len = total_cols;
     }
 
     out
@@ -614,9 +783,24 @@ mod tests {
             col_fields,
             value_field: value,
             agg,
+            value_fields: vec![],
             filter_fields: vec![],
             output_sheet: "Pivot1".into(),
         }
+    }
+
+    fn pt_multi(
+        source: &str,
+        row_fields: Vec<usize>,
+        col_fields: Vec<usize>,
+        values: Vec<(usize, Agg)>,
+    ) -> PivotTable {
+        let mut p = pt(source, row_fields, col_fields, 0, Agg::Sum);
+        p.value_fields = values
+            .into_iter()
+            .map(|(field, agg)| ValueField { field, agg })
+            .collect();
+        p
     }
 
     #[test]
@@ -635,9 +819,9 @@ mod tests {
         assert_eq!(key_to_display(&r.row_keys[0]), "North");
         assert_eq!(r.body[0][0], Some(300.0));
         assert_eq!(r.body[1][0], Some(50.0));
-        assert_eq!(r.row_totals, vec![Some(300.0), Some(50.0)]);
-        assert_eq!(r.col_totals, vec![Some(350.0)]);
-        assert_eq!(r.grand_total, Some(350.0));
+        assert_eq!(r.row_totals, vec![vec![Some(300.0)], vec![Some(50.0)]]);
+        assert_eq!(r.col_totals, vec![vec![Some(350.0)]]);
+        assert_eq!(r.grand_total, vec![Some(350.0)]);
     }
 
     #[test]
@@ -653,7 +837,7 @@ mod tests {
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.body[0][0], Some(1.0)); // Alice: 1 non-blank
         assert_eq!(r.body[1][0], Some(2.0)); // Bob: 2 non-blank
-        assert_eq!(r.grand_total, Some(3.0));
+        assert_eq!(r.grand_total, vec![Some(3.0)]);
     }
 
     #[test]
@@ -711,9 +895,9 @@ mod tests {
         assert_eq!(key_to_display(&r.row_keys[0]), "");
         assert_eq!(r.col_keys.len(), 1);
         assert_eq!(r.body[0][0], Some(60.0));
-        assert_eq!(r.row_totals, vec![Some(60.0)]);
-        assert_eq!(r.col_totals, vec![Some(60.0)]);
-        assert_eq!(r.grand_total, Some(60.0));
+        assert_eq!(r.row_totals, vec![vec![Some(60.0)]]);
+        assert_eq!(r.col_totals, vec![vec![Some(60.0)]]);
+        assert_eq!(r.grand_total, vec![Some(60.0)]);
     }
 
     // -----------------------------------------------------------------
@@ -758,7 +942,7 @@ mod tests {
             vec![],
         );
         let r = compute(&dp, &p).unwrap();
-        assert_eq!(r.grand_total, Some(30.0));
+        assert_eq!(r.grand_total, vec![Some(30.0)]);
         assert_eq!(r.row_keys.len(), 2);
     }
 
@@ -781,7 +965,7 @@ mod tests {
             vec!["North"],
         );
         let r = compute(&dp, &p).unwrap();
-        assert_eq!(r.grand_total, Some(15.0));
+        assert_eq!(r.grand_total, vec![Some(15.0)]);
         // Only the North row_key survives.
         assert_eq!(r.row_keys.len(), 1);
         assert_eq!(key_to_display(&r.row_keys[0]), "North");
@@ -807,7 +991,7 @@ mod tests {
             vec!["North", "South"],
         );
         let r = compute(&dp, &p).unwrap();
-        assert_eq!(r.grand_total, Some(30.0));
+        assert_eq!(r.grand_total, vec![Some(30.0)]);
     }
 
     #[test]
@@ -828,7 +1012,7 @@ mod tests {
             vec!["Mars"],
         );
         let r = compute(&dp, &p).unwrap();
-        assert_eq!(r.grand_total, None);
+        assert_eq!(r.grand_total, vec![None]);
         // No row_keys survive — the only source row failed the filter.
         assert_eq!(r.row_keys.len(), 0);
     }
@@ -845,7 +1029,7 @@ mod tests {
         assert_eq!(r.col_keys.len(), 1);
         assert_eq!(r.body[0][0], Some(5.0));
         assert_eq!(r.body[1][0], Some(7.0));
-        assert_eq!(r.grand_total, Some(12.0));
+        assert_eq!(r.grand_total, vec![Some(12.0)]);
     }
 
     #[test]
@@ -881,7 +1065,7 @@ mod tests {
         // Two data rows: ("Label", 100) and ("X", 200). The header "Label" is
         // not data, so "Label" is a real row key with sum 100.
         assert_eq!(r.row_keys.len(), 2);
-        assert_eq!(r.grand_total, Some(300.0));
+        assert_eq!(r.grand_total, vec![Some(300.0)]);
     }
 
     #[test]
@@ -920,11 +1104,11 @@ mod tests {
         assert_eq!(r.body[1][0], Some(50.0));
         assert_eq!(r.body[1][1], None);
         // Row totals: North=30, South=50.
-        assert_eq!(r.row_totals, vec![Some(30.0), Some(50.0)]);
+        assert_eq!(r.row_totals, vec![vec![Some(30.0)], vec![Some(50.0)]]);
         // Col totals: Q1=60, Q2=20.
-        assert_eq!(r.col_totals, vec![Some(60.0), Some(20.0)]);
+        assert_eq!(r.col_totals, vec![vec![Some(60.0)], vec![Some(20.0)]]);
         // Grand total = 80.
-        assert_eq!(r.grand_total, Some(80.0));
+        assert_eq!(r.grand_total, vec![Some(80.0)]);
     }
 
     #[test]
@@ -936,6 +1120,7 @@ mod tests {
             col_fields: vec![2],
             value_field: 3,
             agg: Agg::Avg,
+            value_fields: vec![],
             filter_fields: vec![],
             output_sheet: "Pivot1".into(),
         };
@@ -1043,5 +1228,231 @@ mod tests {
         // the col_total and col 1 holds the grand total — both are 60.
         assert_eq!(out.get_cell_text(2, 0), "60");
         assert_eq!(out.get_cell_text(2, 1), "60");
+    }
+
+    // -----------------------------------------------------------------
+    // Multi-value fields (issue #59)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn effective_value_fields_falls_back_to_legacy_pair() {
+        // An empty `value_fields` (legacy workbook) yields a one-element
+        // list built from `value_field` / `agg`.
+        let p = pt("S!A1:B2", vec![0], vec![], 1, Agg::Sum);
+        let eff = p.effective_value_fields();
+        assert_eq!(eff.len(), 1);
+        assert_eq!(eff[0].field, 1);
+        assert_eq!(eff[0].agg, Agg::Sum);
+    }
+
+    #[test]
+    fn effective_value_fields_uses_value_fields_when_present() {
+        // A populated `value_fields` is authoritative; legacy `value_field`/
+        // `agg` are ignored even if they look different.
+        let p = pt_multi(
+            "S!A1:C2",
+            vec![],
+            vec![],
+            vec![(1, Agg::Sum), (2, Agg::Count)],
+        );
+        let eff = p.effective_value_fields();
+        assert_eq!(eff.len(), 2);
+        assert_eq!(eff[0].field, 1);
+        assert_eq!(eff[0].agg, Agg::Sum);
+        assert_eq!(eff[1].field, 2);
+        assert_eq!(eff[1].agg, Agg::Count);
+    }
+
+    #[test]
+    fn two_value_fields_widen_body_and_totals() {
+        // Two value fields, no row/col grouping: every cell aggregates over
+        // the whole source under each value field's aggregation.
+        // Source: 4 rows of numeric Amounts and a numeric Items count
+        // column (the engine's Agg::Count works on numeric values, so
+        // both columns have to be numeric for this test).
+        let dp = sheet_from_rows("S", &[
+            &["Amount", "Items"],
+            &["10", "1"],
+            &["20", "1"],
+            &["30", "1"],
+            &["40", "1"],
+        ]);
+        // Sum of Amount + Count of Items (4 non-blank rows).
+        let p = pt_multi(
+            "S!A1:B5",
+            vec![],
+            vec![],
+            vec![(0, Agg::Sum), (1, Agg::Count)],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.nv, 2);
+        // Single row_key (no row fields → Single(Blank)), single col_key
+        // (no col fields → Single(Blank)). Body[r=0] = [sum_of_Amount,
+        // count_of_Items] flattened.
+        assert_eq!(r.row_keys.len(), 1);
+        assert_eq!(r.col_keys.len(), 1);
+        assert_eq!(r.body[0], vec![Some(100.0), Some(4.0)]);
+        assert_eq!(r.row_totals, vec![vec![Some(100.0), Some(4.0)]]);
+        assert_eq!(r.col_totals, vec![vec![Some(100.0), Some(4.0)]]);
+        assert_eq!(r.grand_total, vec![Some(100.0), Some(4.0)]);
+    }
+
+    #[test]
+    fn two_value_fields_with_col_field() {
+        // Quarter as a col field; Sum of Amount + Count of Amount per cell.
+        // 2 value fields × 2 col keys = 4 body columns per row.
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Quarter", "Amount"],
+            &["North", "Q1", "10"],
+            &["North", "Q2", "20"],
+            &["South", "Q1", "50"],
+            &["South", "Q2", "30"],
+        ]);
+        let p = pt_multi(
+            "S!A1:C5",
+            vec![0],
+            vec![1],
+            vec![(2, Agg::Sum), (2, Agg::Count)],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.nv, 2);
+        assert_eq!(r.row_keys.len(), 2);
+        assert_eq!(r.col_keys.len(), 2);
+        // body[r][v*nc + c]: each row has 4 cells, Sum-block first.
+        // North: Sum(Q1=10, Q2=20), Count(Q1=1, Q2=1)
+        // South: Sum(Q1=50, Q2=30), Count(Q1=1, Q2=1)
+        assert_eq!(r.body[0], vec![Some(10.0), Some(20.0), Some(1.0), Some(1.0)]);
+        assert_eq!(r.body[1], vec![Some(50.0), Some(30.0), Some(1.0), Some(1.0)]);
+        // row_totals[r][v]: North sum=30, count=2; South sum=80, count=2.
+        assert_eq!(r.row_totals, vec![vec![Some(30.0), Some(2.0)], vec![Some(80.0), Some(2.0)]]);
+        // col_totals[c][v]: Q1 sum=60 count=2; Q2 sum=50 count=2.
+        assert_eq!(r.col_totals, vec![vec![Some(60.0), Some(2.0)], vec![Some(50.0), Some(2.0)]]);
+        // grand_total[v]: total sum=110, total count=4.
+        assert_eq!(r.grand_total, vec![Some(110.0), Some(4.0)]);
+    }
+
+    #[test]
+    fn three_value_fields_mixed_aggs() {
+        // Three aggregations on the same value column: Sum, Count, Avg.
+        // Avg of [10, 20, 30, 40] = 25.
+        let dp = sheet_from_rows("S", &[
+            &["Amount"],
+            &["10"],
+            &["20"],
+            &["30"],
+            &["40"],
+        ]);
+        let p = pt_multi(
+            "S!A1:A5",
+            vec![],
+            vec![],
+            vec![(0, Agg::Sum), (0, Agg::Count), (0, Agg::Avg)],
+        );
+        let r = compute(&dp, &p).unwrap();
+        assert_eq!(r.nv, 3);
+        assert_eq!(r.grand_total, vec![Some(100.0), Some(4.0), Some(25.0)]);
+    }
+
+    #[test]
+    fn value_fields_override_legacy_value_field_when_both_set() {
+        // If a workbook carries both `value_field` and `value_fields` (e.g.
+        // a hand-edited spec), the new `value_fields` wins. This pins the
+        // precedence: the engine must not silently fall through to the
+        // legacy field.
+        let dp = sheet_from_rows("S", &[
+            &["A", "B", "C"],
+            &["x", "10", "100"],
+            &["y", "20", "200"],
+        ]);
+        let mut p = pt("S!A1:C3", vec![0], vec![], 1, Agg::Count); // legacy: Count of B
+        // New spec says Sum of C.
+        p.value_fields = vec![ValueField { field: 2, agg: Agg::Sum }];
+        let r = compute(&dp, &p).unwrap();
+        // Grand total is Sum of C across all rows: 100 + 200 = 300.
+        assert_eq!(r.grand_total, vec![Some(300.0)]);
+    }
+
+    #[test]
+    fn materialize_multi_value_lays_out_two_header_rows() {
+        // Two value fields with a row field and a col field. The output
+        // should have:
+        //   row 0: value-field names spanning their blocks
+        //   row 1: row-key field name | col keys | Total | col keys | Total
+        //   body  : row-key label | values... | values...
+        //   totals: "Total" | sums/counts | sums/counts
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Quarter", "Amount"],
+            &["North", "Q1", "10"],
+            &["North", "Q2", "20"],
+            &["South", "Q1", "50"],
+        ]);
+        let p = pt_multi(
+            "S!A1:C4",
+            vec![0],
+            vec![1],
+            vec![(2, Agg::Sum), (2, Agg::Count)],
+        );
+        let r = compute(&dp, &p).unwrap();
+        let headers = read_field_headers(&dp, 0, 0, 2);
+        let out = materialize(&p, &r, &headers, "Pivot1");
+
+        // Top header row (row 0): row-key cells blank, then "Sum of Amount"
+        // spanning the first block (cols 1..=3) and "Count of Amount"
+        // spanning the second block (cols 4..=6).
+        assert_eq!(out.get_cell_text(0, 0), "");
+        assert_eq!(out.get_cell_text(0, 1), "Sum of Amount");
+        assert_eq!(out.get_cell_text(0, 2), "");
+        assert_eq!(out.get_cell_text(0, 3), "");
+        assert_eq!(out.get_cell_text(0, 4), "Count of Amount");
+        assert_eq!(out.get_cell_text(0, 5), "");
+        assert_eq!(out.get_cell_text(0, 6), "");
+
+        // Main header row (row 1): "Region" | Q1 | Q2 | Total | Q1 | Q2 | Total
+        assert_eq!(out.get_cell_text(1, 0), "Region");
+        assert_eq!(out.get_cell_text(1, 1), "Q1");
+        assert_eq!(out.get_cell_text(1, 2), "Q2");
+        assert_eq!(out.get_cell_text(1, 3), "Total");
+        assert_eq!(out.get_cell_text(1, 4), "Q1");
+        assert_eq!(out.get_cell_text(1, 5), "Q2");
+        assert_eq!(out.get_cell_text(1, 6), "Total");
+
+        // Body row 2: North | 10 | 20 | 30 | 1 | 1 | 2
+        assert_eq!(out.get_cell_text(2, 0), "North");
+        assert_eq!(out.get_cell_text(2, 1), "10");
+        assert_eq!(out.get_cell_text(2, 2), "20");
+        assert_eq!(out.get_cell_text(2, 3), "30");
+        assert_eq!(out.get_cell_text(2, 4), "1");
+        assert_eq!(out.get_cell_text(2, 5), "1");
+        assert_eq!(out.get_cell_text(2, 6), "2");
+
+        // Body row 3: South | 50 | "" | 50 | 1 | "" | 1
+        // (no source row has South, Q2 — that bucket is empty, so both
+        // Sum and Count come back as None, which renders as empty. The
+        // row total counts both surviving Q1 entries → Count = 1.)
+        assert_eq!(out.get_cell_text(3, 0), "South");
+        assert_eq!(out.get_cell_text(3, 1), "50");
+        assert_eq!(out.get_cell_text(3, 2), ""); // None → empty
+        assert_eq!(out.get_cell_text(3, 3), "50");
+        assert_eq!(out.get_cell_text(3, 4), "1");
+        assert_eq!(out.get_cell_text(3, 5), ""); // empty bucket → empty
+        assert_eq!(out.get_cell_text(3, 6), "1");
+
+        // Totals row 4: "Total" | 60 | 20 | 80 | 2 | 1 | 3
+        assert_eq!(out.get_cell_text(4, 0), "Total");
+        assert_eq!(out.get_cell_text(4, 1), "60");
+        assert_eq!(out.get_cell_text(4, 2), "20");
+        assert_eq!(out.get_cell_text(4, 3), "80");
+        assert_eq!(out.get_cell_text(4, 4), "2");
+        assert_eq!(out.get_cell_text(4, 5), "1");
+        assert_eq!(out.get_cell_text(4, 6), "3");
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_value_field() {
+        // A multi-value spec with a value field index past the source's
+        // last column must be rejected by `validate()` (issue #59).
+        let dp = sheet_from_rows("S", &[&["A", "B"], &["x", "1"]]);
+        let bad = pt_multi("S!A1:B2", vec![], vec![], vec![(5, Agg::Sum)]);
+        assert!(compute(&dp, &bad).is_err());
     }
 }
