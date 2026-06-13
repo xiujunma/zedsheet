@@ -55,6 +55,8 @@ pub(crate) fn context_menu_html() -> String {
         item("chart", "Insert chart…"),
         // Issue #35: PivotTable dialog.
         item("pivot", "Insert PivotTable…"),
+        // Issue #61: Slicers dialog.
+        item("slicer", "Insert Slicer…"),
         // Issue #35: refresh the pivot whose output sheet is the active one.
         item("refresh-pivot", "Refresh pivot"),
         // Issue #30: row/column outline groups + Subtotal.
@@ -97,6 +99,7 @@ pub(crate) fn wire_context_menu(
     cf_open: OpenHandle,
     chart_open: OpenHandle,
     pivot_open: OpenHandle,
+    slicer_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -196,6 +199,17 @@ pub(crate) fn wire_context_menu(
             // PivotTable dialog (issue #35): same open-handle pattern.
             if cmd == "pivot" {
                 if let Some(open) = pivot_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                return;
+            }
+
+            // Slicer dialog (issue #61): same open-handle pattern as
+            // the chart/pivot modals — the menu just hands control to
+            // the open handle set up at mount time.
+            if cmd == "slicer" {
+                if let Some(open) = slicer_open.borrow().as_ref() {
                     open();
                 }
                 let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");

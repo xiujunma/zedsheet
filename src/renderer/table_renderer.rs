@@ -2318,6 +2318,87 @@ impl TableRenderer {
         true
     }
 
+    /// Re-compute every pivot on `source_idx` (issue #61). Used by the
+    /// slicer panel: a chip toggle on any slicer may have changed the
+    /// "which rows pass" filter for every pivot on the source, so the
+    /// cheapest correct response is to re-run them all. Each pivot's
+    /// output sheet is replaced in place; the active sheet is
+    /// refreshed if it was one of the output sheets.
+    pub fn refresh_pivots_on_source(
+        &mut self,
+        sheets: &SheetsRegistry,
+        active: &ActiveSheet,
+        source_idx: usize,
+    ) {
+        let (pivot_specs, source) = {
+            let s = sheets.borrow();
+            (s[source_idx].pivots.clone(), s[source_idx].clone())
+        };
+        if pivot_specs.is_empty() {
+            return;
+        }
+        // Snapshot the workbook so the user can undo a slicer change
+        // (issue #62). One snapshot covers the whole re-render — the
+        // re-render itself isn't undoable step-by-step, only the
+        // before/after state is.
+        self.snapshot_workbook(sheets, active);
+
+        // Recompute each pivot. We collect the updates first so the
+        // Sheets borrow can drop between compute and apply.
+        let mut updates: Vec<(String, DataProxy)> = Vec::with_capacity(pivot_specs.len());
+        for pt in pivot_specs.iter() {
+            let result = match crate::core::pivot::compute(&source, pt) {
+                Ok(r) => r,
+                Err(e) => {
+                    // A single bad pivot shouldn't kill the whole batch.
+                    // We just skip it — the next successful refresh will
+                    // re-try. Log the error via the same path Refresh uses.
+                    crate::zedsheet::pivot_alert(&format!("Pivot: {}", e));
+                    continue;
+                }
+            };
+            let (r0, c0, _r1, c1) = match pt.validate(&source) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let headers = crate::core::pivot::read_field_headers(&source, r0, c0, c1);
+            let mut out = crate::core::pivot::materialize(
+                pt,
+                &result,
+                &headers,
+                &pt.output_sheet,
+            );
+            out.set_read_only(true);
+            out.set_sheets(sheets);
+            updates.push((pt.output_sheet.clone(), out));
+        }
+
+        // Apply updates: replace each output sheet in the registry. We
+        // scan by name to handle the case where a pivot's output is
+        // outside the source_idx sheet (it always is — the output is
+        // its own sheet, possibly the active one).
+        let active_name = sheets.borrow()[*active.borrow()].name.clone();
+        let mut active_was_replaced = false;
+        {
+            let mut s = sheets.borrow_mut();
+            for (name, new_sheet) in updates.iter() {
+                if let Some(idx) = s.iter().position(|d| d.name == *name) {
+                    s[idx] = new_sheet.clone();
+                    if name == &active_name {
+                        active_was_replaced = true;
+                    }
+                }
+            }
+        }
+
+        // Refresh the renderer's view of the active sheet if we just
+        // replaced it (it's a pivot output that's been recomputed).
+        if active_was_replaced {
+            self.set_data(sheets.borrow()[*active.borrow()].clone());
+        }
+        self.render();
+    }
+
     /// Remove the chart at `idx` (issue #16).
     pub fn remove_chart(&mut self, idx: usize) {
         if self.data.is_read_only() {

@@ -28,6 +28,7 @@ mod data_validation;
 mod cond_format_modal;
 mod chart_modal;
 mod pivot_modal;
+mod slicer_modal;
 mod filter_menu;
 mod print;
 mod find_replace;
@@ -43,6 +44,7 @@ pub(crate) use data_validation::*;
 pub(crate) use cond_format_modal::*;
 pub(crate) use chart_modal::*;
 pub(crate) use pivot_modal::*;
+pub(crate) use slicer_modal::*;
 pub(crate) use filter_menu::*;
 pub(crate) use print::*;
 pub(crate) use find_replace::*;
@@ -487,6 +489,8 @@ impl ZedSheet {
         let chart_open: OpenHandle = Rc::new(RefCell::new(None));
         // …and the PivotTable dialog (issue #35).
         let pivot_open: OpenHandle = Rc::new(RefCell::new(None));
+        // …and the Slicer dialog (issue #61).
+        let slicer_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -615,7 +619,7 @@ impl ZedSheet {
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sheets, &active, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone(), pivot_open.clone());
+            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sheets, &active, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone(), pivot_open.clone(), slicer_open.clone());
         }
         if let Some(fb) = fbar_node.clone() {
             wire_formula_bar(
@@ -815,6 +819,65 @@ impl ZedSheet {
             let sheets_for_open = sheets.clone();
             *pivot_open.borrow_mut() = Some(Rc::new(move || {
                 open_pivot_modal(&inner, &renderer_for_open, &sheets_for_open);
+            }));
+        }
+
+        // Slicer modal (issue #61). Mirrors the chart/pivot modal
+        // mount: hidden root, wire once, expose an `OpenHandle`. The
+        // slicer also needs the `sheet_el` reference (the container
+        // that holds the canvas) because the floating panels are
+        // appended there.
+        let mut slicer_modal_root = h("div", Some("zs-slicer-modal-root"));
+        slicer_modal_root.set_inner_html(slicer_modal_html());
+        let slicer_modal_node: Option<web_sys::Element> =
+            slicer_modal_root.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut slicer_modal_root);
+        if let Some(ref node) = slicer_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-slicer-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            // The slicer wire needs the sheet container to append
+            // floating panels to. `sheet_el` was created earlier in
+            // `new`; pull its underlying web-sys Element for the wire.
+            let sheet_el_for_slicer: web_sys::Element = sheet_el
+                .el
+                .clone()
+                .and_then(|e| e.dyn_into().ok())
+                .unwrap_or_else(|| node.clone());
+            wire_slicer_modal(
+                inner.clone(),
+                &renderer,
+                &sheets,
+                &active,
+                sheet_el_for_slicer.clone(),
+                sync.clone(),
+            );
+            // Render any slicers that survived a `load_data` round-trip
+            // (their HTML doesn't exist in the static template — it's
+            // built from `DataProxy::slicers` on demand).
+            render_slicer_panels(
+                &sheet_el_for_slicer,
+                &sheets,
+                &active,
+                &renderer,
+            );
+            let renderer_for_open = renderer.clone();
+            let sheets_for_open = sheets.clone();
+            let active_for_open = active.clone();
+            let sheet_el_for_open = sheet_el_for_slicer.clone();
+            *slicer_open.borrow_mut() = Some(Rc::new(move || {
+                // Re-render the panels before opening so any in-flight
+                // state (e.g. a chip toggled while the modal was open
+                // in another tab) is reflected in the list.
+                render_slicer_panels(
+                    &sheet_el_for_open,
+                    &sheets_for_open,
+                    &active_for_open,
+                    &renderer_for_open,
+                );
+                open_slicer_modal(&inner, &renderer_for_open, &sheets_for_open, &active_for_open);
             }));
         }
 

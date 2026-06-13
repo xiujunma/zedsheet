@@ -783,7 +783,10 @@ pub(crate) fn wire_pivot_modal(
     }
 }
 
-fn pivot_alert(msg: &str) {
+/// Show a browser alert (used by the modal and by the renderer's
+/// `refresh_pivots_on_source` for failed recomputes). Kept `pub(crate)`
+/// so the renderer module can call it without a window handle of its own.
+pub(crate) fn pivot_alert(msg: &str) {
     if let Some(w) = web_sys::window() {
         let _ = w.alert_with_message(msg);
     }
