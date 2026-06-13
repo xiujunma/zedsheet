@@ -2352,4 +2352,99 @@ mod tests {
         let r = compute(&back, &back.pivots[0]).unwrap();
         assert_eq!(r.grand_total, vec![Some(15.0)]); // 10 + 5
     }
+
+    // -----------------------------------------------------------------
+    // Cross-feature: slicer + date grouping (issue #60 + #61)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn slicer_and_date_grouping_compose() {
+        // Date-group the row field by month, and add a slicer on the
+        // value field. Both filters must apply: the source rows are
+        // first narrowed by the slicer, then bucketed by month.
+        let mut src = sheet_from_rows("S", &[
+            &["Date", "Region", "Amount"],
+            &["2024-01-15", "North", "10"],
+            &["2024-01-20", "South", "5"],
+            &["2024-02-10", "North", "20"],
+            &["2024-02-15", "South", "30"],
+        ]);
+        // Slicer: only "North" rows survive.
+        src.slicers.push(Slicer {
+            id: "s_region".into(),
+            field_idx: 1,
+            selected_values: vec!["North".into()],
+            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+        });
+        // Pivot: Date grouped by month (row), Sum of Amount.
+        let mut p = pt("S!A1:C5", vec![0], vec![], 2, Agg::Sum);
+        p.date_groups.insert(0, DateGroup::Month);
+        let r = compute(&src, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        // Only North rows pass the slicer; dates collapse to 2024-01 and
+        // 2024-02.
+        assert_eq!(keys, vec!["2024-01", "2024-02"]);
+        assert_eq!(r.body[0][0], Some(10.0)); // North 2024-01
+        assert_eq!(r.body[1][0], Some(20.0)); // North 2024-02
+        // Grand total: only North rows (10 + 20 = 30); South (5 + 30)
+        // was excluded by the slicer.
+        assert_eq!(r.grand_total, vec![Some(30.0)]);
+    }
+
+    #[test]
+    fn slicer_and_multi_value_pivot_compose() {
+        // Slicer on a column field, multi-value pivot on another field:
+        // both should apply — the slicer narrows the source rows, the
+        // multi-value pivot produces two body columns.
+        let mut src = sheet_from_rows("S", &[
+            &["Region", "Amount"],
+            &["North", "10"],
+            &["North", "20"],
+            &["South", "5"],
+            &["South", "30"],
+        ]);
+        src.slicers.push(Slicer {
+            id: "s_region".into(),
+            field_idx: 0,
+            selected_values: vec!["North".into()],
+            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+        });
+        let p = pt_multi(
+            "S!A1:B5",
+            vec![],
+            vec![],
+            vec![(1, Agg::Sum), (1, Agg::Count)],
+        );
+        let r = compute(&src, &p).unwrap();
+        assert_eq!(r.nv, 2);
+        // Only North rows survive (10 + 20); grand totals are
+        // Sum = 30, Count = 2.
+        assert_eq!(r.grand_total, vec![Some(30.0), Some(2.0)]);
+    }
+
+    #[test]
+    fn slicer_value_filtered_to_nothing_even_with_date_grouping() {
+        // The slicer is the dominant filter: when it selects nothing,
+        // the date grouping produces no row keys. (Excel behavior.)
+        let mut src = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2024-01-15", "10"],
+            &["2024-02-10", "20"],
+        ]);
+        src.slicers.push(Slicer {
+            id: "s_dummy".into(),
+            // Slicer on a field that has no pivot role — but the
+            // engine still applies it as a global row predicate
+            // (issue #61). Selecting a value that doesn't exist
+            // narrows the body to nothing.
+            field_idx: 1,
+            selected_values: vec!["999".into()],
+            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+        });
+        let mut p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
+        p.date_groups.insert(0, DateGroup::Month);
+        let r = compute(&src, &p).unwrap();
+        assert_eq!(r.row_keys.len(), 0);
+        assert_eq!(r.grand_total, vec![None]);
+    }
 }

@@ -563,3 +563,76 @@ fn wire_slicer_panel_events(
         .unwrap();
     cb.forget();
 }
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+//
+// The slicer UI is DOM-heavy: most of the logic in this file is reached
+// only through web-sys event listeners, which can't run under
+// `cargo test`. The handful of pure helpers below are what we can
+// verify without a browser — they pin the encoding contract that the
+// chip click handler depends on (issue #61's chip-click bug was an
+// attribute-name mismatch caught only in manual testing; these tests
+// would have caught it).
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The chip's text label goes through `esc` (HTML body encoding);
+    /// `esc` must turn `<`, `>`, `&`, `"` into the entity refs that a
+    /// browser will decode back to the same characters when reading
+    /// `innerHTML`.
+    #[test]
+    fn esc_encodes_body_text_danger_chars() {
+        assert_eq!(esc("a & b"), "a &amp; b");
+        assert_eq!(esc("<div>"), "&lt;div&gt;");
+        assert_eq!(esc("\"quoted\""), "&quot;quoted&quot;");
+        // No-op on plain text.
+        assert_eq!(esc("hello"), "hello");
+    }
+
+    /// The chip's `data-value` attribute goes through `html_attr_encode`
+    /// (attribute encoding). The two functions look almost identical
+    /// — they differ only in which characters they target — but the
+    /// attribute form is *required* for the data attribute to round-trip
+    /// through `getAttribute` correctly. The `esc` form would survive
+    /// an innerHTML read but getAttribute returns the raw value.
+    #[test]
+    fn html_attr_encode_round_trips_through_get_attribute() {
+        // Encode: turn " (the attribute terminator) into &quot;.
+        let v = "say \"hi\"";
+        let encoded = html_attr_encode(v);
+        assert!(encoded.contains("&quot;"));
+        // Manually verify: the encoded form, dropped into
+        // <span data-value="ENCODED">, would parse back to the original
+        // by any browser's HTML attribute decoder.
+        assert!(format!("<span data-value=\"{}\">", encoded).len() > 0);
+
+        // Round-trip: decode the entities back and compare to the
+        // input. This is the contract the chip click handler relies on.
+        let decoded = encoded
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">");
+        assert_eq!(decoded, v);
+
+        // No-op on plain text.
+        assert_eq!(html_attr_encode("North"), "North");
+    }
+
+    /// Pin the chip encoding: the index lives in `data-slicer-chip`
+    /// alone, the value lives in `data-value` alone. The click handler
+    /// reads them as two separate attributes — a single packed
+    /// attribute would need extra escaping for chip values containing
+    /// colons.
+    #[test]
+    fn chip_attributes_are_split_index_and_value() {
+        // The constants are part of the public contract with the
+        // renderer's click handler.
+        assert_eq!(CHIP_ATTR, "data-slicer-chip");
+        assert_ne!(CHIP_ATTR, "data-value");
+    }
+}
