@@ -188,10 +188,10 @@ impl Element {
 
     /// Removes a class list item from the element
     ///
-    /// ```
-    /// e.class_list_remove(String::from("clickable"));
-    /// // removes the class 'clickable' from e.el
-    /// ```
+    /// `class_list_remove("clickable")` removes the class `clickable`
+    /// from the underlying web-sys element (if one is attached). This
+    /// method no-ops on an `Element` whose `el` is `None` (i.e. it was
+    /// moved out by a previous `take()`).
     pub fn class_list_remove(&mut self, value: &str) {
         if let Some(el) = self.el.take() {
             el.class_list().remove_1(value).unwrap();

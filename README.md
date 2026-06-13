@@ -282,13 +282,22 @@ cd pkg && npm publish
 
 ## Status & known limitations
 
-Most of x-spreadsheet's interactive surface is implemented. Unit tests are
-ported for `alphabet`, `cell_range`, `format`, the formula evaluator, and
-`helper` (`cargo test`). Not yet done:
+The interactive surface is broad: data validation, conditional formatting,
+charts, tables, named ranges, cross-sheet references, dynamic arrays &
+spill, structured references, PivotTables (with multi-value fields, date
+grouping, page filters, and slicers), AutoFilter, find & replace,
+subtotals, outlines, format painter, paste special, and more. `cargo test`
+covers the formula evaluator, the renderer's pivot install, and the
+pivot engine (slicers, date grouping, multi-value, page filters, all 5
+aggregations). `cargo build --target wasm32-unknown-unknown` ships.
 
-- `#REF!` for references to deleted cells (currently left stale)
-- Absolute references (`$A$1`) and deeper nested-function arg parsing
-- Data validation / autofilter UI, print, and locale/i18n
+Not yet done:
+
+- `#REF!` propagation: deleting a row/column that a formula referenced
+  leaves the formula reading empty cells instead of turning it into
+  `#REF!`
+- Absolute references (`$A$1`) in the formula parser
+- Locale / i18n (number formatting follows the host locale)
 
 ## Credits
 
