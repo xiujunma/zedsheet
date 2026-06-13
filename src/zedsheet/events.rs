@@ -640,31 +640,24 @@ pub(crate) fn apply_scroll_drag(renderer: &SharedRenderer, kind: DragKind, x: f6
     r.render();
 }
 
-/// Ctrl+Z / undo: if a pivot undo is pending, restore the workbook's
-/// sheets registry and active index from the saved record *before*
-/// letting the renderer swap its local `self.data` (issue #53).
-/// Without this, the new output sheet stays orphaned in the registry
-/// while the canvas flips back to the source.
+/// Ctrl+Z / undo (issue #62). The renderer's unified `undo_stack` is
+/// already a `Vec<WorkbookSnapshot>`; the renderer takes the registry
+/// and active-sheet parameters and restores everything in one step.
+/// No more "is this a pivot?" branching at the call site.
 fn perform_undo(
     renderer: &mut std::cell::RefMut<TableRenderer>,
     sheets: &SheetsRegistry,
     active: &ActiveSheet,
 ) {
-    if let Some(rec) = renderer.take_pivot_undo() {
-        *sheets.borrow_mut() = rec.sheets;
-        *active.borrow_mut() = rec.active;
-        // `r.undo()` now does the rest: swap self.data and re-render.
-    }
-    renderer.undo();
+    renderer.undo(sheets, active);
 }
 
-/// Redo: no-op for pivot undo (we don't have a pivot redo record yet);
-/// falls through to the renderer.
+/// Ctrl+Y / redo (issue #62). Same shape as `perform_undo`; the
+/// renderer mirrors the snapshot back into `sheets` and `active`.
 fn perform_redo(
     renderer: &mut std::cell::RefMut<TableRenderer>,
     sheets: &SheetsRegistry,
     active: &ActiveSheet,
 ) {
-    let _ = (sheets, active);
-    renderer.redo();
+    renderer.redo(sheets, active);
 }

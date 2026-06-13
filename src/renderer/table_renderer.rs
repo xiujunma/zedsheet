@@ -499,26 +499,30 @@ pub struct TableRenderer {
     fill_source: Option<(usize, usize, usize, usize)>,
     /// Screen rect (x,y,w,h) of the fill handle from the last render, for hit-testing.
     last_fill_handle: std::cell::Cell<Option<(f64, f64, f64, f64)>>,
-    /// Undo/redo snapshots of the active sheet's data.
-    undo_stack: Vec<DataProxy>,
-    redo_stack: Vec<DataProxy>,
-    /// Workbook-level undo record for the last pivot operation. The standard
-    /// `undo_stack` only captures the active sheet, but a pivot adds a new
-    /// sheet to the registry — so we stash a copy of the whole pre-pivot
-    /// state here. `undo()` consults this before falling through to the
-    /// stack (issue #35).
-    pivot_undo: Option<PivotUndo>,
+    /// Undo/redo snapshots of the **workbook** (issue #62). Each entry
+    /// captures the full sheets registry + the active index, so any
+    /// cross-sheet mutator (pivot, add sheet, etc.) is fully reversible.
+    /// For mutators that only touch `self.data` (cell edits, styling) the
+    /// snapshot is a length-1 registry — still cheap because `DataProxy`
+    /// is mostly text cells and styles.
+    undo_stack: Vec<WorkbookSnapshot>,
+    redo_stack: Vec<WorkbookSnapshot>,
+    // Workbook-level undo (issue #62): the old bespoke `pivot_undo`
+    // field is gone — the unified `undo_stack` (of `WorkbookSnapshot`)
+    // captures the same information and every cross-sheet mutator
+    // pushes through it.
 }
 
-/// Workbook snapshot used to undo a pivot (issue #35). Stores the registry
-/// contents + active index so the user can revert "create pivot" and
-/// "refresh pivot" cleanly, even though `set_data` clears the per-sheet
-/// undo stack on a sheet switch.
+/// A point-in-time snapshot of the workbook state (issue #62). Cloning
+/// the full `Vec<DataProxy>` is the cost of correct cross-sheet undo —
+/// the previous per-sheet `Vec<DataProxy>` snapshot couldn't capture
+/// "the user added a new sheet" or "a pivot pushed a sibling sheet",
+/// so it silently lost work. The new shape is the same as
+/// `PivotUndo` from issue #35, generalized.
 #[derive(Clone)]
-pub(crate) struct PivotUndo {
-    pub(crate) sheets: Vec<DataProxy>,
+pub(crate) struct WorkbookSnapshot {
     pub(crate) active: usize,
-    pub(crate) active_data: DataProxy,
+    pub(crate) sheets: Vec<DataProxy>,
 }
 
 impl TableRenderer {
@@ -600,7 +604,6 @@ impl TableRenderer {
             last_fill_handle: std::cell::Cell::new(None),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            pivot_undo: None,
         };
         // Data may arrive with outline groups (load_data / tests) — size the
         // gutters before the first render (issue #30).
@@ -1433,15 +1436,44 @@ impl TableRenderer {
         };
         self.selection_anchor = (sel.ri, sel.ci);
         self.multi_range.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
+        // Note (issue #62): set_data no longer clears the undo/redo
+        // stacks. The previous behavior was right for the per-sheet
+        // `load_data` path, but for cross-sheet mutators (`add_pivot`,
+        // `refresh_active_pivot`) the snapshot is pushed BEFORE this call
+        // and must survive it. Callers that load fresh data (the JS
+        // `load_data` API) clear the stacks explicitly.
     }
 
     /// Record the current data on the undo stack before a mutation, dropping
     /// the redo history. Call at the start of every user-initiated edit.
+    /// Captures a workbook snapshot (issue #62): the active sheet + its
+    /// index. Cross-sheet mutators (add_pivot, add_sheet, etc.) call
+    /// [`snapshot_workbook`] instead, which clones the full registry.
     fn snapshot(&mut self) {
         const MAX_UNDO: usize = 100;
-        self.undo_stack.push(self.data.clone());
+        self.undo_stack.push(WorkbookSnapshot {
+            active: 0, // Overwritten by callers that know the real index;
+                        // for a pure-data mutator the active index didn't
+                        // change so 0 is the right "no-op" for the registry
+                        // restore path.
+            sheets: vec![self.data.clone()],
+        });
+        if self.undo_stack.len() > MAX_UNDO {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    /// Workbook-level snapshot (issue #62): call from any mutator that
+    /// touches `sheets` or the active index — add_pivot, add_sheet,
+    /// remove_sheet, switch_sheet, etc. Captures the full registry so
+    /// the undo restores every sheet and the active selection.
+    pub(crate) fn snapshot_workbook(&mut self, sheets: &SheetsRegistry, active: &ActiveSheet) {
+        const MAX_UNDO: usize = 100;
+        self.undo_stack.push(WorkbookSnapshot {
+            active: *active.borrow(),
+            sheets: sheets.borrow().clone(),
+        });
         if self.undo_stack.len() > MAX_UNDO {
             self.undo_stack.remove(0);
         }
@@ -1449,57 +1481,63 @@ impl TableRenderer {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.pivot_undo.is_some() || !self.undo_stack.is_empty()
+        !self.undo_stack.is_empty()
     }
 
-    /// Take the pending pivot undo record (if any). The caller uses this to
-    /// restore the workbook's sheets registry and active index. After this
-    /// call, `pivot_undo` is `None` again (issue #35).
-    pub fn take_pivot_undo(&mut self) -> Option<PivotUndo> {
-        self.pivot_undo.take()
-    }
-
-    /// Whether a pivot undo is pending — used to decide whether the
-    /// "Refresh pivot" context-menu item should appear (issue #35).
-    pub fn has_pending_pivot_undo(&self) -> bool {
-        self.pivot_undo.is_some()
+    /// Drop both undo and redo history. Called by the JS `load_data`
+    /// API right before swapping in a freshly-loaded workbook (issue #62) —
+    /// the user's prior edits and pivots are no longer relevant to the
+    /// new data.
+    pub fn clear_undo(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
 
-    pub fn undo(&mut self) {
-        // Pivot undo (issue #35) takes priority: the workbook's sheet
-        // registry was mutated, and a per-sheet `undo_stack` snapshot is
-        // insufficient.
-        if let Some(rec) = self.pivot_undo.take() {
-            self.redo_stack.push(self.data.clone());
-            // The caller is responsible for restoring the registry in
-            // `sheets.borrow_mut()` to `rec.sheets` and resetting
-            // `*active.borrow_mut() = rec.active`. We only swap `self.data`
-            // and re-render here.
-            self.data = rec.active_data;
-            self.refresh_outline_gutters();
-            return;
-        }
+    pub fn undo(
+        &mut self,
+        sheets: &SheetsRegistry,
+        active: &ActiveSheet,
+    ) {
         if let Some(prev) = self.undo_stack.pop() {
-            // Zoom is view state, not document state — an undo must not
-            // revert it to the level captured in the snapshot (issue #32).
+            // The renderer doesn't own the registry; snapshot the current
+            // workbook state for redo before we touch anything.
             let zoom = self.data.zoom();
-            self.redo_stack.push(self.data.clone());
-            self.data = prev;
+            let current_active = *active.borrow();
+            let current_sheets = sheets.borrow().clone();
+            self.redo_stack.push(WorkbookSnapshot {
+                active: current_active,
+                sheets: current_sheets,
+            });
+            // Restore the registry + active index, then swap self.data
+            // to the restored active sheet (issue #62).
+            *sheets.borrow_mut() = prev.sheets.clone();
+            *active.borrow_mut() = prev.active;
+            self.data = prev.sheets[prev.active].clone();
             self.data.set_zoom(zoom);
-            // The restored data may have different outline groups (issue #30).
             self.refresh_outline_gutters();
         }
     }
 
-    pub fn redo(&mut self) {
+    pub fn redo(
+        &mut self,
+        sheets: &SheetsRegistry,
+        active: &ActiveSheet,
+    ) {
         if let Some(next) = self.redo_stack.pop() {
             let zoom = self.data.zoom();
-            self.undo_stack.push(self.data.clone());
-            self.data = next;
+            let current_active = *active.borrow();
+            let current_sheets = sheets.borrow().clone();
+            self.undo_stack.push(WorkbookSnapshot {
+                active: current_active,
+                sheets: current_sheets,
+            });
+            *sheets.borrow_mut() = next.sheets.clone();
+            *active.borrow_mut() = next.active;
+            self.data = next.sheets[next.active].clone();
             self.data.set_zoom(zoom);
             self.refresh_outline_gutters();
         }
@@ -2151,7 +2189,8 @@ impl TableRenderer {
     /// Add a new pivot (issue #35). `pt` is the spec; the output is written
     /// to a fresh `DataProxy` and added to `sheets`. The renderer's active
     /// sheet becomes the new output sheet. The previous workbook state is
-    /// saved in `pivot_undo` so the user can `undo()` cleanly.
+    /// saved in the unified `undo_stack` (issue #62) so the user can
+    /// `undo()` cleanly.
     ///
     /// The spec is appended to the *source* sheet's `pivots` list (held in
     /// the registry, not the renderer's local `self.data`) before the
@@ -2171,21 +2210,16 @@ impl TableRenderer {
         if self.data.is_read_only() {
             return;
         }
-        // 1. Snapshot the current workbook for undo (issue #35).
-        let saved_active = *active.borrow();
-        let saved_sheets = sheets.borrow().clone();
-        let saved_data = self.data.clone();
-        self.pivot_undo = Some(PivotUndo {
-            sheets: saved_sheets,
-            active: saved_active,
-            active_data: saved_data,
-        });
+        // 1. Snapshot the current workbook for undo (issue #62). Replaces
+        //    the old bespoke `pivot_undo` field — `undo_stack` is now a
+        //    uniform `Vec<WorkbookSnapshot>` regardless of the mutator.
+        self.snapshot_workbook(sheets, active);
         // 2. Run the aggregation.
         let result = match crate::core::pivot::compute(&self.data, &pt) {
             Ok(r) => r,
             Err(e) => {
                 // Drop the undo record — the operation didn't happen.
-                self.pivot_undo = None;
+                self.undo_stack.pop();
                 pivot_alert(&format!("Pivot: {}", e));
                 return;
             }
@@ -2193,7 +2227,7 @@ impl TableRenderer {
         let (r0, c0, _r1, c1) = match pt.validate(&self.data) {
             Ok(b) => b,
             Err(e) => {
-                self.pivot_undo = None;
+                self.undo_stack.pop();
                 pivot_alert(&format!("Pivot: {}", e));
                 return;
             }
@@ -2222,7 +2256,7 @@ impl TableRenderer {
             Err(()) => {
                 // Source/output name collision (issue #51). The modal
                 // should have caught this earlier; defensively refuse.
-                self.pivot_undo = None;
+                self.undo_stack.pop();
                 pivot_alert(
                     "Pivot: output sheet name is the same as the source sheet — pick a different name.",
                 );
@@ -2254,18 +2288,13 @@ impl TableRenderer {
         let source = sheets.borrow()[source_idx].clone();
         let pt = source.pivots.iter().find(|p| p.output_sheet == active_name).unwrap().clone();
 
-        // Save the workbook state for undo.
-        let cur = *active.borrow();
-        self.pivot_undo = Some(PivotUndo {
-            sheets: sheets.borrow().clone(),
-            active: cur,
-            active_data: self.data.clone(),
-        });
+        // Save the workbook state for undo (issue #62).
+        self.snapshot_workbook(sheets, active);
 
         let result = match crate::core::pivot::compute(&source, &pt) {
             Ok(r) => r,
             Err(e) => {
-                self.pivot_undo = None;
+                self.undo_stack.pop();
                 pivot_alert(&format!("Pivot refresh: {}", e));
                 return false;
             }
@@ -2273,12 +2302,13 @@ impl TableRenderer {
         let (r0, c0, _r1, c1) = match pt.validate(&source) {
             Ok(b) => b,
             Err(e) => {
-                self.pivot_undo = None;
+                self.undo_stack.pop();
                 pivot_alert(&format!("Pivot refresh: {}", e));
                 return false;
             }
         };
         let headers = crate::core::pivot::read_field_headers(&source, r0, c0, c1);
+        let cur = *active.borrow();
         let mut new_sheet = crate::core::pivot::materialize(&pt, &result, &headers, &pt.output_sheet);
         new_sheet.set_read_only(true);
         new_sheet.set_sheets(sheets);

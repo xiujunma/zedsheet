@@ -856,6 +856,10 @@ impl ZedSheet {
                 let first = sheets.borrow()[0].clone();
                 {
                     let mut r = renderer.borrow_mut();
+                    // A fresh workbook means a fresh undo history
+                    // (issue #62): the user's prior edits and pivots are
+                    // no longer relevant to the loaded data.
+                    r.clear_undo();
                     // set_data restores the selection carried in the payload
                     // (issue #44); don't clobber it back to A1.
                     r.set_data(first);

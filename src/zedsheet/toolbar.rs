@@ -139,18 +139,12 @@ pub(crate) fn wire_toolbar(
 
         let mut r = renderer.borrow_mut();
         match action.as_str() {
-            // Undo/redo with workbook-restore (issue #53): when the most
-            // recent op was a pivot, the renderer's undo() drops the
-            // pivot's saved registry/active record. Restore them first
-            // so the workbook stays consistent with the canvas.
-            "undo" => {
-                if let Some(rec) = r.take_pivot_undo() {
-                    *sheets.borrow_mut() = rec.sheets;
-                    *active.borrow_mut() = rec.active;
-                }
-                r.undo();
-            }
-            "redo" => r.redo(),
+            // Undo/redo (issue #62). The renderer's unified undo_stack
+            // restores the registry + active index + self.data in one
+            // call — no more "is this a pivot?" branching at the call
+            // site.
+            "undo" => r.undo(&sheets, &active),
+            "redo" => r.redo(&sheets, &active),
             "font-bold" => r.toggle_bold(),
             "font-italic" => r.toggle_italic(),
             "underline" => r.toggle_underline(),
