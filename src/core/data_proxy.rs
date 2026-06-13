@@ -158,6 +158,13 @@ pub struct DataProxy {
     /// sibling in the workbook's `SheetsRegistry`. This list survives
     /// workbook round-trip via `#[serde(default)]` so old workbooks load.
     pub pivots: Vec<crate::core::pivot::PivotTable>,
+    /// Floating visual filters bound to this sheet's fields (issue #61).
+    /// A slicer is a list of selected values for one column; the pivot
+    /// engine reads it and applies it as an additional row predicate for
+    /// every pivot whose spec references the bound field. Empty list =
+    /// no slicing. Round-trips through `get_data` / `set_data` so
+    /// pre-#61 workbooks (which lack this key) load with an empty vec.
+    pub slicers: Vec<crate::core::pivot::Slicer>,
     /// All sheets in the workbook, used to resolve `Sheet2!A1` references
     /// (issue #4). `None` for tests / standalone use that don't need
     /// cross-sheet refs; `ZedSheet` wires this up at construction time.
@@ -236,6 +243,7 @@ impl Default for DataProxy {
             tables: Vec::new(),
             named_ranges: HashMap::new(),
             pivots: Vec::new(),
+            slicers: Vec::new(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
             eval_cell: std::cell::Cell::new((0, 0)),
@@ -2609,6 +2617,11 @@ impl DataProxy {
             // this list is the *recipe* on the source sheet, so Refresh
             // can find it after a workbook round-trip.
             "pivots": serde_json::to_value(&self.pivots).unwrap_or_default(),
+            // Slicers (issue #61) — visual filters that apply to every
+            // pivot on this source sheet. Round-trips through
+            // `get_data` / `set_data`; pre-#61 workbooks omit the key
+            // and load with an empty list.
+            "slicers": serde_json::to_value(&self.slicers).unwrap_or_default(),
             // Excel-style tables (issue #34).
             "tables": serde_json::to_value(&self.tables).unwrap_or_default(),
             // Active cell (ri, ci) + selection rectangle, so a host can
@@ -2707,6 +2720,14 @@ impl DataProxy {
             // materialised cells live on the output sheet; this list is
             // the recipe that `refresh_active_pivot` reads to re-run.
             self.pivots = pv;
+        }
+        if let Some(sl) = data
+            .get("slicers")
+            .and_then(|v| serde_json::from_value::<Vec<crate::core::pivot::Slicer>>(v.clone()).ok())
+        {
+            // Slicers (issue #61) — visual filters on the source sheet.
+            // Absent in pre-#61 workbooks; `slicers` stays empty.
+            self.slicers = sl;
         }
         if let Some(ts) = data
             .get("tables")
