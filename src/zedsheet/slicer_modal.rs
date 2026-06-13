@@ -448,11 +448,14 @@ pub(crate) fn render_slicer_panels(
     }
 }
 
-/// Minimal HTML-attribute encoding for the chip's data-value. The
-/// value can be any user-entered text, including quotes and ampersands;
-/// the chip's text label goes through `esc` separately, but the data
-/// attribute needs its own encode because attribute parsing tolerates
-/// less than inner-HTML does.
+/// Minimal HTML-attribute encoding for the chip's `data-value`. The
+/// value can be any user-entered text, including quotes and
+/// ampersands; the chip's text label goes through `esc` separately,
+/// but the data attribute needs its own encode because attribute
+/// parsing tolerates less than inner-HTML does. The chip's *index*
+/// lives in a separate `data-slicer-chip` attribute so values that
+/// contain colons don't have to be re-escaped inside a single packed
+/// attribute.
 fn html_attr_encode(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('"', "&quot;")
@@ -479,45 +482,45 @@ fn wire_slicer_panel_events(
         let Some(target) = event.target() else { return };
         let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
 
-        // Chip click: data-slicer-chip="i:value"
+        // Chip click: read the index from `data-slicer-chip` and the
+        // value from `data-value` (the two are kept as separate
+        // attributes so values containing colons don't have to be
+        // re-escaped inside a single packed attribute).
         if let Some(chip) = elx.closest(&format!("[{}]", CHIP_ATTR)).ok().flatten() {
-            if let Some(attr) = chip.get_attribute(CHIP_ATTR) {
-                // Split on the FIRST ":" so a value that contains a
-                // colon (rare but possible) doesn't get truncated.
-                if let Some((idx_str, value)) = attr.split_once(':') {
-                    if let Ok(idx) = idx_str.parse::<usize>() {
-                        let value = value.to_string();
-                        let mut s = sheets.borrow_mut();
-                        let ai = *active.borrow();
-                        if ai < s.len() && idx < s[ai].slicers.len() {
-                            // Toggle: if present, remove; if absent, add.
-                            // `Vec::retain` keeps order; `push` adds to
-                            // the end. Order doesn't matter for the
-                            // engine, but stable order keeps the JSON
-                            // deterministic.
-                            if let Some(pos) = s[ai].slicers[idx]
-                                .selected_values
-                                .iter()
-                                .position(|v| v == &value)
-                            {
-                                s[ai].slicers[idx].selected_values.remove(pos);
-                            } else {
-                                s[ai].slicers[idx].selected_values.push(value);
-                            }
-                        }
-                        drop(s);
-                        // Re-render the panels so the chip's class
-                        // updates (selected vs unselected), then
-                        // recompute the pivots so the output sheet
-                        // reflects the new selection.
-                        render_slicer_panels(&sheet_el_for_closure, &sheets, &active, &renderer);
-                        {
-                            let mut r = renderer.borrow_mut();
-                            r.refresh_pivots_on_source(&sheets, &active, *active.borrow());
-                        }
-                        sync();
+            let idx = chip
+                .get_attribute(CHIP_ATTR)
+                .and_then(|v| v.parse::<usize>().ok());
+            let value = chip.get_attribute("data-value");
+            if let (Some(idx), Some(value)) = (idx, value) {
+                let mut s = sheets.borrow_mut();
+                let ai = *active.borrow();
+                if ai < s.len() && idx < s[ai].slicers.len() {
+                    // Toggle: if present, remove; if absent, add.
+                    // `Vec::retain` keeps order; `push` adds to
+                    // the end. Order doesn't matter for the
+                    // engine, but stable order keeps the JSON
+                    // deterministic.
+                    if let Some(pos) = s[ai].slicers[idx]
+                        .selected_values
+                        .iter()
+                        .position(|v| v == &value)
+                    {
+                        s[ai].slicers[idx].selected_values.remove(pos);
+                    } else {
+                        s[ai].slicers[idx].selected_values.push(value);
                     }
                 }
+                drop(s);
+                // Re-render the panels so the chip's class
+                // updates (selected vs unselected), then
+                // recompute the pivots so the output sheet
+                // reflects the new selection.
+                render_slicer_panels(&sheet_el_for_closure, &sheets, &active, &renderer);
+                {
+                    let mut r = renderer.borrow_mut();
+                    r.refresh_pivots_on_source(&sheets, &active, *active.borrow());
+                }
+                sync();
             }
             return;
         }
