@@ -749,6 +749,7 @@ pub(crate) fn wire_pivot_modal(
                 agg: first_value.1,
                 value_fields,
                 filter_fields,
+                date_groups: std::collections::HashMap::new(),
                 output_sheet: output,
             };
 

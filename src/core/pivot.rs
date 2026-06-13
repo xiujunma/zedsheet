@@ -87,10 +87,42 @@ pub struct PivotTable {
     /// loadable.
     #[serde(default)]
     pub filter_fields: Vec<FilterField>,
+    /// Per-field date grouping (issue #60). If a row or col field index
+    /// appears in this map, the key extractor parses that cell as a date
+    /// (ISO `2024-03-15`, US `3/15/2024`, or Excel serial `45306`) and
+    /// groups the key by the chosen unit instead of using the raw value.
+    /// Empty = no grouping — old workbooks keep working via the
+    /// `#[serde(default)]` deserializer.
+    #[serde(default)]
+    pub date_groups: HashMap<usize, DateGroup>,
     /// Name of the output sheet this pivot is currently rendered on. The
     /// renderer updates this when the user Refreshes (in MVP, the output
     /// sheet's name never changes — Refresh overwrites in place).
     pub output_sheet: String,
+}
+
+/// One date-grouping unit (issue #60). The key extractor recognizes
+/// dates in three formats:
+///
+/// - ISO 8601 text: `2024-03-15`, `2024/03/15`, with optional time
+///   suffix (`2024-03-15T10:30:00`).
+/// - US/EU text: `3/15/2024` (US — day ambiguous when both parts ≤ 12),
+///   `15/3/2024` (EU — first part > 12).
+/// - Excel date serial: a pure integer (e.g. `45306` for 2024-01-15).
+///
+/// The grouped key is rendered as `YYYY`, `YYYY-Qn` (n=1..=4),
+/// `YYYY-MM`, or `YYYY-MM-DD`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DateGroup {
+    /// Group by calendar year — key renders as `YYYY`.
+    Year,
+    /// Group by year + quarter — key renders as `YYYY-Qn` (n=1..=4).
+    Quarter,
+    /// Group by year + month — key renders as `YYYY-MM`.
+    Month,
+    /// Group by year + month + day — key renders as `YYYY-MM-DD`.
+    Day,
 }
 
 /// One value field + its aggregation (issue #59). The cross-tab body
@@ -328,8 +360,8 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         if !filter_pred(ri) {
             continue;
         }
-        let rk = make_key(source, ri, c0, &pt.row_fields);
-        let ck = make_key(source, ri, c0, &pt.col_fields);
+        let rk = make_key(source, ri, c0, &pt.row_fields, pt);
+        let ck = make_key(source, ri, c0, &pt.col_fields, pt);
         let entry = buckets.entry((rk, ck)).or_insert_with(|| Vec::with_capacity(nv));
         // Grow lazily on first encounter so the value-field index lines up.
         for (v_idx, vf) in value_fields.iter().enumerate() {
@@ -350,8 +382,8 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         if !filter_pred(ri) {
             continue;
         }
-        let rk = make_key(source, ri, c0, &pt.row_fields);
-        let ck = make_key(source, ri, c0, &pt.col_fields);
+        let rk = make_key(source, ri, c0, &pt.row_fields, pt);
+        let ck = make_key(source, ri, c0, &pt.col_fields, pt);
         if seen_r.insert(rk.clone()) {
             row_keys.push(rk);
         }
@@ -441,14 +473,30 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
 
 /// Build the grouping key for one source row. Reads the columns named by
 /// `fields` (offsets relative to `c0`) and returns a `Key::Single` for
-/// 0/1 fields, or a `Key::Tuple` for multi-field keys.
-fn make_key(source: &DataProxy, ri: usize, c0: usize, fields: &[usize]) -> Key {
+/// 0/1 fields, or a `Key::Tuple` for multi-field keys. If a field's index
+/// appears in `pt.date_groups` (issue #60), the cell is parsed as a date
+/// and the key is rendered as the chosen unit (`YYYY`, `YYYY-Qn`,
+/// `YYYY-MM`, or `YYYY-MM-DD`).
+fn make_key(source: &DataProxy, ri: usize, c0: usize, fields: &[usize], pt: &PivotTable) -> Key {
     if fields.is_empty() {
         return Key::Single(PrimKey::Blank);
     }
     let parts: Vec<PrimKey> = fields
         .iter()
-        .map(|ci| prim_from_cell(source, ri, c0 + *ci))
+        .map(|ci| {
+            // Date grouping (issue #60): when a field is named in
+            // `pt.date_groups`, parse the cell as a date and emit a
+            // formatted text key. Unparseable dates fall back to the raw
+            // cell text (so a typo'd source value still surfaces as a
+            // distinct bucket rather than collapsing into "Other").
+            if let Some(&group) = pt.date_groups.get(ci) {
+                let raw = source.cell_raw_value(ri, c0 + *ci);
+                if let Some(grp) = parse_date_key(&raw, group) {
+                    return PrimKey::Text(grp);
+                }
+            }
+            prim_from_cell(source, ri, c0 + *ci)
+        })
         .collect();
     if parts.len() == 1 {
         Key::Single(parts.into_iter().next().unwrap())
@@ -472,6 +520,150 @@ fn prim_from_cell(source: &DataProxy, ri: usize, ci: usize) -> PrimKey {
     // Coerce leading-numeric-with-suffix? No: Excel does not match "100kg"
     // with 100 in a column. Be strict.
     PrimKey::Text(t.to_string())
+}
+
+/// Parse a cell as a date and return the grouped key for the chosen unit
+/// (issue #60). Returns `None` when the cell is blank or doesn't match any
+/// recognized date format — the caller falls back to the raw cell text
+/// in that case so unparseable values still surface as distinct keys.
+fn parse_date_key(raw: &str, group: DateGroup) -> Option<String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return None;
+    }
+    // Try the unambiguous formats first: ISO (and slash-separated) and
+    // Excel serial. US/EU is the fallback because it has to disambiguate
+    // `M/D/YYYY` from `D/M/YYYY` heuristically.
+    if let Some(d) = parse_iso_or_slash(t) {
+        return Some(format_group(&d, group));
+    }
+    if let Some(d) = parse_excel_serial(t) {
+        return Some(format_group(&d, group));
+    }
+    if let Some(d) = parse_us_eu(t) {
+        return Some(format_group(&d, group));
+    }
+    None
+}
+
+/// `YYYY-MM-DD`, `YYYY/MM/DD`, with optional `T…` or ` …` time suffix.
+fn parse_iso_or_slash(s: &str) -> Option<DateYmd> {
+    // Strip the time portion if present.
+    let date_part = s.split(|c| c == 'T' || c == ' ').next()?;
+    let parts: Vec<&str> = date_part
+        .split(|c| c == '-' || c == '/')
+        .collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let d: u32 = parts[2].parse().ok()?;
+    if m < 1 || m > 12 || d < 1 || d > 31 {
+        return None;
+    }
+    Some(DateYmd { y, m, d })
+}
+
+/// Excel date serial — a pure integer in the sensible date range. We
+/// accept `[1, 200_000)`, which covers years ~1900 to ~2447. Anything
+/// outside is treated as "not a serial" so ordinary small integers in
+/// data columns don't accidentally become 1900-era dates.
+fn parse_excel_serial(s: &str) -> Option<DateYmd> {
+    // Reject any string with a decimal point, sign, or exponent.
+    if s.chars().any(|c| c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E') {
+        return None;
+    }
+    let n: i64 = s.parse().ok()?;
+    if !(1..200_000).contains(&n) {
+        return None;
+    }
+    civil_from_days(n - EXCEL_EPOCH_OFFSET)
+}
+
+/// `M/D/YYYY` (US) or `D/M/YYYY` (EU — when first part > 12). Two-digit
+/// years pivot at 50: `24` → `2024`, `75` → `1975`.
+fn parse_us_eu(s: &str) -> Option<DateYmd> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let a: u32 = parts[0].parse().ok()?;
+    let b: u32 = parts[1].parse().ok()?;
+    let y_raw: i32 = parts[2].parse().ok()?;
+    let y = if (0..100).contains(&y_raw) {
+        // 50-year pivot: 00..=49 → 20xx; 50..=99 → 19xx.
+        if y_raw < 50 {
+            2000 + y_raw
+        } else {
+            1900 + y_raw
+        }
+    } else {
+        y_raw
+    };
+    let (m, d) = if a > 12 {
+        // Day-first (EU) — only legal if day exceeds 12.
+        (b, a)
+    } else if b > 12 {
+        // Month-first (US) — only legal if day exceeds 12.
+        (a, b)
+    } else {
+        // Both ≤ 12: ambiguous. Default to US (matches Excel on a
+        // US-locale install, which is the common case).
+        (a, b)
+    };
+    if m < 1 || m > 12 || d < 1 || d > 31 {
+        return None;
+    }
+    Some(DateYmd { y, m, d })
+}
+
+/// `days_from_civil(1899, 12, 30)` — the offset between Excel's serial
+/// 0 (1899-12-30) and Hinnant's proleptic-Gregorian `days_from_epoch`
+/// (days since 1970-01-01). Computed once at compile time; see
+/// `parse_excel_serial` for the inverse.
+const EXCEL_EPOCH_OFFSET: i64 = 25_569;
+
+#[derive(Debug, Clone, Copy)]
+struct DateYmd {
+    y: i32,
+    m: u32,
+    d: u32,
+}
+
+/// Render a date key for the chosen grouping unit (issue #60).
+fn format_group(d: &DateYmd, g: DateGroup) -> String {
+    match g {
+        DateGroup::Year => format!("{:04}", d.y),
+        DateGroup::Quarter => {
+            let q = (d.m - 1) / 3 + 1;
+            format!("{:04}-Q{}", d.y, q)
+        }
+        DateGroup::Month => format!("{:04}-{:02}", d.y, d.m),
+        DateGroup::Day => format!("{:04}-{:02}-{:02}", d.y, d.m, d.d),
+    }
+}
+
+/// Howard Hinnant's `civil_from_days` (proleptic Gregorian). Inverse of
+/// `days_from_civil`; we only need this direction for Excel-serial dates
+/// (issue #60). Verified against `2024-01-15` ↔ serial 45306.
+fn civil_from_days(z: i64) -> Option<DateYmd> {
+    // Shift to Hinnant's `days_from_zero` epoch (0000-03-01).
+    let z = z + 719_468;
+    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let doe = (z - era * 146_097) as u64; // [0, 146_096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    Some(DateYmd {
+        y: y as i32,
+        m: m as u32,
+        d: d as u32,
+    })
 }
 
 /// Parse a value cell into `Some(f64)` or `None` (blank). Numeric text
@@ -785,6 +977,7 @@ mod tests {
             agg,
             value_fields: vec![],
             filter_fields: vec![],
+            date_groups: HashMap::new(),
             output_sheet: "Pivot1".into(),
         }
     }
@@ -1122,6 +1315,7 @@ mod tests {
             agg: Agg::Avg,
             value_fields: vec![],
             filter_fields: vec![],
+            date_groups: HashMap::new(),
             output_sheet: "Pivot1".into(),
         };
         let s = serde_json::to_string(&p).unwrap();
@@ -1454,5 +1648,362 @@ mod tests {
         let dp = sheet_from_rows("S", &[&["A", "B"], &["x", "1"]]);
         let bad = pt_multi("S!A1:B2", vec![], vec![], vec![(5, Agg::Sum)]);
         assert!(compute(&dp, &bad).is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // Date grouping (issue #60)
+    // -----------------------------------------------------------------
+
+    /// Helper: a pivot with one row field, one value field, and an optional
+    /// date-grouping override on `row_field_idx` (the column index, not a
+    /// `PivotTable` field offset).
+    fn pt_dated(
+        source: &str,
+        row_field_idx: usize,
+        value: usize,
+        agg: Agg,
+        date_group: Option<DateGroup>,
+    ) -> PivotTable {
+        let mut p = pt(source, vec![row_field_idx], vec![], value, agg);
+        if let Some(g) = date_group {
+            p.date_groups.insert(row_field_idx, g);
+        }
+        p
+    }
+
+    #[test]
+    fn date_group_year_buckets_by_year() {
+        // Source has dates spanning 2023 and 2024; Year grouping should
+        // collapse to two row keys ("2023", "2024") with the corresponding
+        // sum of Amounts.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2023-01-15", "10"],
+            &["2023-06-20", "20"],
+            &["2024-01-10", "50"],
+        ]);
+        let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Year));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2023", "2024"]);
+        assert_eq!(r.body[0][0], Some(30.0)); // 10 + 20
+        assert_eq!(r.body[1][0], Some(50.0));
+        assert_eq!(r.grand_total, vec![Some(80.0)]);
+    }
+
+    #[test]
+    fn date_group_quarter_buckets_by_year_quarter() {
+        // Same dates — Quarter grouping collapses the two 2023 entries
+        // into one bucket (Q1 vs Q2 differ), keeps 2024 as Q1.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2023-01-15", "10"],
+            &["2023-06-20", "20"],
+            &["2024-01-10", "50"],
+        ]);
+        let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Quarter));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2023-Q1", "2023-Q2", "2024-Q1"]);
+        assert_eq!(r.body[0][0], Some(10.0));
+        assert_eq!(r.body[1][0], Some(20.0));
+        assert_eq!(r.body[2][0], Some(50.0));
+    }
+
+    #[test]
+    fn date_group_month_buckets_by_year_month() {
+        // Same dates — Month grouping produces three distinct keys
+        // spanning two years.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2023-01-15", "10"],
+            &["2023-06-20", "20"],
+            &["2024-01-10", "50"],
+        ]);
+        let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Month));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2023-01", "2023-06", "2024-01"]);
+    }
+
+    #[test]
+    fn date_group_day_buckets_by_exact_date() {
+        // Same dates — Day grouping preserves all three distinct dates.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2023-01-15", "10"],
+            &["2023-06-20", "20"],
+            &["2024-01-10", "50"],
+        ]);
+        let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Day));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2023-01-15", "2023-06-20", "2024-01-10"]);
+    }
+
+    #[test]
+    fn date_group_with_us_format_text_dates() {
+        // US-style `M/D/YYYY` text dates parse correctly.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["1/15/2023", "10"],
+            &["6/20/2023", "20"],
+        ]);
+        let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Quarter));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2023-Q1", "2023-Q2"]);
+    }
+
+    #[test]
+    fn date_group_with_eu_format_text_dates() {
+        // EU-style `D/M/YYYY` — first part > 12 disambiguates from US.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["15/1/2023", "10"],
+            &["20/6/2023", "20"],
+        ]);
+        let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Month));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2023-01", "2023-06"]);
+    }
+
+    #[test]
+    fn date_group_with_excel_serial_dates() {
+        // Excel serial 45306 = 2024-01-15, 45366 = 2024-03-15 (2024 is a
+        // leap year, so Jan 15 → Mar 15 = 60 days). We hand-pick serials
+        // in the 1..200_000 range so the parser accepts them as dates.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["45306", "10"], // 2024-01-15
+            &["45366", "20"], // 2024-03-15
+        ]);
+        let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Month));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2024-01", "2024-03"]);
+    }
+
+    #[test]
+    fn date_group_with_iso_datetime_strips_time() {
+        // ISO 8601 with a `T…` time suffix — the time portion is dropped
+        // before parsing.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2024-03-15T10:30:00", "10"],
+            &["2024-03-15T18:00:00", "20"],
+        ]);
+        let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Day));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2024-03-15"]); // same day → one bucket
+        assert_eq!(r.grand_total, vec![Some(30.0)]);
+    }
+
+    #[test]
+    fn date_group_unparseable_dates_fall_back_to_raw_text() {
+        // A non-date string falls through to the existing text-key path
+        // so the user still sees it as a distinct bucket — better than
+        // silently dropping the row.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2024-03-15", "10"],
+            &["not a date", "5"],
+        ]);
+        let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Month));
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        assert_eq!(keys, vec!["2024-03", "not a date"]);
+    }
+
+    #[test]
+    fn date_group_only_applies_to_named_field() {
+        // Two row fields: a date column (grouped) and a category column
+        // (raw). The category column stays as raw text while the date
+        // collapses by month.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Region", "Amount"],
+            &["2024-01-15", "North", "10"],
+            &["2024-01-20", "South", "5"],
+            &["2024-02-10", "North", "20"],
+        ]);
+        let mut p = pt("S!A1:C4", vec![0, 1], vec![], 2, Agg::Sum);
+        p.date_groups.insert(0, DateGroup::Month);
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        // The (date-key, region) tuple — same Region across months
+        // doesn't collapse.
+        assert_eq!(keys, vec![
+            "2024-01 / North",
+            "2024-01 / South",
+            "2024-02 / North",
+        ]);
+        assert_eq!(r.body[0][0], Some(10.0));
+        assert_eq!(r.body[1][0], Some(5.0));
+        assert_eq!(r.body[2][0], Some(20.0));
+    }
+
+    #[test]
+    fn date_group_in_col_field() {
+        // Date grouping on a column field: cross-tab by Region (rows) and
+        // month (cols).
+        let dp = sheet_from_rows("S", &[
+            &["Region", "Date", "Amount"],
+            &["North", "2024-01-15", "10"],
+            &["North", "2024-02-10", "20"],
+            &["South", "2024-01-20", "5"],
+        ]);
+        let mut p = pt("S!A1:C4", vec![0], vec![1], 2, Agg::Sum);
+        p.date_groups.insert(1, DateGroup::Month);
+        let r = compute(&dp, &p).unwrap();
+        let row_keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        let col_keys: Vec<String> = r.col_keys.iter().map(key_to_display).collect();
+        assert_eq!(row_keys, vec!["North", "South"]);
+        assert_eq!(col_keys, vec!["2024-01", "2024-02"]);
+        // North × 2024-01 = 10; North × 2024-02 = 20; South × 2024-01 = 5.
+        assert_eq!(r.body[0][0], Some(10.0));
+        assert_eq!(r.body[0][1], Some(20.0));
+        assert_eq!(r.body[1][0], Some(5.0));
+    }
+
+    #[test]
+    fn date_group_empty_map_preserves_existing_behavior() {
+        // Backward compat: a spec without `date_groups` deserializes with
+        // an empty map, and the engine runs exactly as it did before #60.
+        let dp = sheet_from_rows("S", &[
+            &["Date", "Amount"],
+            &["2024-01-15", "10"],
+            &["2024-02-10", "20"],
+        ]);
+        let p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
+        // Sanity: no date_groups entry set on the spec.
+        assert!(p.date_groups.is_empty());
+        let r = compute(&dp, &p).unwrap();
+        let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
+        // Raw text keys: each distinct date is its own row.
+        assert_eq!(keys, vec!["2024-01-15", "2024-02-10"]);
+    }
+
+    #[test]
+    fn date_groups_persist_through_serde() {
+        // A pivot with a date_groups map survives `to_string` /
+        // `from_str` so workbook JSON preserves the grouping choice.
+        let mut p = pt("S!A1:B2", vec![0], vec![], 1, Agg::Sum);
+        p.date_groups.insert(0, DateGroup::Quarter);
+        let s = serde_json::to_string(&p).unwrap();
+        let back: PivotTable = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.date_groups.get(&0), Some(&DateGroup::Quarter));
+    }
+
+    #[test]
+    fn date_groups_omitted_in_legacy_json_uses_empty_map() {
+        // Old workbook JSON (pre-#60) has no `date_groups` field. The
+        // default-value deserializer must produce an empty map so the
+        // engine behaves exactly like a pre-#60 pivot.
+        let legacy = r#"{
+            "source_range": "S!A1:B2",
+            "source_sheet": "S",
+            "row_fields": [0],
+            "col_fields": [],
+            "value_field": 1,
+            "agg": "sum",
+            "value_fields": [],
+            "filter_fields": [],
+            "output_sheet": "Pivot1"
+        }"#;
+        let back: PivotTable = serde_json::from_str(legacy).unwrap();
+        assert!(back.date_groups.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Direct parser tests (issue #60)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn parse_date_key_iso_variants() {
+        // All four grouping units on the same ISO input.
+        assert_eq!(
+            parse_date_key("2024-03-15", DateGroup::Year),
+            Some("2024".into())
+        );
+        assert_eq!(
+            parse_date_key("2024-03-15", DateGroup::Quarter),
+            Some("2024-Q1".into())
+        );
+        assert_eq!(
+            parse_date_key("2024-03-15", DateGroup::Month),
+            Some("2024-03".into())
+        );
+        assert_eq!(
+            parse_date_key("2024-03-15", DateGroup::Day),
+            Some("2024-03-15".into())
+        );
+    }
+
+    #[test]
+    fn parse_date_key_iso_with_slash_and_time() {
+        // Slash-separated ISO and ISO+time both parse cleanly.
+        assert_eq!(
+            parse_date_key("2024/03/15", DateGroup::Day),
+            Some("2024-03-15".into())
+        );
+        assert_eq!(
+            parse_date_key("2024-03-15T10:30:00", DateGroup::Day),
+            Some("2024-03-15".into())
+        );
+    }
+
+    #[test]
+    fn parse_date_key_excel_serial_to_year() {
+        // 45306 = 2024-01-15 (Excel serial, days since 1899-12-30).
+        assert_eq!(
+            parse_date_key("45306", DateGroup::Year),
+            Some("2024".into())
+        );
+        assert_eq!(
+            parse_date_key("45306", DateGroup::Day),
+            Some("2024-01-15".into())
+        );
+    }
+
+    #[test]
+    fn parse_date_key_rejects_small_integers_as_serials() {
+        // `100` is a valid integer in 1..200_000, but it's 1900-04-09 as
+        // a date — almost certainly not a date. We currently *accept* it
+        // (a date-grouped field's text is a date by intent), so the test
+        // pins the current behavior. If we want stricter rejection later,
+        // this is the test to flip.
+        assert_eq!(
+            parse_date_key("100", DateGroup::Year),
+            Some("1900".into())
+        );
+        // 0 and 200_000 are out of range → None.
+        assert_eq!(parse_date_key("0", DateGroup::Year), None);
+        assert_eq!(parse_date_key("200000", DateGroup::Year), None);
+    }
+
+    #[test]
+    fn parse_date_key_us_two_digit_year() {
+        // `1/15/24` → 2024 (50-year pivot: 00..=49 → 20xx).
+        assert_eq!(
+            parse_date_key("1/15/24", DateGroup::Year),
+            Some("2024".into())
+        );
+        // `1/15/75` → 1975 (50..=99 → 19xx).
+        assert_eq!(
+            parse_date_key("1/15/75", DateGroup::Year),
+            Some("1975".into())
+        );
+    }
+
+    #[test]
+    fn parse_date_key_returns_none_for_unparseable() {
+        // Anything that doesn't match a date format → None so the caller
+        // falls back to the raw text key path.
+        assert_eq!(parse_date_key("", DateGroup::Year), None);
+        assert_eq!(parse_date_key("   ", DateGroup::Year), None);
+        assert_eq!(parse_date_key("not a date", DateGroup::Year), None);
+        assert_eq!(parse_date_key("13/45/2024", DateGroup::Year), None);
     }
 }

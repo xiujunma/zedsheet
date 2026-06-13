@@ -33,6 +33,7 @@ fn pt(source: &str, row_fields: Vec<usize>, col_fields: Vec<usize>, value: usize
         agg,
         value_fields: vec![],
         filter_fields: vec![],
+        date_groups: std::collections::HashMap::new(),
         output_sheet: "Pivot1".into(),
     }
 }

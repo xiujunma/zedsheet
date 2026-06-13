@@ -2873,6 +2873,7 @@ mod tests {
             agg,
             value_fields: vec![],
             filter_fields: vec![],
+            date_groups: std::collections::HashMap::new(),
             output_sheet: output_sheet.into(),
         }
     }
