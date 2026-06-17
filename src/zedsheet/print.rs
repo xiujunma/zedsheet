@@ -4,12 +4,12 @@
 //! size, orientation, margins, and scaling; `@page`/`break-inside` CSS keeps
 //! the table pagination tidy. The document builder is pure and host-tested.
 
-use wasm_bindgen::JsCast;
-use web_sys::HtmlIFrameElement;
-use crate::core::data_proxy::DataProxy;
-use crate::core::html_util::{esc, td_style};
 #[allow(unused_imports)]
 use super::*;
+use crate::core::data_proxy::DataProxy;
+use crate::core::html_util::{esc, td_style};
+use wasm_bindgen::JsCast;
+use web_sys::HtmlIFrameElement;
 
 /// Build a standalone HTML document of the sheet's used extent: a fixed-layout
 /// table with the grid's column widths and row heights, merged cells as
@@ -88,7 +88,9 @@ pub(crate) fn open_print(renderer: &SharedRenderer) {
     if let Ok(Some(old)) = doc.query_selector("#zs-print-frame") {
         old.remove();
     }
-    let Ok(frame) = doc.create_element("iframe") else { return };
+    let Ok(frame) = doc.create_element("iframe") else {
+        return;
+    };
     let _ = frame.set_attribute("id", "zs-print-frame");
     let _ = frame.set_attribute(
         "style",
@@ -124,9 +126,15 @@ mod tests {
         d.set_cell_text(0, 2, "=B1*3");
         let html = build_print_html(&d);
         assert!(html.contains("<title>Report</title>"));
-        assert!(html.contains("&lt;b&gt;safe&lt;/b&gt;"), "values are escaped");
+        assert!(
+            html.contains("&lt;b&gt;safe&lt;/b&gt;"),
+            "values are escaped"
+        );
         assert!(!html.contains("<b>safe</b>"));
-        assert!(html.contains("<td style=\"\">6</td>"), "formula prints computed");
+        assert!(
+            html.contains("<td style=\"\">6</td>"),
+            "formula prints computed"
+        );
     }
 
     #[test]
@@ -162,7 +170,10 @@ mod tests {
         });
         let html = build_print_html(&d);
         assert!(html.contains("font-weight:bold;"));
-        assert!(html.contains("background:#ffc7ce;"), "cond format prints too");
+        assert!(
+            html.contains("background:#ffc7ce;"),
+            "cond format prints too"
+        );
     }
 
     #[test]

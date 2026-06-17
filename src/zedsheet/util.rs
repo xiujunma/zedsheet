@@ -13,10 +13,16 @@ use crate::renderer::alphabets::exp2xy;
 /// Painter to signal its armed state (issue #31). Targets the first mounted
 /// grid canvas.
 pub(crate) fn set_canvas_cursor(cursor: Option<&str>) {
-    let Some(canvas) = document().query_selector("canvas.zedsheet-table").ok().flatten() else {
+    let Some(canvas) = document()
+        .query_selector("canvas.zedsheet-table")
+        .ok()
+        .flatten()
+    else {
         return;
     };
-    let Some(he) = canvas.dyn_ref::<HtmlElement>() else { return };
+    let Some(he) = canvas.dyn_ref::<HtmlElement>() else {
+        return;
+    };
     match cursor {
         Some(c) => {
             let _ = he.style().set_property("cursor", c);

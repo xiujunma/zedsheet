@@ -19,37 +19,37 @@ use crate::renderer::table_renderer::{DragKind, TableRenderer};
 // ::new orchestration and the shared types below. Each submodule does
 // `use super::*`, so these `pub(crate) use` re-exports give them the shared
 // types/helpers and each other's entry points.
-mod util;
 mod autocomplete;
-mod formula_bar;
-mod toolbar;
+mod bottom_bar;
+mod chart_modal;
+mod cond_format_modal;
 mod context_menu;
 mod data_validation;
-mod cond_format_modal;
-mod chart_modal;
-mod pivot_modal;
-mod slicer_modal;
-mod filter_menu;
-mod print;
-mod find_replace;
-mod bottom_bar;
 mod events;
+mod filter_menu;
+mod find_replace;
+mod formula_bar;
+mod pivot_modal;
+mod print;
+mod slicer_modal;
 mod system_clipboard;
+mod toolbar;
+mod util;
 
-pub(crate) use util::*;
-pub(crate) use formula_bar::*;
-pub(crate) use toolbar::*;
+pub(crate) use bottom_bar::*;
+pub(crate) use chart_modal::*;
+pub(crate) use cond_format_modal::*;
 pub(crate) use context_menu::*;
 pub(crate) use data_validation::*;
-pub(crate) use cond_format_modal::*;
-pub(crate) use chart_modal::*;
-pub(crate) use pivot_modal::*;
-pub(crate) use slicer_modal::*;
-pub(crate) use filter_menu::*;
-pub(crate) use print::*;
-pub(crate) use find_replace::*;
-pub(crate) use bottom_bar::*;
 pub(crate) use events::*;
+pub(crate) use filter_menu::*;
+pub(crate) use find_replace::*;
+pub(crate) use formula_bar::*;
+pub(crate) use pivot_modal::*;
+pub(crate) use print::*;
+pub(crate) use slicer_modal::*;
+pub(crate) use toolbar::*;
+pub(crate) use util::*;
 
 /// Which attribute a toolbar dropdown applies.
 #[derive(Clone, Copy)]
@@ -215,9 +215,19 @@ impl ZedSheet {
                 "zs-dd-fontsize",
                 "60px",
                 vec![
-                    ("10", "10"), ("11", "11"), ("12", "12"), ("13", "13"),
-                    ("14", "14"), ("16", "16"), ("18", "18"), ("20", "20"),
-                    ("24", "24"), ("28", "28"), ("32", "32"), ("36", "36"), ("48", "48"),
+                    ("10", "10"),
+                    ("11", "11"),
+                    ("12", "12"),
+                    ("13", "13"),
+                    ("14", "14"),
+                    ("16", "16"),
+                    ("18", "18"),
+                    ("20", "20"),
+                    ("24", "24"),
+                    ("28", "28"),
+                    ("32", "32"),
+                    ("36", "36"),
+                    ("48", "48"),
                 ],
             ),
             // View zoom (issue #32). Values are percentages.
@@ -227,8 +237,13 @@ impl ZedSheet {
                 "zs-dd-zoom",
                 "70px",
                 vec![
-                    ("50", "50%"), ("75", "75%"), ("100", "100%"), ("125", "125%"),
-                    ("150", "150%"), ("200", "200%"), ("400", "400%"),
+                    ("50", "50%"),
+                    ("75", "75%"),
+                    ("100", "100%"),
+                    ("125", "125%"),
+                    ("150", "150%"),
+                    ("200", "200%"),
+                    ("400", "400%"),
                 ],
             ),
         ];
@@ -341,7 +356,8 @@ impl ZedSheet {
         let fbar_h = 26f64;
         let (cw, ch) = client_box(&target_el);
         let width = if cw > 0f64 { cw } else { 900f64 };
-        let height = (if ch > 0f64 { ch } else { 600f64 } - toolbar_h - bottom_h - fbar_h).max(200f64);
+        let height =
+            (if ch > 0f64 { ch } else { 600f64 } - toolbar_h - bottom_h - fbar_h).max(200f64);
 
         let canvas = canvas_el
             .el
@@ -520,7 +536,8 @@ impl ZedSheet {
             let pop_visible_for_cb = list_popover_visible.clone();
             let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
                 let target = event.target();
-                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                else {
                     return;
                 };
                 let value = target_el.get_attribute("data-value").unwrap_or_default();
@@ -532,12 +549,18 @@ impl ZedSheet {
                     let s = r.get_selector();
                     (s.ri, s.ci)
                 };
-                let _ = renderer_for_pop.borrow_mut().set_cell_text_at(ri, ci, &value);
+                let _ = renderer_for_pop
+                    .borrow_mut()
+                    .set_cell_text_at(ri, ci, &value);
                 let _ = renderer_for_pop.borrow_mut().render();
-                let _ = pop_for_hide.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = pop_for_hide
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 *pop_visible_for_cb.borrow_mut() = false;
             });
-            let _ = pop_for_listener.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
+            let _ = pop_for_listener
+                .add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
             cb.forget();
         }
         // Outside click closes the popover.
@@ -550,16 +573,20 @@ impl ZedSheet {
                 }
                 let Some(pop_el) = pop.as_ref() else { return };
                 let target = event.target();
-                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                else {
                     return;
                 };
                 if !pop_el.contains(Some(&target_el)) {
-                    let _ = pop_el.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                    let _ = pop_el
+                        .unchecked_ref::<web_sys::HtmlElement>()
+                        .style()
+                        .set_property("display", "none");
                     *pop_visible_for_outside.borrow_mut() = false;
                 }
             });
-            let _ = window()
-                .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+            let _ =
+                window().add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
             cb.forget();
         }
 
@@ -591,16 +618,20 @@ impl ZedSheet {
                 }
                 let Some(fm_el) = fm.as_ref() else { return };
                 let target = event.target();
-                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+                let Some(target_el) = target.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                else {
                     return;
                 };
                 if !fm_el.contains(Some(&target_el)) {
-                    let _ = fm_el.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                    let _ = fm_el
+                        .unchecked_ref::<web_sys::HtmlElement>()
+                        .style()
+                        .set_property("display", "none");
                     *fm_visible_for_outside.borrow_mut() = false;
                 }
             });
-            let _ = window()
-                .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+            let _ =
+                window().add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
             cb.forget();
         }
 
@@ -619,7 +650,19 @@ impl ZedSheet {
             &sync,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
-            wire_context_menu(&mut canvas_el, menu_node, &renderer, &sheets, &active, &sync, dv_open.clone(), cf_open.clone(), chart_open.clone(), pivot_open.clone(), slicer_open.clone());
+            wire_context_menu(
+                &mut canvas_el,
+                menu_node,
+                &renderer,
+                &sheets,
+                &active,
+                &sync,
+                dv_open.clone(),
+                cf_open.clone(),
+                chart_open.clone(),
+                pivot_open.clone(),
+                slicer_open.clone(),
+            );
         }
         if let Some(fb) = fbar_node.clone() {
             wire_formula_bar(
@@ -656,7 +699,16 @@ impl ZedSheet {
         }
 
         if let Some(mut tb) = toolbar_el {
-            wire_toolbar(&mut tb, &renderer, &sheets, &active, palette_node.clone(), &palette_mode, menus, &sync);
+            wire_toolbar(
+                &mut tb,
+                &renderer,
+                &sheets,
+                &active,
+                palette_node.clone(),
+                &palette_mode,
+                menus,
+                &sync,
+            );
         }
         if let Some(bm) = border_menu_node {
             wire_border_menu(bm, &renderer, &sync);
@@ -807,11 +859,7 @@ impl ZedSheet {
                             .iter()
                             .map(|d| d.name.clone())
                             .collect();
-                        bottom_bar::render_tabs(
-                            &menu_node,
-                            &names,
-                            *active_for_tabs.borrow(),
-                        );
+                        bottom_bar::render_tabs(&menu_node, &names, *active_for_tabs.borrow());
                     }));
                 }
             }
@@ -857,12 +905,7 @@ impl ZedSheet {
             // Render any slicers that survived a `load_data` round-trip
             // (their HTML doesn't exist in the static template — it's
             // built from `DataProxy::slicers` on demand).
-            render_slicer_panels(
-                &sheet_el_for_slicer,
-                &sheets,
-                &active,
-                &renderer,
-            );
+            render_slicer_panels(&sheet_el_for_slicer, &sheets, &active, &renderer);
             let renderer_for_open = renderer.clone();
             let sheets_for_open = sheets.clone();
             let active_for_open = active.clone();
@@ -877,7 +920,12 @@ impl ZedSheet {
                     &active_for_open,
                     &renderer_for_open,
                 );
-                open_slicer_modal(&inner, &renderer_for_open, &sheets_for_open, &active_for_open);
+                open_slicer_modal(
+                    &inner,
+                    &renderer_for_open,
+                    &sheets_for_open,
+                    &active_for_open,
+                );
             }));
         }
 
@@ -972,21 +1020,35 @@ impl ZedSheet {
     pub(crate) fn sheets_registry(&self) -> Option<SheetsRegistry> {
         // `data.sheets` is a Weak back-reference (issue #4); upgrade it to a
         // strong Rc for the caller.
-        self.renderer.borrow().data.sheets.as_ref().and_then(|w| w.upgrade())
+        self.renderer
+            .borrow()
+            .data
+            .sheets
+            .as_ref()
+            .and_then(|w| w.upgrade())
     }
 }
 
 /// Serialize the live workbook — the renderer's (possibly-unsaved) active sheet
 /// plus the stored copies of the others — to a JSON array string (issue #20).
-fn current_workbook_json(renderer: &SharedRenderer, sheets: &Sheets, active: &ActiveSheet) -> String {
+fn current_workbook_json(
+    renderer: &SharedRenderer,
+    sheets: &Sheets,
+    active: &ActiveSheet,
+) -> String {
     let idx = *active.borrow();
     let live = renderer.borrow().data_clone();
     let arr: Vec<serde_json::Value> = sheets
         .borrow()
         .iter()
         .enumerate()
-        .map(|(i, s)| if i == idx { live.get_data() } else { s.get_data() })
+        .map(|(i, s)| {
+            if i == idx {
+                live.get_data()
+            } else {
+                s.get_data()
+            }
+        })
         .collect();
     serde_json::to_string(&serde_json::Value::Array(arr)).unwrap_or_else(|_| "[]".to_string())
 }
-

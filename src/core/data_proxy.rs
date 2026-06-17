@@ -1,22 +1,22 @@
-use serde::{Serialize, Deserialize};
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::rc::{Rc, Weak};
+use crate::core::auto_filter::AutoFilter;
+use crate::core::cell::Cell;
 use crate::core::cell_range::CellRange;
+use crate::core::chart::Chart;
+use crate::core::col::{Col, Cols};
+use crate::core::cond_format::{lerp3_hex, lerp_hex, CondRule};
+use crate::core::merges::Merges;
+use crate::core::outline::OutlineGroup;
+use crate::core::row::Row;
+use crate::core::state::{Clipboard, History, Scroll, Selector};
+use crate::core::table::Table;
+use crate::core::validation::{Validation, Validations};
 use crate::formula::parser::{tokenize, Token};
 use crate::renderer::alphabets::{exp2xy, index_at, string_at};
 use regex::Regex;
-use crate::core::cell::Cell;
-use crate::core::row::Row;
-use crate::core::col::{Col, Cols};
-use crate::core::merges::Merges;
-use crate::core::state::{Selector, Scroll, Clipboard, History};
-use crate::core::validation::{Validation, Validations};
-use crate::core::auto_filter::AutoFilter;
-use crate::core::cond_format::{lerp3_hex, lerp_hex, CondRule};
-use crate::core::outline::OutlineGroup;
-use crate::core::chart::Chart;
-use crate::core::table::Table;
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::{Rc, Weak};
 
 /// Shared registry of every sheet's `DataProxy`. Held by `ZedSheet` and
 /// referenced by every `DataProxy` so cross-sheet formulas can resolve
@@ -361,7 +361,9 @@ impl DataProxy {
     }
 
     pub fn get_cell_text(&self, ri: usize, ci: usize) -> String {
-        self.get_cell(ri, ci).map(|c| c.text.clone()).unwrap_or_default()
+        self.get_cell(ri, ci)
+            .map(|c| c.text.clone())
+            .unwrap_or_default()
     }
 
     /// The text shown for a cell: formulas (text starting with `=`) are
@@ -432,9 +434,7 @@ impl DataProxy {
             .anchors
             .iter()
             .filter_map(|(&(r, c), sz)| match sz {
-                Some((rs, cs)) if rs * cs > 1 => {
-                    Some(CellRange::new(r, c, r + rs - 1, c + cs - 1))
-                }
+                Some((rs, cs)) if rs * cs > 1 => Some(CellRange::new(r, c, r + rs - 1, c + cs - 1)),
                 _ => None,
             })
             .collect();
@@ -468,7 +468,9 @@ impl DataProxy {
         anchors.sort_unstable();
         for (ri, ci) in anchors {
             let text = self.get_cell_text(ri, ci);
-            let Some(expr) = text.strip_prefix('=') else { continue };
+            let Some(expr) = text.strip_prefix('=') else {
+                continue;
+            };
             let mut visited: Visited = HashSet::new();
             visited.insert((self.name.clone(), ri, ci));
             // Scalar results and errors take the ordinary display path; only
@@ -524,7 +526,9 @@ impl DataProxy {
     /// the range's numeric values.
     pub fn apply_cond_format(&self, ri: usize, ci: usize, style: &mut Style) {
         for rule in &self.cond_formats {
-            let Some((r0, c0, r1, c1)) = rule.bounds() else { continue };
+            let Some((r0, c0, r1, c1)) = rule.bounds() else {
+                continue;
+            };
             if ri < r0 || ri > r1 || ci < c0 || ci > c1 {
                 continue;
             }
@@ -538,7 +542,11 @@ impl DataProxy {
                     let Some((min, max)) = self.cond_range_min_max((r0, c0, r1, c1)) else {
                         continue;
                     };
-                    let t = if max > min { (n - min) / (max - min) } else { 0.5 };
+                    let t = if max > min {
+                        (n - min) / (max - min)
+                    } else {
+                        0.5
+                    };
                     let bg = if rule.op == "scale2" {
                         lerp_hex(&rule.v1, &rule.v2, t)
                     } else {
@@ -615,7 +623,9 @@ impl DataProxy {
         let raw = self.cell_raw_value(ri, ci);
         match rule.op.as_str() {
             "top" | "bottom" => {
-                let Ok(n) = raw.trim().parse::<f64>() else { return false };
+                let Ok(n) = raw.trim().parse::<f64>() else {
+                    return false;
+                };
                 let mut vals = self.cond_range_numbers(bounds);
                 if vals.is_empty() {
                     return false;
@@ -623,10 +633,14 @@ impl DataProxy {
                 // `v1` is a count ("3") or a percentage ("10%").
                 let v1 = rule.v1.trim();
                 let count = if let Some(pct) = v1.strip_suffix('%') {
-                    let Ok(p) = pct.trim().parse::<f64>() else { return false };
+                    let Ok(p) = pct.trim().parse::<f64>() else {
+                        return false;
+                    };
                     ((vals.len() as f64 * p / 100.0).round() as usize).max(1)
                 } else {
-                    let Ok(k) = v1.parse::<usize>() else { return false };
+                    let Ok(k) = v1.parse::<usize>() else {
+                        return false;
+                    };
                     k
                 };
                 let count = count.min(vals.len());
@@ -642,14 +656,20 @@ impl DataProxy {
                 }
             }
             "above-avg" | "below-avg" => {
-                let Ok(n) = raw.trim().parse::<f64>() else { return false };
+                let Ok(n) = raw.trim().parse::<f64>() else {
+                    return false;
+                };
                 let vals = self.cond_range_numbers(bounds);
                 if vals.is_empty() {
                     return false;
                 }
                 let avg = vals.iter().sum::<f64>() / vals.len() as f64;
                 // Excel's default rules are strict comparisons to the mean.
-                if rule.op == "above-avg" { n > avg } else { n < avg }
+                if rule.op == "above-avg" {
+                    n > avg
+                } else {
+                    n < avg
+                }
             }
             "dup" | "unique" => {
                 let needle = raw.trim().to_lowercase();
@@ -665,7 +685,11 @@ impl DataProxy {
                         }
                     }
                 }
-                if rule.op == "dup" { count >= 2 } else { count == 1 }
+                if rule.op == "dup" {
+                    count >= 2
+                } else {
+                    count == 1
+                }
             }
             "formula" => {
                 // Excel semantics: the formula is written for the range's
@@ -677,11 +701,8 @@ impl DataProxy {
                     return false;
                 }
                 let (r0, c0, _, _) = bounds;
-                let shifted = shift_formula_refs(
-                    expr,
-                    ri as isize - r0 as isize,
-                    ci as isize - c0 as isize,
-                );
+                let shifted =
+                    shift_formula_refs(expr, ri as isize - r0 as isize, ci as isize - c0 as isize);
                 let mut visited: Visited = HashSet::new();
                 matches!(self.eval_expr(&shifted, (ri, ci), &mut visited), Ok(v) if v.is_truthy())
             }
@@ -697,7 +718,9 @@ impl DataProxy {
             if rule.op != "databar" && rule.op != "icons" {
                 continue;
             }
-            let Some((r0, c0, r1, c1)) = rule.bounds() else { continue };
+            let Some((r0, c0, r1, c1)) = rule.bounds() else {
+                continue;
+            };
             if ri < r0 || ri > r1 || ci < c0 || ci > c1 {
                 continue;
             }
@@ -707,7 +730,11 @@ impl DataProxy {
             let Some((min, max)) = self.cond_range_min_max((r0, c0, r1, c1)) else {
                 continue;
             };
-            let t = if max > min { (n - min) / (max - min) } else { 1.0 };
+            let t = if max > min {
+                (n - min) / (max - min)
+            } else {
+                1.0
+            };
             if rule.op == "databar" {
                 // Keep the range minimum visible as a sliver, like Excel.
                 let frac = 0.05 + 0.95 * t.clamp(0.0, 1.0);
@@ -792,7 +819,12 @@ impl DataProxy {
         }
     }
 
-    fn eval_expr(&self, expr: &str, cell: (usize, usize), visited: &mut Visited) -> Result<Value, EvalErr> {
+    fn eval_expr(
+        &self,
+        expr: &str,
+        cell: (usize, usize),
+        visited: &mut Visited,
+    ) -> Result<Value, EvalErr> {
         // Track the calling cell for position-aware functions (ROW/COLUMN),
         // save/restore so a nested cell-ref eval restores the outer cell on
         // return — `=ROW() + B1 + ROW()` keeps both ROW()s reading this cell
@@ -891,7 +923,12 @@ impl DataProxy {
     }
 
     // factor := Number | '-' factor | '(' expr ')' | Function '(' args ')' | CellRef
-    fn parse_factor(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Result<Value, EvalErr> {
+    fn parse_factor(
+        &self,
+        t: &[Token],
+        pos: &mut usize,
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
         let tok = t.get(*pos).ok_or(EvalErr::Value)?.clone();
         match tok {
             Token::Number(n) => {
@@ -944,7 +981,9 @@ impl DataProxy {
                     "ROW" | "COLUMN" | "OFFSET" | "INDIRECT" | "ADDRESS" | "SUBTOTAL"
                 ) {
                     let spans = self.arg_spans(t, pos);
-                    return self.eval_ref_fn(&upper, t, &spans, vis).map(|a| a.to_scalar());
+                    return self
+                        .eval_ref_fn(&upper, t, &spans, vis)
+                        .map(|a| a.to_scalar());
                 }
                 let args = self.parse_args(t, pos, vis);
                 // Functions that must observe a *failed* or typed argument
@@ -1062,7 +1101,12 @@ impl DataProxy {
     // argument resolves independently — a failing one is captured as `Err`
     // (IFERROR recovers from it; everything else propagates it) and the token
     // cursor resyncs to the next comma / closing paren.
-    fn parse_args(&self, t: &[Token], pos: &mut usize, vis: &mut Visited) -> Vec<Result<Arg, EvalErr>> {
+    fn parse_args(
+        &self,
+        t: &[Token],
+        pos: &mut usize,
+        vis: &mut Visited,
+    ) -> Vec<Result<Arg, EvalErr>> {
         let mut args = Vec::new();
         if matches!(t.get(*pos), Some(Token::RightParen)) {
             *pos += 1;
@@ -1075,7 +1119,10 @@ impl DataProxy {
             // operators over it (issue #33).
             let arg: Result<Arg, EvalErr> = if let Some(Token::SheetRange { sheet, from, to }) =
                 t.get(*pos).cloned().filter(|_| {
-                    matches!(t.get(*pos + 1), Some(Token::Comma) | Some(Token::RightParen) | None)
+                    matches!(
+                        t.get(*pos + 1),
+                        Some(Token::Comma) | Some(Token::RightParen) | None
+                    )
                 }) {
                 *pos += 1;
                 match self.find_sheet(&sheet) {
@@ -1088,18 +1135,16 @@ impl DataProxy {
                     None => Err(EvalErr::Ref),
                 }
             // Range: CellRef ':' CellRef
-            } else if let (Some(Token::CellRef(a)), Some(Token::Colon), Some(Token::CellRef(b))) =
-                (
-                    t.get(*pos).filter(|_| {
-                        matches!(
-                            t.get(*pos + 3),
-                            Some(Token::Comma) | Some(Token::RightParen) | None
-                        )
-                    }),
-                    t.get(*pos + 1),
-                    t.get(*pos + 2),
-                )
-            {
+            } else if let (Some(Token::CellRef(a)), Some(Token::Colon), Some(Token::CellRef(b))) = (
+                t.get(*pos).filter(|_| {
+                    matches!(
+                        t.get(*pos + 3),
+                        Some(Token::Comma) | Some(Token::RightParen) | None
+                    )
+                }),
+                t.get(*pos + 1),
+                t.get(*pos + 2),
+            ) {
                 let (c0, r0) = exp2xy(a);
                 let (c1, r1) = exp2xy(b);
                 *pos += 3;
@@ -1225,7 +1270,12 @@ impl DataProxy {
     }
 
     /// Evaluate the sub-expression in `t[span.0..span.1]` to a scalar value.
-    fn eval_span(&self, t: &[Token], span: (usize, usize), vis: &mut Visited) -> Result<Value, EvalErr> {
+    fn eval_span(
+        &self,
+        t: &[Token],
+        span: (usize, usize),
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
         let mut p = 0usize;
         self.parse_cmp(&t[span.0..span.1], &mut p, vis)
     }
@@ -1338,7 +1388,11 @@ impl DataProxy {
                     Some(s) => self.eval_span(t, *s, vis)?.as_number() as i64,
                     None => 1,
                 };
-                Ok(Arg::Scalar(Value::Text(format_address(row as usize, col as usize, abs))))
+                Ok(Arg::Scalar(Value::Text(format_address(
+                    row as usize,
+                    col as usize,
+                    abs,
+                ))))
             }
             "OFFSET" => {
                 if spans.len() < 3 {
@@ -1531,7 +1585,10 @@ impl DataProxy {
 
     pub fn set_cell(&mut self, ri: usize, ci: usize, cell: Cell) {
         self.mark_spills_dirty();
-        self.rows.entry(ri).or_insert_with(Row::default).set_cell(ci, cell);
+        self.rows
+            .entry(ri)
+            .or_insert_with(Row::default)
+            .set_cell(ci, cell);
     }
 
     pub fn get_note(&self, ri: usize, ci: usize) -> Option<String> {
@@ -1555,7 +1612,8 @@ impl DataProxy {
     /// Define (or replace) a sheet-scoped named range. Names are case-insensitive.
     pub fn set_named_range(&mut self, name: &str, range_expr: &str) {
         self.mark_spills_dirty();
-        self.named_ranges.insert(name.to_uppercase(), range_expr.to_string());
+        self.named_ranges
+            .insert(name.to_uppercase(), range_expr.to_string());
     }
 
     /// The range expression for a name (e.g. `"B2:B3"`), if defined.
@@ -1604,15 +1662,12 @@ impl DataProxy {
             return Some((self.clone(), t.clone()));
         }
         let reg = self.sheets.as_ref()?.upgrade()?;
-        let found = reg
-            .borrow()
-            .iter()
-            .find_map(|d| {
-                d.tables
-                    .iter()
-                    .find(|t| t.name.to_uppercase() == upper)
-                    .map(|t| (d.clone(), t.clone()))
-            });
+        let found = reg.borrow().iter().find_map(|d| {
+            d.tables
+                .iter()
+                .find(|t| t.name.to_uppercase() == upper)
+                .map(|t| (d.clone(), t.clone()))
+        });
         found
     }
 
@@ -1769,7 +1824,11 @@ impl DataProxy {
     /// and shrinks the range back.
     pub fn toggle_table_totals(&mut self, name: &str) {
         let upper = name.to_uppercase();
-        let Some(idx) = self.tables.iter().position(|t| t.name.to_uppercase() == upper) else {
+        let Some(idx) = self
+            .tables
+            .iter()
+            .position(|t| t.name.to_uppercase() == upper)
+        else {
             return;
         };
         let t = self.tables[idx].clone();
@@ -1800,7 +1859,11 @@ impl DataProxy {
     /// cell. The header autofilter is cleared when it was the table's.
     pub fn convert_table_to_range(&mut self, name: &str) {
         let upper = name.to_uppercase();
-        let Some(idx) = self.tables.iter().position(|t| t.name.to_uppercase() == upper) else {
+        let Some(idx) = self
+            .tables
+            .iter()
+            .position(|t| t.name.to_uppercase() == upper)
+        else {
             return;
         };
         let t = self.tables.remove(idx);
@@ -1862,7 +1925,9 @@ impl DataProxy {
     /// look approximates Excel's default "TableStyleMedium2": blue header
     /// with bold white text, banded data rows, bold shaded totals row.
     pub fn apply_table_style(&self, ri: usize, ci: usize, style: &mut Style) {
-        let Some(t) = self.table_at(ri, ci) else { return };
+        let Some(t) = self.table_at(ri, ci) else {
+            return;
+        };
         if ri == t.header_row() {
             style.bgcolor = Some("#4472c4".to_string());
             style.color = "#ffffff".to_string();
@@ -1956,8 +2021,8 @@ impl DataProxy {
             self.insert_row(e + 1, 1);
             self.set_cell_text(e + 1, c0, &format!("{} Total", k));
             for c in (c0 + 1)..=c1 {
-                let has_num = (s..=e)
-                    .any(|r| self.cell_raw_value(r, c).trim().parse::<f64>().is_ok());
+                let has_num =
+                    (s..=e).any(|r| self.cell_raw_value(r, c).trim().parse::<f64>().is_ok());
                 if has_num {
                     let col = string_at(c);
                     self.set_cell_text(
@@ -2037,17 +2102,35 @@ impl DataProxy {
 
     /// Group rows `start..=end`. Invalid or duplicate ranges are ignored.
     pub fn add_row_group(&mut self, start: usize, end: usize) {
-        if start > end || self.row_groups.iter().any(|g| g.start == start && g.end == end) {
+        if start > end
+            || self
+                .row_groups
+                .iter()
+                .any(|g| g.start == start && g.end == end)
+        {
             return;
         }
-        self.row_groups.push(OutlineGroup { start, end, collapsed: false });
+        self.row_groups.push(OutlineGroup {
+            start,
+            end,
+            collapsed: false,
+        });
     }
 
     pub fn add_col_group(&mut self, start: usize, end: usize) {
-        if start > end || self.col_groups.iter().any(|g| g.start == start && g.end == end) {
+        if start > end
+            || self
+                .col_groups
+                .iter()
+                .any(|g| g.start == start && g.end == end)
+        {
             return;
         }
-        self.col_groups.push(OutlineGroup { start, end, collapsed: false });
+        self.col_groups.push(OutlineGroup {
+            start,
+            end,
+            collapsed: false,
+        });
     }
 
     /// Remove every row group that intersects `start..=end` (the Ungroup
@@ -2057,8 +2140,12 @@ impl DataProxy {
         // Reveal the removed groups' members first — apply_row_groups only
         // visits rows of REMAINING groups, so without this a removed collapsed
         // group would leave its rows hidden forever.
-        let removed: Vec<OutlineGroup> =
-            self.row_groups.iter().filter(|g| !keep(g)).cloned().collect();
+        let removed: Vec<OutlineGroup> = self
+            .row_groups
+            .iter()
+            .filter(|g| !keep(g))
+            .cloned()
+            .collect();
         self.row_groups.retain(keep);
         for g in &removed {
             for r in g.start..=g.end {
@@ -2071,8 +2158,12 @@ impl DataProxy {
 
     pub fn remove_col_groups_overlapping(&mut self, start: usize, end: usize) {
         let keep = |g: &OutlineGroup| g.end < start || g.start > end;
-        let removed: Vec<OutlineGroup> =
-            self.col_groups.iter().filter(|g| !keep(g)).cloned().collect();
+        let removed: Vec<OutlineGroup> = self
+            .col_groups
+            .iter()
+            .filter(|g| !keep(g))
+            .cloned()
+            .collect();
         self.col_groups.retain(keep);
         for g in &removed {
             for c in g.start..=g.end {
@@ -2122,7 +2213,11 @@ impl DataProxy {
     /// (e.g. manually hidden, #14) are untouched.
     fn apply_row_groups(&mut self) {
         let groups = self.row_groups.clone();
-        for r in groups.iter().flat_map(|g| g.start..=g.end).collect::<HashSet<_>>() {
+        for r in groups
+            .iter()
+            .flat_map(|g| g.start..=g.end)
+            .collect::<HashSet<_>>()
+        {
             let hide = groups.iter().any(|g| g.collapsed && g.contains(r));
             self.set_row_hidden(r, hide);
         }
@@ -2130,7 +2225,11 @@ impl DataProxy {
 
     fn apply_col_groups(&mut self) {
         let groups = self.col_groups.clone();
-        for c in groups.iter().flat_map(|g| g.start..=g.end).collect::<HashSet<_>>() {
+        for c in groups
+            .iter()
+            .flat_map(|g| g.start..=g.end)
+            .collect::<HashSet<_>>()
+        {
             let hide = groups.iter().any(|g| g.collapsed && g.contains(c));
             self.set_col_hidden(c, hide);
         }
@@ -2176,7 +2275,8 @@ impl DataProxy {
             for r in r0..=r1 {
                 if let Some(row) = self.rows.get_mut(&r) {
                     // High → low so a moved cell never clobbers an unmoved one.
-                    let mut cs: Vec<usize> = row.cells.keys().copied().filter(|c| *c >= c0).collect();
+                    let mut cs: Vec<usize> =
+                        row.cells.keys().copied().filter(|c| *c >= c0).collect();
                     cs.sort_unstable_by(|a, b| b.cmp(a));
                     for c in cs {
                         if let Some(cell) = row.cells.remove(&c) {
@@ -2202,7 +2302,8 @@ impl DataProxy {
                 }
             }
         }
-        self.merges.delete_intersecting(&CellRange::new(r0, c0, r1, c1));
+        self.merges
+            .delete_intersecting(&CellRange::new(r0, c0, r1, c1));
     }
 
     /// Delete the rectangle (`r0,c0`)–(`r1,c1`), pulling the cells beyond it
@@ -2219,7 +2320,8 @@ impl DataProxy {
                         row.cells.remove(&c);
                     }
                     // Low → high so a moved cell never clobbers an unmoved one.
-                    let mut cs: Vec<usize> = row.cells.keys().copied().filter(|c| *c > c1).collect();
+                    let mut cs: Vec<usize> =
+                        row.cells.keys().copied().filter(|c| *c > c1).collect();
                     cs.sort_unstable();
                     for c in cs {
                         if let Some(cell) = row.cells.remove(&c) {
@@ -2248,13 +2350,20 @@ impl DataProxy {
                 }
             }
         }
-        self.merges.delete_intersecting(&CellRange::new(r0, c0, r1, c1));
+        self.merges
+            .delete_intersecting(&CellRange::new(r0, c0, r1, c1));
     }
 
     /// Rewrite cell references in every formula after a structural edit. Any
     /// reference whose row (or column, when `is_row` is false) index is
     /// `>= shift_from` is offset by `delta`.
-    fn adjust_all_formulas(&mut self, is_row: bool, shift_from: usize, delta: isize, deleted: Option<usize>) {
+    fn adjust_all_formulas(
+        &mut self,
+        is_row: bool,
+        shift_from: usize,
+        delta: isize,
+        deleted: Option<usize>,
+    ) {
         for row in self.rows.values_mut() {
             for cell in row.cells.values_mut() {
                 if cell.text.starts_with('=') {
@@ -2267,7 +2376,11 @@ impl DataProxy {
     /// On-screen row height: the stored (model) height × the view zoom
     /// (issue #32). A hidden row's 0 stays 0 at any zoom.
     pub fn get_row_height(&self, ri: usize) -> f64 {
-        let h = self.rows.get(&ri).map(|r| r.get_height()).unwrap_or(self.default_row_height);
+        let h = self
+            .rows
+            .get(&ri)
+            .map(|r| r.get_height())
+            .unwrap_or(self.default_row_height);
         h * self.zoom
     }
 
@@ -2449,7 +2562,9 @@ impl DataProxy {
     /// numbers compare numerically, text case-insensitively, blanks last.
     pub fn sort_filter_range(&mut self, ci: usize, asc: bool) {
         self.mark_spills_dirty();
-        let Some(range) = self.auto_filter.range() else { return };
+        let Some(range) = self.auto_filter.range() else {
+            return;
+        };
         let (sri, eri) = (range.sri + 1, range.eri);
         if sri > eri {
             return;
@@ -2480,7 +2595,8 @@ impl DataProxy {
                 row.cells.insert(c, cell);
             }
         }
-        self.auto_filter.set_sort(ci, Some(if asc { "asc" } else { "desc" }));
+        self.auto_filter
+            .set_sort(ci, Some(if asc { "asc" } else { "desc" }));
         // Rows moved, so the hidden/visible assignment must be recomputed.
         self.apply_filter_visibility();
     }
@@ -2643,18 +2759,27 @@ impl DataProxy {
             let (x, y) = crate::renderer::alphabets::exp2xy(freeze);
             self.freeze = (y, x);
         }
-        if let Some(styles) = data.get("styles").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+        if let Some(styles) = data
+            .get("styles")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
             self.styles = styles;
         }
         if let Some(merges) = data.get("merges").and_then(|v| v.as_array()) {
-            let merge_strings: Vec<String> = merges.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            let merge_strings: Vec<String> = merges
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
             self.merges.set_data(merge_strings);
         }
         if let Some(rows_data) = data.get("rows").and_then(|v| v.as_object()) {
             if let Some(len) = rows_data.get("len").and_then(|v| v.as_u64()) {
                 self.row_count = len as usize;
             }
-            if let Some(rows_obj) = rows_data.get("_").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+            if let Some(rows_obj) = rows_data
+                .get("_")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+            {
                 self.rows = rows_obj;
             }
         }
@@ -2662,7 +2787,10 @@ impl DataProxy {
             if let Some(len) = cols_data.get("len").and_then(|v| v.as_u64()) {
                 self.cols.len = len as usize;
             }
-            if let Some(cols_obj) = cols_data.get("_").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+            if let Some(cols_obj) = cols_data
+                .get("_")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+            {
                 self.cols.data = cols_obj;
             }
         }
@@ -2683,10 +2811,7 @@ impl DataProxy {
             // upper-cased name, and set_named_range stores upper-cased keys.
             // Without this, a key like "testRange" never matches "TESTRANGE"
             // (issue #45).
-            self.named_ranges = nr
-                .into_iter()
-                .map(|(k, v)| (k.to_uppercase(), v))
-                .collect();
+            self.named_ranges = nr.into_iter().map(|(k, v)| (k.to_uppercase(), v)).collect();
         }
         if let Some(cf) = data
             .get("condfmts")
@@ -2712,10 +2837,9 @@ impl DataProxy {
         {
             self.charts = ch;
         }
-        if let Some(pv) = data
-            .get("pivots")
-            .and_then(|v| serde_json::from_value::<Vec<crate::core::pivot::PivotTable>>(v.clone()).ok())
-        {
+        if let Some(pv) = data.get("pivots").and_then(|v| {
+            serde_json::from_value::<Vec<crate::core::pivot::PivotTable>>(v.clone()).ok()
+        }) {
             // PivotTable specs on this source sheet (issue #35). The
             // materialised cells live on the output sheet; this list is
             // the recipe that `refresh_active_pivot` reads to re-run.
@@ -2808,7 +2932,13 @@ fn adjust_formula_refs(
                 new_col = (col as isize + delta).max(0) as usize;
             }
 
-            format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
+            format!(
+                "{}{}{}{}",
+                col_lock,
+                string_at(new_col),
+                row_lock,
+                new_row + 1
+            )
         })
         .to_string();
     restore_placeholders(&shifted, &placeholders)
@@ -2863,7 +2993,13 @@ fn shift_formula_refs(text: &str, drow: isize, dcol: isize) -> String {
             } else {
                 row
             };
-            format!("{}{}{}{}", col_lock, string_at(new_col), row_lock, new_row + 1)
+            format!(
+                "{}{}{}{}",
+                col_lock,
+                string_at(new_col),
+                row_lock,
+                new_row + 1
+            )
         })
         .to_string();
     restore_placeholders(&shifted, &placeholders)
@@ -2971,8 +3107,10 @@ pub fn fill_line(source: &[String], n: usize, axis_is_row: bool) -> Vec<String> 
     }
     // Numeric series when every source cell is a plain number and there are ≥2.
     if len >= 2 {
-        let nums: Option<Vec<f64>> =
-            source.iter().map(|s| s.trim().parse::<f64>().ok()).collect();
+        let nums: Option<Vec<f64>> = source
+            .iter()
+            .map(|s| s.trim().parse::<f64>().ok())
+            .collect();
         if let Some(nums) = nums {
             let step = (nums[len - 1] - nums[0]) / (len as f64 - 1.0);
             let last = nums[len - 1];
@@ -3123,9 +3261,16 @@ fn is_spill_candidate(text: &str) -> bool {
         return true;
     }
     let up = text.to_uppercase();
-    ["FILTER(", "SORT(", "SORTBY(", "UNIQUE(", "SEQUENCE(", "RANDARRAY("]
-        .iter()
-        .any(|f| up.contains(f))
+    [
+        "FILTER(",
+        "SORT(",
+        "SORTBY(",
+        "UNIQUE(",
+        "SEQUENCE(",
+        "RANDARRAY(",
+    ]
+    .iter()
+    .any(|f| up.contains(f))
 }
 
 /// A spreadsheet error value (`#DIV/0!`, etc.) produced during evaluation.
@@ -3315,7 +3460,11 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         // itself (issue #56). Two equal errors are Equal; mixed errors
         // are Less (consistent with number-vs-text ordering).
         (Value::Error(x), Value::Error(y)) => {
-            if x == y { Some(Ordering::Equal) } else { Some(Ordering::Less) }
+            if x == y {
+                Some(Ordering::Equal)
+            } else {
+                Some(Ordering::Less)
+            }
         }
         (Value::Error(_), _) => Some(Ordering::Greater),
         (_, Value::Error(_)) => Some(Ordering::Less),
@@ -3460,7 +3609,11 @@ fn lookup(
     vertical: bool,
 ) -> Result<Value, EvalErr> {
     use std::cmp::Ordering::*;
-    let n = if vertical { grid.len() } else { grid.first().map_or(0, Vec::len) };
+    let n = if vertical {
+        grid.len()
+    } else {
+        grid.first().map_or(0, Vec::len)
+    };
     let key = |i: usize| -> Option<&Value> {
         if vertical {
             grid.get(i)?.first()
@@ -3516,7 +3669,8 @@ fn match_position(needle: &Value, cells: &[Value], mode: f64) -> Result<Value, E
             },
         }
     }
-    best.map(|i| Value::Number((i + 1) as f64)).ok_or(EvalErr::Na)
+    best.map(|i| Value::Number((i + 1) as f64))
+        .ok_or(EvalErr::Na)
 }
 
 /// Functions that must observe a *failed* or specifically-typed argument
@@ -3588,7 +3742,9 @@ fn apply_info_function(
 /// numeric catalog below takes over.
 fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, EvalErr> {
     let scalar = |i: usize| -> Value {
-        args.get(i).map(|a| a.to_scalar()).unwrap_or(Value::Number(0.0))
+        args.get(i)
+            .map(|a| a.to_scalar())
+            .unwrap_or(Value::Number(0.0))
     };
     let text = |i: usize| scalar(i).as_text();
     let num = |i: usize| scalar(i).as_number();
@@ -3602,12 +3758,20 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
         "LOWER" => Value::Text(text(0).to_lowercase()),
         "TRIM" => Value::Text(text(0).trim().to_string()),
         "LEFT" => {
-            let n = if args.len() >= 2 { num(1).max(0.0) as usize } else { 1 };
+            let n = if args.len() >= 2 {
+                num(1).max(0.0) as usize
+            } else {
+                1
+            };
             Value::Text(text(0).chars().take(n).collect())
         }
         "RIGHT" => {
             let s: Vec<char> = text(0).chars().collect();
-            let n = if args.len() >= 2 { num(1).max(0.0) as usize } else { 1 };
+            let n = if args.len() >= 2 {
+                num(1).max(0.0) as usize
+            } else {
+                1
+            };
             Value::Text(s[s.len().saturating_sub(n)..].iter().collect())
         }
         "MID" => {
@@ -3645,7 +3809,11 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             let test = args[0].cells();
             // The optional third argument is the range actually summed,
             // paired positionally with the tested one (Excel semantics).
-            let pool = if args.len() >= 3 { args[2].cells() } else { test.clone() };
+            let pool = if args.len() >= 3 {
+                args[2].cells()
+            } else {
+                test.clone()
+            };
             let mut sum = 0.0;
             let mut n = 0usize;
             for (i, probe) in test.iter().enumerate() {
@@ -3669,7 +3837,11 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             let needle = scalar(0);
             let grid = args[1].grid();
             let idx = (num(2) as usize).saturating_sub(1);
-            let approx = if args.len() >= 4 { scalar(3).is_truthy() } else { true };
+            let approx = if args.len() >= 4 {
+                scalar(3).is_truthy()
+            } else {
+                true
+            };
             return lookup(&needle, &grid, idx, approx, upper == "VLOOKUP").map(Some);
         }
         "INDEX" => {
@@ -3715,10 +3887,17 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
                 .map(|k| (args[k].cells(), criteria_matcher(&scalar(k + 1))))
                 .collect();
             let n = pairs.first().map_or(0, |(cells, _)| cells.len());
-            let pool = if upper == "COUNTIFS" { Vec::new() } else { args[0].cells() };
+            let pool = if upper == "COUNTIFS" {
+                Vec::new()
+            } else {
+                args[0].cells()
+            };
             let (mut sum, mut count) = (0.0, 0usize);
             for i in 0..n {
-                if pairs.iter().all(|(cells, m)| cells.get(i).map_or(false, |v| m(v))) {
+                if pairs
+                    .iter()
+                    .all(|(cells, m)| cells.get(i).map_or(false, |v| m(v)))
+                {
                     count += 1;
                     if upper != "COUNTIFS" {
                         sum += pool.get(i).map(Value::as_number).unwrap_or(0.0);
@@ -3760,7 +3939,11 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             }
             let needle = scalar(0);
             let look = args[1].cells();
-            let res = if args.len() >= 3 { args[2].cells() } else { look.clone() };
+            let res = if args.len() >= 3 {
+                args[2].cells()
+            } else {
+                look.clone()
+            };
             let mut best: Option<usize> = None;
             for (i, v) in look.iter().enumerate() {
                 if matches!(
@@ -3833,7 +4016,10 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
                 0
             };
             let (hay_c, needle_c): (Vec<char>, Vec<char>) = if upper == "SEARCH" {
-                (hay.to_lowercase().chars().collect(), needle.to_lowercase().chars().collect())
+                (
+                    hay.to_lowercase().chars().collect(),
+                    needle.to_lowercase().chars().collect(),
+                )
             } else {
                 (hay.chars().collect(), needle.chars().collect())
             };
@@ -3858,10 +4044,16 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
 
         // COUNTA counts non-blank cells; COUNTBLANK counts blanks (issue #36).
         "COUNTA" => Value::Number(
-            flatten_values(args).iter().filter(|v| !matches!(v, Value::Blank)).count() as f64,
+            flatten_values(args)
+                .iter()
+                .filter(|v| !matches!(v, Value::Blank))
+                .count() as f64,
         ),
         "COUNTBLANK" => Value::Number(
-            flatten_values(args).iter().filter(|v| matches!(v, Value::Blank)).count() as f64,
+            flatten_values(args)
+                .iter()
+                .filter(|v| matches!(v, Value::Blank))
+                .count() as f64,
         ),
 
         // IF / IFS / CHOOSE are short-circuit and handled upstream in
@@ -3961,7 +4153,9 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
     };
     match upper {
         "FILTER" => {
-            let [array, include, ..] = fargs else { return Err(EvalErr::Value) };
+            let [array, include, ..] = fargs else {
+                return Err(EvalErr::Value);
+            };
             let grid = array.grid();
             let inc = include.grid();
             let (rows, cols) = (grid.len(), grid.first().map_or(0, Vec::len));
@@ -3999,7 +4193,10 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
         }
         "SORT" => {
             let array = fargs.first().ok_or(EvalErr::Value)?;
-            let by_col = fargs.get(3).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            let by_col = fargs
+                .get(3)
+                .map(|a| a.to_scalar().is_truthy())
+                .unwrap_or(false);
             let mut grid = array.grid();
             if by_col {
                 grid = transpose(&grid);
@@ -4012,9 +4209,7 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
                     // `i < 1.0` and trigger `0_usize - 1` integer
                     // underflow on the next line (issue #55). `is_finite`
                     // catches NaN, +inf, and -inf uniformly.
-                    if !i.is_finite()
-                        || i < 1.0
-                        || (i as usize) > grid.first().map_or(0, Vec::len)
+                    if !i.is_finite() || i < 1.0 || (i as usize) > grid.first().map_or(0, Vec::len)
                     {
                         return Err(EvalErr::Value);
                     }
@@ -4022,10 +4217,17 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
                 }
                 None => 0,
             };
-            let desc = fargs.get(2).map(|a| a.to_scalar().as_number() < 0.0).unwrap_or(false);
+            let desc = fargs
+                .get(2)
+                .map(|a| a.to_scalar().as_number() < 0.0)
+                .unwrap_or(false);
             grid.sort_by(|a, b| {
                 let ord = compare_values(&a[idx], &b[idx]).unwrap_or(std::cmp::Ordering::Equal);
-                if desc { ord.reverse() } else { ord }
+                if desc {
+                    ord.reverse()
+                } else {
+                    ord
+                }
             });
             if by_col {
                 grid = transpose(&grid);
@@ -4075,8 +4277,14 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
         }
         "UNIQUE" => {
             let array = fargs.first().ok_or(EvalErr::Value)?;
-            let by_col = fargs.get(1).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
-            let exactly_once = fargs.get(2).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            let by_col = fargs
+                .get(1)
+                .map(|a| a.to_scalar().is_truthy())
+                .unwrap_or(false);
+            let exactly_once = fargs
+                .get(2)
+                .map(|a| a.to_scalar().is_truthy())
+                .unwrap_or(false);
             let mut grid = array.grid();
             if by_col {
                 grid = transpose(&grid);
@@ -4102,7 +4310,10 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
         }
         "SEQUENCE" => {
             let num = |i: usize, default: f64| {
-                fargs.get(i).map(|a| a.to_scalar().as_number()).unwrap_or(default)
+                fargs
+                    .get(i)
+                    .map(|a| a.to_scalar().as_number())
+                    .unwrap_or(default)
             };
             let rows = num(0, 1.0);
             let cols = num(1, 1.0);
@@ -4129,7 +4340,10 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
         }
         "RANDARRAY" => {
             let num = |i: usize, default: f64| {
-                fargs.get(i).map(|a| a.to_scalar().as_number()).unwrap_or(default)
+                fargs
+                    .get(i)
+                    .map(|a| a.to_scalar().as_number())
+                    .unwrap_or(default)
             };
             let rows = num(0, 1.0);
             let cols = num(1, 1.0);
@@ -4144,14 +4358,18 @@ fn apply_array_function(upper: &str, fargs: &[Arg]) -> Result<Option<Value>, Eva
             if min > max {
                 return Err(EvalErr::Value);
             }
-            let whole = fargs.get(4).map(|a| a.to_scalar().is_truthy()).unwrap_or(false);
+            let whole = fargs
+                .get(4)
+                .map(|a| a.to_scalar().is_truthy())
+                .unwrap_or(false);
             non_empty(
                 (0..rows)
                     .map(|_| {
                         (0..cols)
                             .map(|_| {
                                 let v = if whole {
-                                    min.floor() + (next_rand() * (max.floor() - min.floor() + 1.0)).floor()
+                                    min.floor()
+                                        + (next_rand() * (max.floor() - min.floor() + 1.0)).floor()
                                 } else {
                                     min + next_rand() * (max - min)
                                 };
@@ -4187,7 +4405,11 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "SUM" => args.iter().sum(),
         "PRODUCT" => args.iter().product(),
         "AVERAGE" | "AVG" => {
-            if args.is_empty() { 0.0 } else { args.iter().sum::<f64>() / args.len() as f64 }
+            if args.is_empty() {
+                0.0
+            } else {
+                args.iter().sum::<f64>() / args.len() as f64
+            }
         }
         "MAX" => finite_or(args.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
         "MIN" => finite_or(args.iter().cloned().fold(f64::INFINITY, f64::min)),
@@ -4209,10 +4431,18 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         // Math
         "ABS" => first.abs(),
         "SIGN" => {
-            if first > 0.0 { 1.0 } else if first < 0.0 { -1.0 } else { 0.0 }
+            if first > 0.0 {
+                1.0
+            } else if first < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
         }
         "MOD" => {
-            if second == 0.0 { return Err(EvalErr::Div0); }
+            if second == 0.0 {
+                return Err(EvalErr::Div0);
+            }
             first - second * (first / second).floor()
         }
         "POWER" => first.powf(second),
@@ -4221,7 +4451,11 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "LN" => first.ln(),
         "LOG10" => first.log10(),
         "LOG" => {
-            if args.len() >= 2 { first.log(second) } else { first.log10() }
+            if args.len() >= 2 {
+                first.log(second)
+            } else {
+                first.log10()
+            }
         }
         "INT" => first.floor(),
         "ROUND" => round_to(first, second),
@@ -4229,15 +4463,27 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "ROUNDDOWN" => round_dir(first, second, false),
         "CEILING" => {
             let sig = if args.len() >= 2 { second } else { 1.0 };
-            if sig == 0.0 { 0.0 } else { (first / sig).ceil() * sig }
+            if sig == 0.0 {
+                0.0
+            } else {
+                (first / sig).ceil() * sig
+            }
         }
         "FLOOR" => {
             let sig = if args.len() >= 2 { second } else { 1.0 };
-            if sig == 0.0 { 0.0 } else { (first / sig).floor() * sig }
+            if sig == 0.0 {
+                0.0
+            } else {
+                (first / sig).floor() * sig
+            }
         }
 
         // Date & time (serial numbers; see core::date)
-        "DATE" => crate::core::date::to_serial(first as i64, second as i64, args.get(2).copied().unwrap_or(1.0) as i64),
+        "DATE" => crate::core::date::to_serial(
+            first as i64,
+            second as i64,
+            args.get(2).copied().unwrap_or(1.0) as i64,
+        ),
         "YEAR" => crate::core::date::from_serial(first).0 as f64,
         "MONTH" => crate::core::date::from_serial(first).1 as f64,
         "DAY" => crate::core::date::from_serial(first).2 as f64,
@@ -4262,7 +4508,11 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
 }
 
 fn bool_f64(b: bool) -> f64 {
-    if b { 1.0 } else { 0.0 }
+    if b {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 fn round_to(v: f64, digits: f64) -> f64 {
@@ -4304,7 +4554,11 @@ fn variance(args: &[f64]) -> f64 {
 
 /// Keep MAX/MIN sane on empty input (the fold seed is ±∞).
 fn finite_or(v: f64) -> f64 {
-    if v.is_finite() { v } else { 0.0 }
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
 }
 
 /// Today's date as a serial number (local time). `TODAY()` in Excel.
@@ -4327,7 +4581,8 @@ fn now_serial() -> f64 {
         d.get_month() as i64 + 1,
         d.get_date() as i64,
     );
-    let secs = d.get_hours() as f64 * 3600.0 + d.get_minutes() as f64 * 60.0 + d.get_seconds() as f64;
+    let secs =
+        d.get_hours() as f64 * 3600.0 + d.get_minutes() as f64 * 60.0 + d.get_seconds() as f64;
     day + secs / 86_400.0
 }
 
@@ -4395,11 +4650,17 @@ mod tests {
         assert_eq!(eval("=FALSE()", &[]), "0");
         // VLOOKUP/HLOOKUP accept the FALSE literal as the exact-match flag.
         assert_eq!(
-            eval_with(&[(0, 0, "Bob"), (0, 1, "200")], "=VLOOKUP(\"Bob\", A1:B2, 2, FALSE)"),
+            eval_with(
+                &[(0, 0, "Bob"), (0, 1, "200")],
+                "=VLOOKUP(\"Bob\", A1:B2, 2, FALSE)"
+            ),
             "200"
         );
         assert_eq!(
-            eval_with(&[(0, 0, "Bob"), (1, 0, "200")], "=HLOOKUP(\"Bob\", A1:A2, 2, FALSE)"),
+            eval_with(
+                &[(0, 0, "Bob"), (1, 0, "200")],
+                "=HLOOKUP(\"Bob\", A1:A2, 2, FALSE)"
+            ),
             "200"
         );
     }
@@ -4412,9 +4673,12 @@ mod tests {
         assert_eq!(eval("=IF(FALSE(), 1/0, 2)", &[]), "2");
         // Taken branches still work, text survives, condition errors propagate.
         assert_eq!(eval("=IF(1>0, 7, 9)", &[]), "7");
-        assert_eq!(eval_with(&[(0, 0, "x")], "=IF(A1=\"x\", \"yes\", \"no\")"), "yes");
+        assert_eq!(
+            eval_with(&[(0, 0, "x")], "=IF(A1=\"x\", \"yes\", \"no\")"),
+            "yes"
+        );
         assert_eq!(eval("=IF(1/0, 1, 2)", &[]), "#DIV/0!"); // condition error propagates
-        // IFS: only the matched pair's value is evaluated.
+                                                            // IFS: only the matched pair's value is evaluated.
         assert_eq!(eval("=IFS(FALSE(), 1/0, TRUE(), 5)", &[]), "5");
         assert_eq!(eval("=IFS(TRUE(), 5, FALSE(), 1/0)", &[]), "5");
         // CHOOSE: only the selected value is evaluated; 1-based index.
@@ -4443,9 +4707,12 @@ mod tests {
         assert_eq!(eval("=INDIRECT(\"not a ref\")", &[]), "#REF!");
         // OFFSET shifts a reference; scalar context yields the top-left value.
         assert_eq!(eval_with(&[(2, 2, "hi")], "=OFFSET(A1, 2, 2)"), "hi"); // -> C3
-        // OFFSET / INDIRECT ranges compose inside SUM.
+                                                                           // OFFSET / INDIRECT ranges compose inside SUM.
         assert_eq!(
-            eval_with(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3")], "=SUM(OFFSET(A1, 0, 0, 3, 1))"),
+            eval_with(
+                &[(0, 0, "1"), (1, 0, "2"), (2, 0, "3")],
+                "=SUM(OFFSET(A1, 0, 0, 3, 1))"
+            ),
             "6"
         );
         assert_eq!(
@@ -4642,12 +4909,15 @@ mod tests {
         d.set_cell_text(0, 1, "gone");
         d.set_cell_text(1, 1, "gone2");
         d.merge_range(CellRange::new(0, 0, 1, 1)); // A1:B2
-        // Anchor keeps its text and a (1,1) extra-span; covered cells cleared.
+                                                   // Anchor keeps its text and a (1,1) extra-span; covered cells cleared.
         assert_eq!(d.get_cell_text(0, 0), "anchor");
         assert_eq!(d.get_cell(0, 0).unwrap().merge, Some((1, 1)));
         assert_eq!(d.get_cell_text(0, 1), "");
         assert_eq!(d.get_cell_text(1, 1), "");
-        assert!(d.cell_merge(1, 1).is_some(), "covered cell reports the merge");
+        assert!(
+            d.cell_merge(1, 1).is_some(),
+            "covered cell reports the merge"
+        );
     }
 
     #[test]
@@ -4667,9 +4937,19 @@ mod tests {
         assert!(d.cell_merge(0, 0).is_some());
         // A range that only partially overlaps A1:B2 (shares B2 only).
         d.unmerge_intersecting(&CellRange::new(1, 1, 3, 3));
-        assert!(d.cell_merge(0, 0).is_none(), "partially-overlapping merge removed");
-        assert_eq!(d.get_cell(0, 0).and_then(|c| c.merge), None, "anchor marker cleared");
-        assert!(d.cell_merge(5, 5).is_some(), "non-intersecting merge survives");
+        assert!(
+            d.cell_merge(0, 0).is_none(),
+            "partially-overlapping merge removed"
+        );
+        assert_eq!(
+            d.get_cell(0, 0).and_then(|c| c.merge),
+            None,
+            "anchor marker cleared"
+        );
+        assert!(
+            d.cell_merge(5, 5).is_some(),
+            "non-intersecting merge survives"
+        );
     }
 
     #[test]
@@ -4702,7 +4982,8 @@ mod tests {
     #[test]
     fn filter_in_hides_nonmatching_rows_and_all_reveals() {
         let mut d = filter_fixture();
-        d.auto_filter.add_filter(0, "in", vec!["alice".into(), "bob".into()]);
+        d.auto_filter
+            .add_filter(0, "in", vec!["alice".into(), "bob".into()]);
         d.apply_filter_visibility();
         assert!(d.is_row_hidden(1), "carol row should hide");
         assert!(!d.is_row_hidden(2) && !d.is_row_hidden(3));
@@ -4729,22 +5010,37 @@ mod tests {
         let mut d = filter_fixture();
         d.sort_filter_range(1, true); // by Score asc: 2, 10, 33
         assert_eq!(
-            [d.get_cell_text(1, 1), d.get_cell_text(2, 1), d.get_cell_text(3, 1)],
+            [
+                d.get_cell_text(1, 1),
+                d.get_cell_text(2, 1),
+                d.get_cell_text(3, 1)
+            ],
             ["2", "10", "33"]
         );
         // Whole data rows move together: names follow their scores.
         assert_eq!(
-            [d.get_cell_text(1, 0), d.get_cell_text(2, 0), d.get_cell_text(3, 0)],
+            [
+                d.get_cell_text(1, 0),
+                d.get_cell_text(2, 0),
+                d.get_cell_text(3, 0)
+            ],
             ["alice", "bob", "carol"]
         );
         assert_eq!(d.get_cell_text(0, 1), "Score", "header row not sorted");
 
         d.sort_filter_range(1, false); // desc: 33, 10, 2
         assert_eq!(
-            [d.get_cell_text(1, 1), d.get_cell_text(2, 1), d.get_cell_text(3, 1)],
+            [
+                d.get_cell_text(1, 1),
+                d.get_cell_text(2, 1),
+                d.get_cell_text(3, 1)
+            ],
             ["33", "10", "2"]
         );
-        assert_eq!(d.auto_filter.sort.as_ref().map(|s| s.order.as_str()), Some("desc"));
+        assert_eq!(
+            d.auto_filter.sort.as_ref().map(|s| s.order.as_str()),
+            Some("desc")
+        );
     }
 
     #[test]
@@ -4801,7 +5097,10 @@ mod tests {
     #[test]
     fn iferror_recovers_from_errors() {
         let cells = [(0, 0, "10"), (0, 1, "0")];
-        assert_eq!(eval_with(&cells, "=IFERROR(A1/B1, \"fallback\")"), "fallback");
+        assert_eq!(
+            eval_with(&cells, "=IFERROR(A1/B1, \"fallback\")"),
+            "fallback"
+        );
         assert_eq!(eval_with(&cells, "=IFERROR(A1/2, \"fallback\")"), "5");
         assert_eq!(eval_with(&cells, "=IFERROR(SQRT(-1), 42)"), "42");
     }
@@ -4824,7 +5123,10 @@ mod tests {
         assert_eq!(eval_with(&cells, "=SUMIF(B1:B4, \">15\")"), "90");
         assert_eq!(eval_with(&cells, "=SUMIF(A1:A4, \"banana\", B1:B4)"), "60");
         assert_eq!(eval_with(&cells, "=AVERAGEIF(B1:B4, \"<>10\")"), "30");
-        assert_eq!(eval_with(&cells, "=AVERAGEIF(A1:A4, \"plum\", B1:B4)"), "#DIV/0!");
+        assert_eq!(
+            eval_with(&cells, "=AVERAGEIF(A1:A4, \"plum\", B1:B4)"),
+            "#DIV/0!"
+        );
     }
 
     #[test]
@@ -4871,16 +5173,39 @@ mod tests {
     #[test]
     fn multi_criteria_sumifs_countifs_averageifs() {
         let cells = [
-            (0, 0, "apple"),  (0, 1, "red"),    (0, 2, "10"),
-            (1, 0, "banana"), (1, 1, "yellow"), (1, 2, "20"),
-            (2, 0, "apple"),  (2, 1, "green"),  (2, 2, "30"),
-            (3, 0, "apple"),  (3, 1, "red"),    (3, 2, "40"),
+            (0, 0, "apple"),
+            (0, 1, "red"),
+            (0, 2, "10"),
+            (1, 0, "banana"),
+            (1, 1, "yellow"),
+            (1, 2, "20"),
+            (2, 0, "apple"),
+            (2, 1, "green"),
+            (2, 2, "30"),
+            (3, 0, "apple"),
+            (3, 1, "red"),
+            (3, 2, "40"),
         ];
-        assert_eq!(eval_with(&cells, "=SUMIFS(C1:C4, A1:A4, \"apple\", B1:B4, \"red\")"), "50");
+        assert_eq!(
+            eval_with(&cells, "=SUMIFS(C1:C4, A1:A4, \"apple\", B1:B4, \"red\")"),
+            "50"
+        );
         assert_eq!(eval_with(&cells, "=COUNTIFS(A1:A4, \"apple\")"), "3");
-        assert_eq!(eval_with(&cells, "=COUNTIFS(A1:A4, \"apple\", C1:C4, \">15\")"), "2");
-        assert_eq!(eval_with(&cells, "=AVERAGEIFS(C1:C4, A1:A4, \"apple\", B1:B4, \"red\")"), "25");
-        assert_eq!(eval_with(&cells, "=AVERAGEIFS(C1:C4, A1:A4, \"plum\")"), "#DIV/0!");
+        assert_eq!(
+            eval_with(&cells, "=COUNTIFS(A1:A4, \"apple\", C1:C4, \">15\")"),
+            "2"
+        );
+        assert_eq!(
+            eval_with(
+                &cells,
+                "=AVERAGEIFS(C1:C4, A1:A4, \"apple\", B1:B4, \"red\")"
+            ),
+            "25"
+        );
+        assert_eq!(
+            eval_with(&cells, "=AVERAGEIFS(C1:C4, A1:A4, \"plum\")"),
+            "#DIV/0!"
+        );
     }
 
     #[test]
@@ -4893,12 +5218,18 @@ mod tests {
     #[test]
     fn xlookup_and_lookup() {
         let cells = [
-            (0, 0, "1"), (0, 1, "one"),
-            (1, 0, "2"), (1, 1, "two"),
-            (2, 0, "3"), (2, 1, "three"),
+            (0, 0, "1"),
+            (0, 1, "one"),
+            (1, 0, "2"),
+            (1, 1, "two"),
+            (2, 0, "3"),
+            (2, 1, "three"),
         ];
         assert_eq!(eval_with(&cells, "=XLOOKUP(2, A1:A3, B1:B3)"), "two");
-        assert_eq!(eval_with(&cells, "=XLOOKUP(9, A1:A3, B1:B3, \"missing\")"), "missing");
+        assert_eq!(
+            eval_with(&cells, "=XLOOKUP(9, A1:A3, B1:B3, \"missing\")"),
+            "missing"
+        );
         assert_eq!(eval_with(&cells, "=XLOOKUP(9, A1:A3, B1:B3)"), "#N/A");
         assert_eq!(eval_with(&cells, "=LOOKUP(2.5, A1:A3, B1:B3)"), "two"); // approx: last ≤
     }
@@ -4909,11 +5240,23 @@ mod tests {
         // resolves to 0 in this engine, not a blank).
         // 2nd arg is the ignore-empty flag (bare TRUE/FALSE aren't literals in
         // this engine — use 1/0).
-        assert_eq!(eval_with(&[], "=TEXTJOIN(\"-\", 1, \"a\", \"\", \"c\")"), "a-c");
+        assert_eq!(
+            eval_with(&[], "=TEXTJOIN(\"-\", 1, \"a\", \"\", \"c\")"),
+            "a-c"
+        );
         assert_eq!(eval_with(&[], "=TEXTJOIN(\", \", 0, \"x\", \"y\")"), "x, y");
-        assert_eq!(eval_with(&[], "=SUBSTITUTE(\"a-b-c\", \"-\", \"+\")"), "a+b+c");
-        assert_eq!(eval_with(&[], "=SUBSTITUTE(\"a-b-c\", \"-\", \"+\", 2)"), "a-b+c");
-        assert_eq!(eval_with(&[], "=REPLACE(\"abcdef\", 2, 3, \"XY\")"), "aXYef");
+        assert_eq!(
+            eval_with(&[], "=SUBSTITUTE(\"a-b-c\", \"-\", \"+\")"),
+            "a+b+c"
+        );
+        assert_eq!(
+            eval_with(&[], "=SUBSTITUTE(\"a-b-c\", \"-\", \"+\", 2)"),
+            "a-b+c"
+        );
+        assert_eq!(
+            eval_with(&[], "=REPLACE(\"abcdef\", 2, 3, \"XY\")"),
+            "aXYef"
+        );
         assert_eq!(eval_with(&[], "=VALUE(\"123\")"), "123");
         assert_eq!(eval_with(&[], "=VALUE(\"abc\")"), "#VALUE!");
     }
@@ -4946,7 +5289,10 @@ mod tests {
     #[test]
     fn ifna_recovers_from_na_only() {
         let cells = [(0, 0, "5")];
-        assert_eq!(eval_with(&cells, "=IFNA(VLOOKUP(99, A1:A1, 1, 0), \"none\")"), "none");
+        assert_eq!(
+            eval_with(&cells, "=IFNA(VLOOKUP(99, A1:A1, 1, 0), \"none\")"),
+            "none"
+        );
         assert_eq!(eval_with(&cells, "=IFNA(42, \"none\")"), "42");
         assert_eq!(eval_with(&cells, "=IFNA(1/0, \"none\")"), "#DIV/0!"); // non-#N/A propagates
     }
@@ -4969,7 +5315,7 @@ mod tests {
         assert_eq!(eval_with(&cells, "=IF(A1>5, \"yes\")"), "yes"); // 2-arg, true
         assert_eq!(eval_with(&cells, "=IF(A1>50, \"yes\")"), "0"); // 2-arg, false → 0
         assert_eq!(eval_with(&cells, "=IF(A1>5, 1, 0)"), "1"); // numeric still works
-        // nested, returning a text branch
+                                                               // nested, returning a text branch
         assert_eq!(
             eval_with(&cells, "=IF(A1>5, IF(A1>8, \"big\", \"mid\"), \"small\")"),
             "big"
@@ -4979,8 +5325,14 @@ mod tests {
     #[test]
     fn ifs_preserves_text_and_na_on_no_match() {
         let cells = [(0, 0, "75")];
-        assert_eq!(eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=70, \"B\", A1>=0, \"C\")"), "B");
-        assert_eq!(eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=80, \"B\")"), "#N/A"); // no match
+        assert_eq!(
+            eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=70, \"B\", A1>=0, \"C\")"),
+            "B"
+        );
+        assert_eq!(
+            eval_with(&cells, "=IFS(A1>=90, \"A\", A1>=80, \"B\")"),
+            "#N/A"
+        ); // no match
     }
 
     #[test]
@@ -4993,7 +5345,7 @@ mod tests {
         assert_eq!(eval_with(&cells, "=ISBLANK(\"\")"), "0"); // an empty string is not blank
         assert_eq!(eval_with(&cells, "=COUNTA(A1:A5)"), "3"); // A1, A3, A5
         assert_eq!(eval_with(&cells, "=COUNTBLANK(A1:A5)"), "2"); // A2, A4
-        // A blank cell is now neither a number nor text (Excel parity).
+                                                                  // A blank cell is now neither a number nor text (Excel parity).
         assert_eq!(eval_with(&cells, "=ISNUMBER(A2)"), "0");
         assert_eq!(eval_with(&cells, "=ISTEXT(A2)"), "0");
     }
@@ -5048,7 +5400,11 @@ mod tests {
 
         let mut s = d.get_cell_style(2, 1);
         d.apply_cond_format(2, 1, &mut s);
-        assert_ne!(s.bgcolor.as_deref(), Some("#ffc7ce"), "100 doesn't match > 150");
+        assert_ne!(
+            s.bgcolor.as_deref(),
+            Some("#ffc7ce"),
+            "100 doesn't match > 150"
+        );
 
         let mut s = d.get_cell_style(3, 3);
         d.apply_cond_format(3, 3, &mut s);
@@ -5067,7 +5423,11 @@ mod tests {
         d.cond_formats.push(red_rule("A1", "gt", "1000"));
         let mut s = d.get_cell_style(0, 0);
         d.apply_cond_format(0, 0, &mut s);
-        assert_eq!(s.bgcolor.as_deref(), Some("#ffc7ce"), "rule sees the raw 1234.5");
+        assert_eq!(
+            s.bgcolor.as_deref(),
+            Some("#ffc7ce"),
+            "rule sees the raw 1234.5"
+        );
     }
 
     #[test]
@@ -5365,9 +5725,18 @@ mod tests {
 
     #[test]
     fn fill_line_numeric_series() {
-        assert_eq!(fill_line(&["1".into(), "2".into()], 3, true), vec!["3", "4", "5"]);
-        assert_eq!(fill_line(&["2".into(), "4".into()], 2, true), vec!["6", "8"]);
-        assert_eq!(fill_line(&["10".into(), "8".into()], 2, true), vec!["6", "4"]); // descending
+        assert_eq!(
+            fill_line(&["1".into(), "2".into()], 3, true),
+            vec!["3", "4", "5"]
+        );
+        assert_eq!(
+            fill_line(&["2".into(), "4".into()], 2, true),
+            vec!["6", "8"]
+        );
+        assert_eq!(
+            fill_line(&["10".into(), "8".into()], 2, true),
+            vec!["6", "4"]
+        ); // descending
     }
 
     #[test]
@@ -5377,13 +5746,19 @@ mod tests {
 
     #[test]
     fn fill_line_text_copies_cyclically() {
-        assert_eq!(fill_line(&["a".into(), "b".into()], 3, true), vec!["a", "b", "a"]);
+        assert_eq!(
+            fill_line(&["a".into(), "b".into()], 3, true),
+            vec!["a", "b", "a"]
+        );
     }
 
     #[test]
     fn fill_line_formula_shifts() {
         // A single formula filled down shifts one extra row per step.
-        assert_eq!(fill_line(&["=B1".into()], 3, true), vec!["=B2", "=B3", "=B4"]);
+        assert_eq!(
+            fill_line(&["=B1".into()], 3, true),
+            vec!["=B2", "=B3", "=B4"]
+        );
         // Filled right shifts columns instead.
         assert_eq!(fill_line(&["=A1".into()], 2, false), vec!["=B1", "=C1"]);
     }
@@ -5426,7 +5801,8 @@ mod tests {
 
     #[test]
     fn cross_sheet_range_in_function() {
-        let (mut a, _reg) = two_sheet_workbook(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3"), (3, 0, "4")]);
+        let (mut a, _reg) =
+            two_sheet_workbook(&[(0, 0, "1"), (1, 0, "2"), (2, 0, "3"), (3, 0, "4")]);
         a.set_cell_text(0, 0, "=SUM(Sheet2!A1:A4)");
         assert_eq!(a.cell_display_value(0, 0), "10");
     }
@@ -5479,15 +5855,24 @@ mod tests {
     fn registry_not_leaked_by_back_references() {
         // Each sheet's back-reference to the registry must be Weak, or the
         // Rc<Vec<DataProxy>> would form a cycle and leak the whole workbook.
-        let reg: SheetsRegistry =
-            Rc::new(RefCell::new(vec![DataProxy::new("S1"), DataProxy::new("S2")]));
+        let reg: SheetsRegistry = Rc::new(RefCell::new(vec![
+            DataProxy::new("S1"),
+            DataProxy::new("S2"),
+        ]));
         for d in reg.borrow_mut().iter_mut() {
             d.set_sheets(&reg);
         }
         let weak = Rc::downgrade(&reg);
-        assert_eq!(Rc::strong_count(&reg), 1, "back-refs must be Weak, not strong Rc");
+        assert_eq!(
+            Rc::strong_count(&reg),
+            1,
+            "back-refs must be Weak, not strong Rc"
+        );
         drop(reg);
-        assert!(weak.upgrade().is_none(), "workbook should free (no Rc cycle)");
+        assert!(
+            weak.upgrade().is_none(),
+            "workbook should free (no Rc cycle)"
+        );
     }
 
     #[test]
@@ -5503,11 +5888,20 @@ mod tests {
     fn adjust_formula_refs_preserves_sheet_prefix() {
         // The cell-ref substitution must not touch the `Sheet2!` prefix; the
         // *relative* cell ref still shifts like any other (issue #4).
-        assert_eq!(adjust_formula_refs("=Sheet2!A1+B1", true, 0, 1, None), "=Sheet2!A2+B2");
+        assert_eq!(
+            adjust_formula_refs("=Sheet2!A1+B1", true, 0, 1, None),
+            "=Sheet2!A2+B2"
+        );
         // Absolute row on the cross-sheet ref stays put.
-        assert_eq!(adjust_formula_refs("=Sheet2!$A$1+A1", true, 0, 1, None), "=Sheet2!$A$1+A2");
+        assert_eq!(
+            adjust_formula_refs("=Sheet2!$A$1+A1", true, 0, 1, None),
+            "=Sheet2!$A$1+A2"
+        );
         // Both ends of a cross-sheet range shift.
-        assert_eq!(adjust_formula_refs("=Sheet2!A1:B3", true, 0, 1, None), "=Sheet2!A2:B4");
+        assert_eq!(
+            adjust_formula_refs("=Sheet2!A1:B3", true, 0, 1, None),
+            "=Sheet2!A2:B4"
+        );
     }
 
     #[test]
@@ -5531,7 +5925,10 @@ mod tests {
     fn shift_formula_refs_preserves_sheet_prefix() {
         // The fill-handle shift must not corrupt cross-sheet refs.
         assert_eq!(shift_formula_refs("=Sheet2!A1", 1, 0), "=Sheet2!A2");
-        assert_eq!(shift_formula_refs("=Sheet2!$A$1+A1", 0, 1), "=Sheet2!$A$1+B1");
+        assert_eq!(
+            shift_formula_refs("=Sheet2!$A$1+A1", 0, 1),
+            "=Sheet2!$A$1+B1"
+        );
         assert_eq!(shift_formula_refs("=Sheet2!A1:B3", 1, 0), "=Sheet2!A2:B4");
     }
 
@@ -5657,8 +6054,11 @@ mod tests {
         let mut d = DataProxy::new("t");
         d.validations
             .add("cell", "A1", Validator::new("list", false, "a,b,c", ""));
-        d.validations
-            .add("cell", "C3:E5", Validator::new("number", false, "1,10", "be"));
+        d.validations.add(
+            "cell",
+            "C3:E5",
+            Validator::new("number", false, "1,10", "be"),
+        );
         let json = d.get_data_json();
 
         let mut d2 = DataProxy::new("t");
@@ -5690,8 +6090,11 @@ mod tests {
     #[test]
     fn required_validator_blocks_empty_value_at_validate_layer() {
         let mut d = DataProxy::new("t");
-        d.validations
-            .add("cell", "A1", Validator::new("text-length", true, "1,100", "be"));
+        d.validations.add(
+            "cell",
+            "A1",
+            Validator::new("text-length", true, "1,100", "be"),
+        );
         // Empty value is rejected because `required = true`.
         assert!(!d.validations.validate(0, 0, ""));
         assert!(d.validations.get_error(0, 0).is_some());
@@ -5707,7 +6110,10 @@ mod tests {
         d.validations
             .add("cell", "A1", Validator::new("list", false, "a,b", ""));
         let json: serde_json::Value = serde_json::from_str(&d.get_data_json()).unwrap();
-        assert!(json.get("validations").is_some(), "validations key must serialize");
+        assert!(
+            json.get("validations").is_some(),
+            "validations key must serialize"
+        );
         let arr = json.get("validations").unwrap().as_array().unwrap();
         assert_eq!(arr.len(), 1);
     }
@@ -5775,7 +6181,7 @@ mod tests {
         assert_eq!(d.get_row_height(0), h0 * 1.5); // default height zooms
         assert_eq!(d.get_col_width(0), w0 * 1.5);
         assert_eq!(d.get_row_height(3), 60.0); // explicit height zooms
-        // A hidden row stays collapsed at any zoom.
+                                               // A hidden row stays collapsed at any zoom.
         d.set_row_hidden(5, true);
         assert_eq!(d.get_row_height(5), 0.0);
         // Unhiding restores the model height (zoom never corrupted it).
@@ -5841,13 +6247,28 @@ mod tests {
     fn cf_top_bottom_n_with_ties_and_percent() {
         let hit = Some("#ff0000".to_string());
         // Top 2 of [10,20,30,40,40]: threshold is 40 — BOTH 40s match (ties).
-        assert_eq!(cf_probe(cf_rule("top", "2")), vec![None, None, None, hit.clone(), hit.clone()]);
+        assert_eq!(
+            cf_probe(cf_rule("top", "2")),
+            vec![None, None, None, hit.clone(), hit.clone()]
+        );
         // Bottom 2: 10 and 20.
-        assert_eq!(cf_probe(cf_rule("bottom", "2")), vec![hit.clone(), hit.clone(), None, None, None]);
+        assert_eq!(
+            cf_probe(cf_rule("bottom", "2")),
+            vec![hit.clone(), hit.clone(), None, None, None]
+        );
         // Top 40% of 5 values = top 2 (rounded count).
-        assert_eq!(cf_probe(cf_rule("top", "40%")), vec![None, None, None, hit.clone(), hit.clone()]);
+        assert_eq!(
+            cf_probe(cf_rule("top", "40%")),
+            vec![None, None, None, hit.clone(), hit.clone()]
+        );
         // N larger than the range clamps to "everything".
-        assert_eq!(cf_probe(cf_rule("top", "99")).iter().filter(|x| x.is_some()).count(), 5);
+        assert_eq!(
+            cf_probe(cf_rule("top", "99"))
+                .iter()
+                .filter(|x| x.is_some())
+                .count(),
+            5
+        );
         // Unparsable N matches nothing.
         assert_eq!(cf_probe(cf_rule("top", "x")), vec![None; 5]);
     }
@@ -5856,18 +6277,30 @@ mod tests {
     fn cf_above_below_average() {
         let hit = Some("#ff0000".to_string());
         // mean(10,20,30,40,40) = 28 — strictly above: 30, 40, 40.
-        assert_eq!(cf_probe(cf_rule("above-avg", "")), vec![None, None, hit.clone(), hit.clone(), hit.clone()]);
+        assert_eq!(
+            cf_probe(cf_rule("above-avg", "")),
+            vec![None, None, hit.clone(), hit.clone(), hit.clone()]
+        );
         // Strictly below: 10, 20.
-        assert_eq!(cf_probe(cf_rule("below-avg", "")), vec![hit.clone(), hit.clone(), None, None, None]);
+        assert_eq!(
+            cf_probe(cf_rule("below-avg", "")),
+            vec![hit.clone(), hit.clone(), None, None, None]
+        );
     }
 
     #[test]
     fn cf_duplicate_and_unique_values() {
         let hit = Some("#ff0000".to_string());
         // Only the two 40s are duplicates.
-        assert_eq!(cf_probe(cf_rule("dup", "")), vec![None, None, None, hit.clone(), hit.clone()]);
+        assert_eq!(
+            cf_probe(cf_rule("dup", "")),
+            vec![None, None, None, hit.clone(), hit.clone()]
+        );
         // Everything else is unique.
-        assert_eq!(cf_probe(cf_rule("unique", "")), vec![hit.clone(), hit.clone(), hit.clone(), None, None]);
+        assert_eq!(
+            cf_probe(cf_rule("unique", "")),
+            vec![hit.clone(), hit.clone(), hit.clone(), None, None]
+        );
     }
 
     #[test]
@@ -5875,7 +6308,10 @@ mod tests {
         let hit = Some("#ff0000".to_string());
         // Anchored at the range top-left (B1): "=B1>25" shifts per row, so it
         // matches the cells holding 30, 40, 40.
-        assert_eq!(cf_probe(cf_rule("formula", "=B1>25")), vec![None, None, hit.clone(), hit.clone(), hit.clone()]);
+        assert_eq!(
+            cf_probe(cf_rule("formula", "=B1>25")),
+            vec![None, None, hit.clone(), hit.clone(), hit.clone()]
+        );
         // $-anchored refs do NOT shift: =$B$1>25 is false everywhere (B1=10).
         assert_eq!(cf_probe(cf_rule("formula", "=$B$1>25")), vec![None; 5]);
         // Empty formula matches nothing.
@@ -5893,7 +6329,10 @@ mod tests {
         assert_eq!(got[0].as_deref(), Some("#000000"));
         assert_eq!(got[3].as_deref(), Some("#ffffff"));
         let mid = got[2].as_deref().unwrap();
-        assert!(mid > "#808080" && mid < "#ffffff", "30 blends between mid and max: {mid}");
+        assert!(
+            mid > "#808080" && mid < "#ffffff",
+            "30 blends between mid and max: {mid}"
+        );
     }
 
     #[test]
@@ -5931,7 +6370,10 @@ mod tests {
         d2.cond_formats.push(icons);
         for (r, zone) in [(0, 0u8), (1, 1), (2, 2)] {
             match d2.cond_visual(r, 1) {
-                Some(CondVisual::Icon { set: IconSet::Traffic, zone: z }) => assert_eq!(z, zone, "row {r}"),
+                Some(CondVisual::Icon {
+                    set: IconSet::Traffic,
+                    zone: z,
+                }) => assert_eq!(z, zone, "row {r}"),
                 v => panic!("expected traffic icon, got {v:?}"),
             }
         }
@@ -5942,7 +6384,11 @@ mod tests {
         d2.cond_formats.push(style_rule);
         let mut s = Style::default();
         d2.apply_cond_format(2, 1, &mut s);
-        assert_eq!(s.bgcolor.as_deref(), Some("#ff0000"), "style rule applies alongside icons");
+        assert_eq!(
+            s.bgcolor.as_deref(),
+            Some("#ff0000"),
+            "style rule applies alongside icons"
+        );
     }
 
     // --- Outline groups + SUBTOTAL (issue #30) ---
@@ -5952,7 +6398,7 @@ mod tests {
         let mut d = DataProxy::new("t");
         d.add_row_group(1, 8); // outer
         d.add_row_group(2, 4); // inner
-        // Collapse inner: rows 2..=4 hide.
+                               // Collapse inner: rows 2..=4 hide.
         d.toggle_row_group(1);
         assert!(d.is_row_hidden(3));
         assert!(!d.is_row_hidden(5));
@@ -5974,7 +6420,7 @@ mod tests {
         let mut d = DataProxy::new("t");
         d.add_row_group(1, 8); // level 1
         d.add_row_group(2, 4); // level 2
-        // Button 1: collapse levels >= 1 (everything).
+                               // Button 1: collapse levels >= 1 (everything).
         d.set_row_outline_level(1);
         assert!(d.is_row_hidden(1) && d.is_row_hidden(3));
         // Button 2: level-1 groups expand, level-2 stay collapsed.
@@ -6052,11 +6498,17 @@ mod tests {
             e.set_cell_text(r, 0, v);
         }
         e.set_cell_text(10, 0, "=SUBTOTAL(10, A1:A4)");
-        assert!(e.cell_display_value(10, 0).starts_with("1.6666"), "sample var");
+        assert!(
+            e.cell_display_value(10, 0).starts_with("1.6666"),
+            "sample var"
+        );
         e.set_cell_text(11, 0, "=SUBTOTAL(11, A1:A4)");
         assert_eq!(e.cell_display_value(11, 0), "1.25"); // population var
         e.set_cell_text(12, 0, "=SUBTOTAL(8, A1:A4)");
-        assert!(e.cell_display_value(12, 0).starts_with("1.118"), "pop stdev");
+        assert!(
+            e.cell_display_value(12, 0).starts_with("1.118"),
+            "pop stdev"
+        );
         // Bad function number.
         e.set_cell_text(13, 0, "=SUBTOTAL(42, A1:A4)");
         assert_eq!(e.cell_display_value(13, 0), "#VALUE!");
@@ -6161,12 +6613,8 @@ mod tests {
 
     #[test]
     fn filter_with_broadcast_comparison() {
-        let cells: Vec<(usize, usize, &str)> = vec![
-            (0, 0, "1"),
-            (1, 0, "5"),
-            (2, 0, "3"),
-            (3, 0, "8"),
-        ];
+        let cells: Vec<(usize, usize, &str)> =
+            vec![(0, 0, "1"), (1, 0, "5"), (2, 0, "3"), (3, 0, "8")];
         // FILTER keeps the rows where the broadcast comparison is true; the
         // nested array collapses through SUM.
         assert_eq!(eval_with(&cells, "=SUM(FILTER(A1:A4, A1:A4>2))"), "16");
@@ -6192,9 +6640,12 @@ mod tests {
     #[test]
     fn sort_orders_rows_and_columns() {
         let cells: Vec<(usize, usize, &str)> = vec![
-            (0, 0, "b"), (0, 1, "2"),
-            (1, 0, "c"), (1, 1, "3"),
-            (2, 0, "a"), (2, 1, "1"),
+            (0, 0, "b"),
+            (0, 1, "2"),
+            (1, 0, "c"),
+            (1, 1, "3"),
+            (2, 0, "a"),
+            (2, 1, "1"),
         ];
         // Default: ascending by the first column; rows travel together.
         assert_eq!(eval_with(&cells, "=INDEX(SORT(A1:B3), 1, 2)"), "1");
@@ -6213,11 +6664,8 @@ mod tests {
         // The user-side path: =SORT(A1:B3, B1) where B1 is "NaN"
         // (a plausible action — looking up the sort column from
         // another cell).
-        let cells: Vec<(usize, usize, &str)> = vec![
-            (0, 0, "b"), (0, 1, "NaN"),
-            (1, 0, "c"),
-            (2, 0, "a"),
-        ];
+        let cells: Vec<(usize, usize, &str)> =
+            vec![(0, 0, "b"), (0, 1, "NaN"), (1, 0, "c"), (2, 0, "a")];
         // Per-cell parse of "NaN" → f64::NAN, which should now be
         // caught by the `is_finite()` guard and surfaced as #VALUE!.
         assert_eq!(eval_with(&cells, "=SORT(A1:A3, B1)"), "#VALUE!");
@@ -6226,13 +6674,22 @@ mod tests {
     #[test]
     fn sortby_uses_parallel_key_arrays() {
         let cells: Vec<(usize, usize, &str)> = vec![
-            (0, 0, "apple"), (0, 1, "3"),
-            (1, 0, "pear"), (1, 1, "1"),
-            (2, 0, "plum"), (2, 1, "2"),
+            (0, 0, "apple"),
+            (0, 1, "3"),
+            (1, 0, "pear"),
+            (1, 1, "1"),
+            (2, 0, "plum"),
+            (2, 1, "2"),
         ];
         // Sort names by the weight column, descending.
-        assert_eq!(eval_with(&cells, "=INDEX(SORTBY(A1:A3, B1:B3, -1), 1, 1)"), "apple");
-        assert_eq!(eval_with(&cells, "=INDEX(SORTBY(A1:A3, B1:B3), 1, 1)"), "pear");
+        assert_eq!(
+            eval_with(&cells, "=INDEX(SORTBY(A1:A3, B1:B3, -1), 1, 1)"),
+            "apple"
+        );
+        assert_eq!(
+            eval_with(&cells, "=INDEX(SORTBY(A1:A3, B1:B3), 1, 1)"),
+            "pear"
+        );
         // Key array of the wrong length is #VALUE!.
         assert_eq!(eval_with(&cells, "=SORTBY(A1:A3, B1:B2)"), "#VALUE!");
     }
@@ -6247,7 +6704,10 @@ mod tests {
         ];
         assert_eq!(eval_with(&cells, "=COUNTA(UNIQUE(A1:A4))"), "3");
         // exactly_once keeps only the values that never repeat.
-        assert_eq!(eval_with(&cells, "=COUNTA(UNIQUE(A1:A4, FALSE, TRUE))"), "2");
+        assert_eq!(
+            eval_with(&cells, "=COUNTA(UNIQUE(A1:A4, FALSE, TRUE))"),
+            "2"
+        );
         assert_eq!(eval_with(&cells, "=UNIQUE(A1:A4, FALSE, TRUE)"), "a");
     }
 

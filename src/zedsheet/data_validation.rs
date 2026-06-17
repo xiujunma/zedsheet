@@ -1,10 +1,10 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-use gloo::utils::window;
-use wasm_bindgen::closure::Closure;
-use web_sys::KeyboardEvent;
 #[allow(unused_imports)]
 use super::*;
+use gloo::utils::window;
+use std::cell::RefCell;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
+use web_sys::KeyboardEvent;
 
 pub(crate) fn show_list_popover(
     popover: Option<&web_sys::Element>,
@@ -33,16 +33,17 @@ pub(crate) fn show_list_popover(
         ));
     }
     pop.set_inner_html(&html);
-    let _ = pop.set_attribute(
-        "data-cell",
-        &format!("{}_{}", ri, ci),
-    );
+    let _ = pop.set_attribute("data-cell", &format!("{}_{}", ri, ci));
     // Position the popover at (x, y). If it would overflow the viewport
     // bottom, flip it above the click point.
     let vh = web_sys::window()
         .and_then(|w| w.inner_height().ok().and_then(|v| v.as_f64()))
         .unwrap_or(800.0);
-    let top = if y + 200.0 > vh { (y - 24.0).max(0.0) } else { y };
+    let top = if y + 200.0 > vh {
+        (y - 24.0).max(0.0)
+    } else {
+        y
+    };
     let style = pop.unchecked_ref::<web_sys::HtmlElement>().style();
     let _ = style.set_property("left", &format!("{}px", x));
     let _ = style.set_property("top", &format!("{}px", top));
@@ -145,10 +146,7 @@ pub(crate) fn wire_data_validation_modal(
                 .value();
             update_dv_rows(&modal_for_type, &type_val);
         });
-        let _ = type_select.add_event_listener_with_callback(
-            "change",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = type_select.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -175,10 +173,7 @@ pub(crate) fn wire_data_validation_modal(
                 .unwrap_or_default();
             update_dv_rows_with_op(&modal_for_op, &type_val, &op_val);
         });
-        let _ = op_select.add_event_listener_with_callback(
-            "change",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = op_select.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -195,10 +190,7 @@ pub(crate) fn wire_data_validation_modal(
                 .style()
                 .set_property("display", "none");
         });
-        let _ = save_btn.add_event_listener_with_callback(
-            "click",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = save_btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -213,10 +205,7 @@ pub(crate) fn wire_data_validation_modal(
                 .set_property("display", "none");
             *visible_for_cancel.borrow_mut() = false;
         });
-        let _ = cancel_btn.add_event_listener_with_callback(
-            "click",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = cancel_btn.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -231,10 +220,7 @@ pub(crate) fn wire_data_validation_modal(
                 .set_property("display", "none");
             *visible_for_close.borrow_mut() = false;
         });
-        let _ = close_icon.add_event_listener_with_callback(
-            "click",
-            cb.as_ref().unchecked_ref(),
-        );
+        let _ = close_icon.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -258,8 +244,7 @@ pub(crate) fn wire_data_validation_modal(
                 *visible_for_outside.borrow_mut() = false;
             }
         });
-        let _ = window()
-            .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
+        let _ = window().add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -280,8 +265,7 @@ pub(crate) fn wire_data_validation_modal(
                 *visible_for_esc.borrow_mut() = false;
             }
         });
-        let _ = window()
-            .add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+        let _ = window().add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
         cb.forget();
     }
 
@@ -309,7 +293,10 @@ pub(crate) fn update_dv_rows_with_op(modal: &web_sys::Element, type_val: &str, o
     use wasm_bindgen::JsCast;
     let set_row = |q: &str, display: &str| {
         if let Ok(Some(el)) = modal.query_selector(q) {
-            let _ = el.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", display);
+            let _ = el
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("display", display);
         }
     };
     // Default: all hidden.

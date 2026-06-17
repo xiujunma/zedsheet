@@ -17,10 +17,10 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 
-use crate::component::element::Element;
-use crate::core::pivot::Slicer;
 #[allow(unused_imports)]
 use super::*;
+use crate::component::element::Element;
+use crate::core::pivot::Slicer;
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -79,7 +79,9 @@ pub(crate) fn slicer_modal_html() -> String {
 /// "No slicers yet" placeholder. Each row has the field name and a
 /// Delete button keyed by index.
 fn render_slicer_list(modal: &web_sys::Element, sheets: &Sheets, active: &ActiveSheet) {
-    let Ok(Some(list)) = modal.query_selector(".zs-slicer-list") else { return };
+    let Ok(Some(list)) = modal.query_selector(".zs-slicer-list") else {
+        return;
+    };
     let src = sheets.borrow()[*active.borrow()].clone();
     if src.slicers.is_empty() {
         list.set_inner_html("<div style=\"color:#999;padding:2px 0;\">No slicers yet.</div>");
@@ -126,8 +128,12 @@ fn read_header_labels(src: &crate::core::data_proxy::DataProxy, max_col: usize) 
 
 /// Populate the field `<select>` from the active sheet's row 0.
 fn populate_field_select(modal: &web_sys::Element, sheets: &Sheets, active: &ActiveSheet) {
-    let Ok(Some(sel_el)) = modal.query_selector(".zs-slicer-field") else { return };
-    let Ok(sel) = sel_el.dyn_into::<HtmlSelectElement>() else { return };
+    let Ok(Some(sel_el)) = modal.query_selector(".zs-slicer-field") else {
+        return;
+    };
+    let Ok(sel) = sel_el.dyn_into::<HtmlSelectElement>() else {
+        return;
+    };
     let src = sheets.borrow()[*active.borrow()].clone();
     let max_col = src.row_count.max(1).min(64);
     let headers = read_header_labels(&src, max_col);
@@ -202,10 +208,17 @@ pub(crate) fn wire_slicer_modal(
     let mut el: Element = modal.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
 
         // Close: any click on the header × or the bottom "Close" button.
-        if elx.closest(".zs-slicer-close, .zs-slicer-done").ok().flatten().is_some() {
+        if elx
+            .closest(".zs-slicer-close, .zs-slicer-done")
+            .ok()
+            .flatten()
+            .is_some()
+        {
             let _ = modal_node
                 .unchecked_ref::<HtmlElement>()
                 .style()
@@ -214,7 +227,11 @@ pub(crate) fn wire_slicer_modal(
         }
 
         // Delete: a row's Delete button, identified by data-slicer-del="i".
-        if let Some(del) = elx.closest(&format!("[{}]", "data-slicer-del")).ok().flatten() {
+        if let Some(del) = elx
+            .closest(&format!("[{}]", "data-slicer-del"))
+            .ok()
+            .flatten()
+        {
             if let Some(idx) = del
                 .get_attribute("data-slicer-del")
                 .and_then(|v| v.parse::<usize>().ok())
@@ -228,9 +245,18 @@ pub(crate) fn wire_slicer_modal(
                 render_slicer_list(&modal_node, &sheets_local, &active_local);
                 {
                     let mut r = renderer_local.borrow_mut();
-                    r.refresh_pivots_on_source(&sheets_local, &active_local, *active_local.borrow());
+                    r.refresh_pivots_on_source(
+                        &sheets_local,
+                        &active_local,
+                        *active_local.borrow(),
+                    );
                 }
-                render_slicer_panels(&sheet_el_local, &sheets_local, &active_local, &renderer_local);
+                render_slicer_panels(
+                    &sheet_el_local,
+                    &sheets_local,
+                    &active_local,
+                    &renderer_local,
+                );
                 sync_local();
             }
             return;
@@ -272,7 +298,12 @@ pub(crate) fn wire_slicer_modal(
                 }
             }
             render_slicer_list(&modal_node, &sheets_local, &active_local);
-            render_slicer_panels(&sheet_el_local, &sheets_local, &active_local, &renderer_local);
+            render_slicer_panels(
+                &sheet_el_local,
+                &sheets_local,
+                &active_local,
+                &renderer_local,
+            );
             {
                 let mut r = renderer_local.borrow_mut();
                 r.refresh_pivots_on_source(&sheets_local, &active_local, *active_local.borrow());
@@ -480,7 +511,9 @@ fn wire_slicer_panel_events(
     let sheet_el_for_closure = sheet_el.clone();
     let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
 
         // Chip click: read the index from `data-slicer-chip` and the
         // value from `data-value` (the two are kept as separate

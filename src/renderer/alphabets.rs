@@ -3,7 +3,7 @@
 const ALPHABETS: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 fn alphabet(index: usize) -> char {
-    return ALPHABETS.chars().nth(index).unwrap()
+    return ALPHABETS.chars().nth(index).unwrap();
 }
 
 /// Column index → A1 letters (bijective base-26): 0→"A", 25→"Z", 26→"AA".
@@ -31,8 +31,8 @@ pub fn index_at(str: &str) -> usize {
 }
 
 pub fn exp2xy(expr: &str) -> (usize, usize) {
-    let mut x_vec:Vec<char> = Vec::new();
-    let mut y_vec:Vec<char>  = Vec::new();
+    let mut x_vec: Vec<char> = Vec::new();
+    let mut y_vec: Vec<char> = Vec::new();
 
     for c in expr.chars() {
         if c.is_digit(10) {
@@ -44,17 +44,19 @@ pub fn exp2xy(expr: &str) -> (usize, usize) {
     }
 
     let x = index_at(&String::from_iter(x_vec.into_iter()));
-    let y = String::from_iter(y_vec.into_iter()).parse::<usize>().unwrap();
-    return (x, y - 1)
+    let y = String::from_iter(y_vec.into_iter())
+        .parse::<usize>()
+        .unwrap();
+    return (x, y - 1);
 }
 
 pub fn xy2expr(x: usize, y: usize) -> String {
-    return format!("{}{}", string_at(x), y + 1)
+    return format!("{}{}", string_at(x), y + 1);
 }
 
 pub fn expr2expr(expr: &str, xn: usize, yn: usize) -> String {
     let (x, y) = exp2xy(expr);
-    return xy2expr(x + xn, y+ yn)
+    return xy2expr(x + xn, y + yn);
 }
 
 #[cfg(test)]

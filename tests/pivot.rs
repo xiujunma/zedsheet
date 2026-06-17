@@ -23,7 +23,13 @@ fn sheet_from_rows(name: &str, rows: &[&[&str]]) -> DataProxy {
     dp
 }
 
-fn pt(source: &str, row_fields: Vec<usize>, col_fields: Vec<usize>, value: usize, agg: Agg) -> PivotTable {
+fn pt(
+    source: &str,
+    row_fields: Vec<usize>,
+    col_fields: Vec<usize>,
+    value: usize,
+    agg: Agg,
+) -> PivotTable {
     PivotTable {
         source_range: source.into(),
         source_sheet: "Sales".into(),
@@ -41,12 +47,15 @@ fn pt(source: &str, row_fields: Vec<usize>, col_fields: Vec<usize>, value: usize
 #[test]
 fn full_pivot_pipeline_writes_expected_cells() {
     // Source: a small sales table.
-    let src = sheet_from_rows("Sales", &[
-        &["Region", "Quarter", "Amount"],
-        &["North", "Q1", "10"],
-        &["North", "Q2", "20"],
-        &["South", "Q1", "50"],
-    ]);
+    let src = sheet_from_rows(
+        "Sales",
+        &[
+            &["Region", "Quarter", "Amount"],
+            &["North", "Q1", "10"],
+            &["North", "Q2", "20"],
+            &["South", "Q1", "50"],
+        ],
+    );
 
     // 1) Compute the cross-tab: rows=Region, cols=Quarter, value=Amount (sum).
     let p = pt("Sales!A1:C4", vec![0], vec![1], 2, Agg::Sum);
@@ -79,11 +88,10 @@ fn pivot_spec_round_trips_through_data_proxy_json() {
     // Spec persistence: a pivot on the source sheet should round-trip via
     // `DataProxy::get_data` → `set_data` (the same path the JS API uses
     // for `get_data`/`load_data`).
-    let mut src = sheet_from_rows("Sales", &[
-        &["Name", "Score"],
-        &["Alice", "10"],
-        &["Bob", "20"],
-    ]);
+    let mut src = sheet_from_rows(
+        "Sales",
+        &[&["Name", "Score"], &["Alice", "10"], &["Bob", "20"]],
+    );
     let p = pt("Sales!A1:B3", vec![0], vec![], 1, Agg::Sum);
     src.pivots.push(p.clone());
 
@@ -108,11 +116,10 @@ fn refresh_recomputes_against_modified_source() {
     // The pivot's Refresh path re-reads the source. If the source data
     // changes between the original create and the refresh, the recomputed
     // cross-tab should reflect the new data.
-    let mut src = sheet_from_rows("Sales", &[
-        &["Name", "Score"],
-        &["Alice", "10"],
-        &["Bob", "20"],
-    ]);
+    let mut src = sheet_from_rows(
+        "Sales",
+        &[&["Name", "Score"], &["Alice", "10"], &["Bob", "20"]],
+    );
     // Source range A1:B3 — header + 2 data rows. Editing values inside
     // the range simulates a refresh after the user changes source data.
     let p = pt("Sales!A1:B3", vec![0], vec![], 1, Agg::Sum);
@@ -138,10 +145,7 @@ fn spec_on_source_round_trips_through_get_data_set_data() {
     // The renderer's `install_pivot_into_registry` relies on this — it
     // pushes the spec onto the source so the registry persists it; the
     // round-trip below is what proves the persistence is real.
-    let mut src = sheet_from_rows("Sales", &[
-        &["Name", "Score"],
-        &["Alice", "10"],
-    ]);
+    let mut src = sheet_from_rows("Sales", &[&["Name", "Score"], &["Alice", "10"]]);
     let p = pt("Sales!A1:B2", vec![0], vec![], 1, Agg::Sum);
     src.pivots.push(p);
 
@@ -163,18 +167,27 @@ fn multi_value_pivot_pipeline_writes_expected_cells() {
     //   North, Q1, 10
     //   North, Q2, 20
     //   South, Q1, 50
-    let src = sheet_from_rows("Sales", &[
-        &["Region", "Quarter", "Amount"],
-        &["North", "Q1", "10"],
-        &["North", "Q2", "20"],
-        &["South", "Q1", "50"],
-    ]);
+    let src = sheet_from_rows(
+        "Sales",
+        &[
+            &["Region", "Quarter", "Amount"],
+            &["North", "Q1", "10"],
+            &["North", "Q2", "20"],
+            &["South", "Q1", "50"],
+        ],
+    );
 
     // Build a PivotTable with two value fields: Sum of Amount, Count of Amount.
     let mut p = pt("Sales!A1:C4", vec![0], vec![1], 0, Agg::Sum);
     p.value_fields = vec![
-        ValueField { field: 2, agg: Agg::Sum },
-        ValueField { field: 2, agg: Agg::Count },
+        ValueField {
+            field: 2,
+            agg: Agg::Sum,
+        },
+        ValueField {
+            field: 2,
+            agg: Agg::Count,
+        },
     ];
 
     // 1) Compute.
@@ -232,15 +245,20 @@ fn multi_value_pivot_spec_survives_json_round_trip() {
     // The `value_fields` list must survive `get_data` / `set_data` so the
     // workbook-level persistence preserves multi-value pivots. This pins
     // the serde layout (issue #59).
-    let mut src = sheet_from_rows("Sales", &[
-        &["Region", "Amount"],
-        &["North", "10"],
-        &["South", "20"],
-    ]);
+    let mut src = sheet_from_rows(
+        "Sales",
+        &[&["Region", "Amount"], &["North", "10"], &["South", "20"]],
+    );
     let mut p = pt("Sales!A1:B3", vec![0], vec![], 1, Agg::Sum);
     p.value_fields = vec![
-        ValueField { field: 1, agg: Agg::Sum },
-        ValueField { field: 1, agg: Agg::Count },
+        ValueField {
+            field: 1,
+            agg: Agg::Sum,
+        },
+        ValueField {
+            field: 1,
+            agg: Agg::Count,
+        },
     ];
     src.pivots.push(p);
 
@@ -265,11 +283,10 @@ fn legacy_workbook_without_value_fields_still_works() {
     // A workbook saved with the pre-#59 format — empty `value_fields`,
     // legacy `value_field` + `agg` set — must still load and compute
     // (issue #59, backward compat).
-    let mut src = sheet_from_rows("Sales", &[
-        &["Region", "Amount"],
-        &["North", "10"],
-        &["South", "20"],
-    ]);
+    let mut src = sheet_from_rows(
+        "Sales",
+        &[&["Region", "Amount"], &["North", "10"], &["South", "20"]],
+    );
     // Pre-#59 shape: empty value_fields, single value_field + agg.
     let p = pt("Sales!A1:B3", vec![0], vec![], 1, Agg::Sum);
     assert!(p.value_fields.is_empty()); // sanity

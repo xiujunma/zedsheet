@@ -46,7 +46,11 @@ mod tests {
     use super::*;
 
     fn g(start: usize, end: usize) -> OutlineGroup {
-        OutlineGroup { start, end, collapsed: false }
+        OutlineGroup {
+            start,
+            end,
+            collapsed: false,
+        }
     }
 
     #[test]

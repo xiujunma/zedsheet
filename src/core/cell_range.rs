@@ -1,5 +1,5 @@
+use crate::renderer::alphabets::{exp2xy, xy2expr};
 use std::fmt::Display;
-use crate::renderer::alphabets::{ exp2xy, xy2expr };
 
 #[derive(Debug, Clone)]
 pub struct CellRange {
@@ -71,11 +71,17 @@ impl CellRange {
     }
 
     pub fn contains(&self, range: &Self) -> bool {
-        self.sri <= range.sri && self.sci <= range.sci && self.eri >= range.eri && self.eci >= range.eci
+        self.sri <= range.sri
+            && self.sci <= range.sci
+            && self.eri >= range.eri
+            && self.eci >= range.eci
     }
 
     pub fn within(&self, range: &Self) -> bool {
-        self.sri >= range.sri && self.sci >= range.sci && self.eri <= range.eri && self.eci <= range.eci
+        self.sri >= range.sri
+            && self.sci >= range.sci
+            && self.eri <= range.eri
+            && self.eci <= range.eci
     }
 
     pub fn disjoint(&self, range: &Self) -> bool {

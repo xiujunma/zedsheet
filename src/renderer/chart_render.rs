@@ -36,7 +36,11 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
         canvas.stroke_rect(x + 0.5, y + 0.5, w - 1.0, h - 1.0);
 
         // Title.
-        let title = if chart.title.is_empty() { &chart.range } else { &chart.title };
+        let title = if chart.title.is_empty() {
+            &chart.range
+        } else {
+            &chart.title
+        };
         canvas.set_fill_style("#333333");
         canvas.set_font("bold 12px Arial");
         canvas.set_text_align("center");
@@ -65,12 +69,32 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
 
 /// Shared bar/line body: y axis with nice bounds + gridlines, x labels,
 /// a legend when there are multiple series.
-fn draw_axes_chart(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &ChartData, bars: bool) {
-    let all: Vec<f64> = data.series.iter().flat_map(|(_, v)| v.iter().copied()).collect();
-    let raw_max = all.iter().cloned().fold(f64::NEG_INFINITY, f64::max).max(0.0);
+fn draw_axes_chart(
+    canvas: &Canvas,
+    px: f64,
+    py: f64,
+    pw: f64,
+    ph: f64,
+    data: &ChartData,
+    bars: bool,
+) {
+    let all: Vec<f64> = data
+        .series
+        .iter()
+        .flat_map(|(_, v)| v.iter().copied())
+        .collect();
+    let raw_max = all
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(0.0);
     let raw_min = all.iter().cloned().fold(f64::INFINITY, f64::min).min(0.0);
     let ymax = nice_ceil(raw_max);
-    let ymin = if raw_min < 0.0 { -nice_ceil(-raw_min) } else { 0.0 };
+    let ymin = if raw_min < 0.0 {
+        -nice_ceil(-raw_min)
+    } else {
+        0.0
+    };
     let span = (ymax - ymin).max(1e-9);
     let y_of = |v: f64| py + ph - (v - ymin) / span * ph;
 
@@ -108,7 +132,11 @@ fn draw_axes_chart(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &C
             canvas.set_fill_style(PALETTE[si % PALETTE.len()]);
             for (i, v) in values.iter().enumerate() {
                 let bx = px + group_w * i as f64 + group_w * 0.1 + slot * si as f64;
-                let (top, bottom) = if *v >= 0.0 { (y_of(*v), y_of(0.0)) } else { (y_of(0.0), y_of(*v)) };
+                let (top, bottom) = if *v >= 0.0 {
+                    (y_of(*v), y_of(0.0))
+                } else {
+                    (y_of(0.0), y_of(*v))
+                };
                 canvas.fill_rect(bx, top, (slot - 2.0).max(1.0), (bottom - top).max(1.0));
             }
         }
@@ -154,7 +182,9 @@ fn draw_axes_chart(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &C
 
 /// Pie of the first series, with a label + percentage legend on the right.
 fn draw_pie(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &ChartData) {
-    let Some((_, values)) = data.series.first() else { return };
+    let Some((_, values)) = data.series.first() else {
+        return;
+    };
     let total: f64 = values.iter().map(|v| v.abs()).sum();
     if total <= 0.0 {
         return;

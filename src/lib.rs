@@ -10,20 +10,20 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic;
 
-use wasm_bindgen::prelude::*;
 use gloo::utils::document;
+use wasm_bindgen::prelude::*;
 
-mod renderer;
 mod component;
-mod zedsheet;
 mod config;
 pub mod core;
 mod formula;
 mod persist;
+mod renderer;
+mod zedsheet;
 
-use core::data_proxy::{DataProxy, Style, SheetsRegistry};
-use core::cell_range::CellRange;
 use component::options::Options;
+use core::cell_range::CellRange;
+use core::data_proxy::{DataProxy, SheetsRegistry, Style};
 use zedsheet::{ActiveSheetFn, GetDataFn, LoadDataFn, ZedSheet};
 
 /// Everything `lib` needs to keep about a mounted workbook: the get/load
@@ -51,7 +51,12 @@ thread_local! {
 pub fn start() {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
 
-    if document().query_selector("#zedsheet").ok().flatten().is_some() {
+    if document()
+        .query_selector("#zedsheet")
+        .ok()
+        .flatten()
+        .is_some()
+    {
         // Demo: restore the user's saved edits if present, else seed the sample.
         finish_mount("#zedsheet", demo_data(), None);
     }
@@ -281,7 +286,11 @@ fn demo_data() -> DataProxy {
     wrap.text_wrap = true;
     wrap.valign = "top".to_string();
     let wrap_idx = data.add_style(wrap);
-    data.set_cell_text(5, 0, "This is a long sentence that wraps across multiple lines inside the cell.");
+    data.set_cell_text(
+        5,
+        0,
+        "This is a long sentence that wraps across multiple lines inside the cell.",
+    );
     data.set_cell_style(5, 0, wrap_idx);
     data.set_row_height(5, 60.0);
 

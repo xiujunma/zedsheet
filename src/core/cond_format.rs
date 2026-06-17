@@ -2,9 +2,9 @@
 //! containment, and 2-color scales. Pure data + matching logic — `DataProxy`
 //! owns the rule list and the renderer asks it for per-cell style overrides.
 
-use serde::{Deserialize, Serialize};
 use crate::core::cell_range::CellRange;
 use crate::core::data_proxy::cmp_cell_values;
+use serde::{Deserialize, Serialize};
 
 /// One conditional-formatting rule. For comparison ops, `v1` (and `v2` for
 /// `between`) hold the comparison operands and `bgcolor`/`color`/`bold` the
@@ -139,11 +139,23 @@ mod tests {
     #[test]
     fn lerp3_blends_through_midpoint() {
         // Endpoints and the exact middle hit the stops.
-        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 0.0).unwrap(), "#000000");
-        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 0.5).unwrap(), "#808080");
-        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 1.0).unwrap(), "#ffffff");
+        assert_eq!(
+            lerp3_hex("#000000", "#808080", "#ffffff", 0.0).unwrap(),
+            "#000000"
+        );
+        assert_eq!(
+            lerp3_hex("#000000", "#808080", "#ffffff", 0.5).unwrap(),
+            "#808080"
+        );
+        assert_eq!(
+            lerp3_hex("#000000", "#808080", "#ffffff", 1.0).unwrap(),
+            "#ffffff"
+        );
         // Quarter point blends within the first segment.
-        assert_eq!(lerp3_hex("#000000", "#808080", "#ffffff", 0.25).unwrap(), "#404040");
+        assert_eq!(
+            lerp3_hex("#000000", "#808080", "#ffffff", 0.25).unwrap(),
+            "#404040"
+        );
     }
 
     #[test]
@@ -158,7 +170,10 @@ mod tests {
         assert!(!rule("between", "10", "20").matches_value("25"));
         assert!(rule("contains", "err", "").matches_value("ERROR log"));
         assert!(!rule("contains", "err", "").matches_value("ok"));
-        assert!(!rule("gt", "150", "").matches_value(""), "blanks never match");
+        assert!(
+            !rule("gt", "150", "").matches_value(""),
+            "blanks never match"
+        );
         assert!(!rule("gt", "150", "").matches_value("  "));
     }
 
@@ -172,10 +187,22 @@ mod tests {
 
     #[test]
     fn lerp_hex_endpoints_and_midpoint() {
-        assert_eq!(lerp_hex("#000000", "#ffffff", 0.0).as_deref(), Some("#000000"));
-        assert_eq!(lerp_hex("#000000", "#ffffff", 1.0).as_deref(), Some("#ffffff"));
-        assert_eq!(lerp_hex("#000000", "#ffffff", 0.5).as_deref(), Some("#808080"));
-        assert_eq!(lerp_hex("#000000", "#ffffff", 7.0).as_deref(), Some("#ffffff")); // clamped
+        assert_eq!(
+            lerp_hex("#000000", "#ffffff", 0.0).as_deref(),
+            Some("#000000")
+        );
+        assert_eq!(
+            lerp_hex("#000000", "#ffffff", 1.0).as_deref(),
+            Some("#ffffff")
+        );
+        assert_eq!(
+            lerp_hex("#000000", "#ffffff", 0.5).as_deref(),
+            Some("#808080")
+        );
+        assert_eq!(
+            lerp_hex("#000000", "#ffffff", 7.0).as_deref(),
+            Some("#ffffff")
+        ); // clamped
         assert_eq!(lerp_hex("nope", "#ffffff", 0.5), None);
     }
 }

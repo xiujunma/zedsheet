@@ -11,9 +11,7 @@ pub struct EventManager {
 impl EventManager {
     #[wasm_bindgen(constructor)]
     pub fn new(canvas: HtmlCanvasElement) -> Self {
-        EventManager {
-            canvas,
-        }
+        EventManager { canvas }
     }
 
     pub fn attach_click_handler(&self, callback: &JsValue) {
@@ -31,7 +29,9 @@ impl EventManager {
             }
         }) as Box<dyn Fn(MouseEvent)>);
 
-        self.canvas.add_event_listener_with_callback("click", closure.as_ref().unchecked_ref()).unwrap();
+        self.canvas
+            .add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())
+            .unwrap();
         closure.forget();
     }
 
@@ -50,7 +50,9 @@ impl EventManager {
             }
         }) as Box<dyn Fn(MouseEvent)>);
 
-        self.canvas.add_event_listener_with_callback("dblclick", closure.as_ref().unchecked_ref()).unwrap();
+        self.canvas
+            .add_event_listener_with_callback("dblclick", closure.as_ref().unchecked_ref())
+            .unwrap();
         closure.forget();
     }
 
@@ -69,7 +71,9 @@ impl EventManager {
             }
         }) as Box<dyn Fn(MouseEvent)>);
 
-        self.canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref()).unwrap();
+        self.canvas
+            .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref())
+            .unwrap();
         closure.forget();
     }
 

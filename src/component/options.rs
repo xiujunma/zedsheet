@@ -1,7 +1,7 @@
 #[derive(Debug, Clone)]
 pub enum Mode {
     Normal,
-    Edit
+    Edit,
 }
 
 #[derive(Debug, Clone)]

@@ -8,9 +8,16 @@ pub enum Token {
     Name(String),
     Range(String),
     /// A sheet-qualified single cell ref like `Sheet2!A1` (issue #4).
-    SheetCellRef { sheet: String, ref_: String },
+    SheetCellRef {
+        sheet: String,
+        ref_: String,
+    },
     /// A sheet-qualified range like `Sheet2!A1:B3` (issue #4).
-    SheetRange { sheet: String, from: String, to: String },
+    SheetRange {
+        sheet: String,
+        from: String,
+        to: String,
+    },
     Operator(String),
     Function(String),
     LeftParen,
@@ -24,7 +31,10 @@ pub enum Token {
     /// `Sales[#Totals]`, `Sales[@Amount]`, or the bare in-table form
     /// `[@Amount]` (empty `table`). `spec` is the raw bracket interior —
     /// the evaluator parses it (`DataProxy::resolve_struct_ref`).
-    StructRef { table: String, spec: String },
+    StructRef {
+        table: String,
+        spec: String,
+    },
 }
 
 pub struct FormulaParser {
@@ -107,9 +117,10 @@ impl FormulaParser {
                     '+' | '-' | '*' | '/' | '=' | '>' | '<' => {
                         let mut op = String::from(c);
                         if let Some(&next) = chars.peek() {
-                            if (c == '=' && next == '=') ||
-                               (c == '>' && (next == '=' || next == '>')) ||
-                               (c == '<' && (next == '=' || next == '<')) {
+                            if (c == '=' && next == '=')
+                                || (c == '>' && (next == '=' || next == '>'))
+                                || (c == '<' && (next == '=' || next == '<'))
+                            {
                                 op.push(chars.next().unwrap());
                             }
                         }
@@ -414,8 +425,7 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             let mut lit = String::from('#');
             i += 1;
             while i < chars.len()
-                && (chars[i].is_ascii_alphanumeric()
-                    || matches!(chars[i], '/' | '?' | '!' | '.'))
+                && (chars[i].is_ascii_alphanumeric() || matches!(chars[i], '/' | '?' | '!' | '.'))
             {
                 lit.push(chars[i]);
                 i += 1;
@@ -449,16 +459,26 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
                 if i < chars.len() && chars[i] == ':' {
                     i += 1; // consume ':'
                     match read_cell_ref(&chars, &mut i) {
-                        Some(end) => tokens.push(Token::SheetRange { sheet, from: first_ref, to: end }),
+                        Some(end) => tokens.push(Token::SheetRange {
+                            sheet,
+                            from: first_ref,
+                            to: end,
+                        }),
                         None => {
                             // No closing ref — treat the whole thing as a
                             // single-cell ref and let the leftover ':' be
                             // picked up as a Colon token.
-                            tokens.push(Token::SheetCellRef { sheet, ref_: first_ref });
+                            tokens.push(Token::SheetCellRef {
+                                sheet,
+                                ref_: first_ref,
+                            });
                         }
                     }
                 } else {
-                    tokens.push(Token::SheetCellRef { sheet, ref_: first_ref });
+                    tokens.push(Token::SheetCellRef {
+                        sheet,
+                        ref_: first_ref,
+                    });
                 }
                 continue;
             }
@@ -501,7 +521,10 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
         // inside a table's own cells (issue #34).
         if c == '[' {
             if let Some(spec) = read_bracket_spec(&chars, &mut i) {
-                tokens.push(Token::StructRef { table: String::new(), spec });
+                tokens.push(Token::StructRef {
+                    table: String::new(),
+                    spec,
+                });
             } else {
                 i += 1;
             }
@@ -509,14 +532,38 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
         }
 
         match c {
-            '+' => { tokens.push(Token::Operator("+".to_string())); i += 1; }
-            '-' => { tokens.push(Token::Operator("-".to_string())); i += 1; }
-            '*' => { tokens.push(Token::Operator("*".to_string())); i += 1; }
-            '/' => { tokens.push(Token::Operator("/".to_string())); i += 1; }
-            '(' => { tokens.push(Token::LeftParen); i += 1; }
-            ')' => { tokens.push(Token::RightParen); i += 1; }
-            ':' => { tokens.push(Token::Colon); i += 1; }
-            ',' => { tokens.push(Token::Comma); i += 1; }
+            '+' => {
+                tokens.push(Token::Operator("+".to_string()));
+                i += 1;
+            }
+            '-' => {
+                tokens.push(Token::Operator("-".to_string()));
+                i += 1;
+            }
+            '*' => {
+                tokens.push(Token::Operator("*".to_string()));
+                i += 1;
+            }
+            '/' => {
+                tokens.push(Token::Operator("/".to_string()));
+                i += 1;
+            }
+            '(' => {
+                tokens.push(Token::LeftParen);
+                i += 1;
+            }
+            ')' => {
+                tokens.push(Token::RightParen);
+                i += 1;
+            }
+            ':' => {
+                tokens.push(Token::Colon);
+                i += 1;
+            }
+            ',' => {
+                tokens.push(Token::Comma);
+                i += 1;
+            }
             // Comparison operators, consuming a trailing '=' for >=/<=/==
             // and the '>' of '<>' (not-equal, issue #2).
             '>' | '<' | '=' => {
@@ -531,7 +578,9 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
                 tokens.push(Token::Operator(op));
                 i += 1;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
 
@@ -566,7 +615,12 @@ mod tests {
         // Inside a function call, names still resolve as names.
         assert_eq!(
             tokenize("SUM(Rev)"),
-            vec![Function("SUM".into()), LeftParen, Name("REV".into()), RightParen]
+            vec![
+                Function("SUM".into()),
+                LeftParen,
+                Name("REV".into()),
+                RightParen
+            ]
         );
         // An identifier followed by '(' is a function, not a name.
         assert!(matches!(tokenize("MAX(1)")[0], Function(_)));
@@ -579,16 +633,25 @@ mod tests {
         use Token::*;
         assert_eq!(
             tokenize("Sheet2!A1"),
-            vec![SheetCellRef { sheet: "SHEET2".into(), ref_: "A1".into() }]
+            vec![SheetCellRef {
+                sheet: "SHEET2".into(),
+                ref_: "A1".into()
+            }]
         );
         assert_eq!(
             tokenize("Sheet2!$A$1"),
-            vec![SheetCellRef { sheet: "SHEET2".into(), ref_: "$A$1".into() }]
+            vec![SheetCellRef {
+                sheet: "SHEET2".into(),
+                ref_: "$A$1".into()
+            }]
         );
         // Mixed-locks across the sheet boundary.
         assert_eq!(
             tokenize("Sheet2!A$1"),
-            vec![SheetCellRef { sheet: "SHEET2".into(), ref_: "A$1".into() }]
+            vec![SheetCellRef {
+                sheet: "SHEET2".into(),
+                ref_: "A$1".into()
+            }]
         );
     }
 
@@ -597,7 +660,11 @@ mod tests {
         use Token::*;
         assert_eq!(
             tokenize("Sheet2!A1:B3"),
-            vec![SheetRange { sheet: "SHEET2".into(), from: "A1".into(), to: "B3".into() }]
+            vec![SheetRange {
+                sheet: "SHEET2".into(),
+                from: "A1".into(),
+                to: "B3".into()
+            }]
         );
     }
 
@@ -607,7 +674,10 @@ mod tests {
         assert_eq!(
             tokenize("Sheet2!A1 + 1"),
             vec![
-                SheetCellRef { sheet: "SHEET2".into(), ref_: "A1".into() },
+                SheetCellRef {
+                    sheet: "SHEET2".into(),
+                    ref_: "A1".into()
+                },
                 Operator("+".into()),
                 Number(1.0),
             ]
@@ -617,7 +687,11 @@ mod tests {
             vec![
                 Function("SUM".into()),
                 LeftParen,
-                SheetRange { sheet: "SHEET2".into(), from: "A1".into(), to: "A3".into() },
+                SheetRange {
+                    sheet: "SHEET2".into(),
+                    from: "A1".into(),
+                    to: "A3".into()
+                },
                 RightParen,
             ]
         );
@@ -645,7 +719,10 @@ mod tests {
             vec![
                 Function("SUM".into()),
                 LeftParen,
-                StructRef { table: "SALES".into(), spec: "Amount".into() },
+                StructRef {
+                    table: "SALES".into(),
+                    spec: "Amount".into()
+                },
                 RightParen,
             ]
         );
@@ -653,7 +730,10 @@ mod tests {
         assert_eq!(
             tokenize("[@Unit Price]*2"),
             vec![
-                StructRef { table: "".into(), spec: "@Unit Price".into() },
+                StructRef {
+                    table: "".into(),
+                    spec: "@Unit Price".into()
+                },
                 Operator("*".into()),
                 Number(2.0),
             ]
@@ -661,7 +741,10 @@ mod tests {
         // Nested combo keeps inner brackets for the evaluator to split.
         assert_eq!(
             tokenize("T1[[#Totals],[Amt]]"),
-            vec![StructRef { table: "T1".into(), spec: "[#Totals],[Amt]".into() }]
+            vec![StructRef {
+                table: "T1".into(),
+                spec: "[#Totals],[Amt]".into()
+            }]
         );
         // Unterminated bracket degrades to names, not a hang.
         assert_eq!(

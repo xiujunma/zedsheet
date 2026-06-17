@@ -1,13 +1,13 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-use gloo::utils::{document, window};
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
-use crate::component::element::Element;
-use crate::config::CSS_PREFIX;
 use super::util::set_canvas_cursor;
 #[allow(unused_imports)]
 use super::*;
+use crate::component::element::Element;
+use crate::config::CSS_PREFIX;
+use gloo::utils::{document, window};
+use std::cell::RefCell;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 pub(crate) fn color_palette_html() -> String {
     let colors = [
@@ -33,7 +33,9 @@ pub(crate) fn wire_tooltip(toolbar: web_sys::Element, tooltip: web_sys::Element)
         let mut tb: Element = toolbar.clone().into();
         tb.add_event_listener("mouseover", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
-            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
             let btn = el
                 .get_attribute("data-tip")
                 .map(|_| el.clone())
@@ -48,7 +50,8 @@ pub(crate) fn wire_tooltip(toolbar: web_sys::Element, tooltip: web_sys::Element)
                     tooltip.set_text_content(Some(&tip));
                     let rect = btn.get_bounding_client_rect();
                     let style = tooltip.unchecked_ref::<web_sys::HtmlElement>().style();
-                    let _ = style.set_property("left", &format!("{}px", rect.left() + rect.width() / 2f64));
+                    let _ = style
+                        .set_property("left", &format!("{}px", rect.left() + rect.width() / 2f64));
                     let _ = style.set_property("top", &format!("{}px", rect.bottom() + 8f64));
                     let _ = style.set_property("display", "block");
                 }
@@ -84,14 +87,18 @@ pub(crate) fn wire_toolbar(
     let sync = sync.clone();
     toolbar_el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         // The click may land on the button or an inner node; walk up for the action.
         let button = el
             .get_attribute("data-action")
             .map(|_| el.clone())
             .or_else(|| el.closest("[data-action]").ok().flatten());
         let Some(button) = button else { return };
-        let Some(action) = button.get_attribute("data-action") else { return };
+        let Some(action) = button.get_attribute("data-action") else {
+            return;
+        };
 
         // Opening any toolbar popup closes the others (issue: x-spreadsheet
         // parity — dropdowns are mutually exclusive).
@@ -166,7 +173,11 @@ pub(crate) fn wire_toolbar(
 
 /// Wire the color palette: clicking a swatch applies the color per the current
 /// mode (text vs fill); clicking elsewhere closes it.
-pub(crate) fn wire_palette(palette: web_sys::Element, renderer: &SharedRenderer, palette_mode: &Rc<RefCell<String>>) {
+pub(crate) fn wire_palette(
+    palette: web_sys::Element,
+    renderer: &SharedRenderer,
+    palette_mode: &Rc<RefCell<String>>,
+) {
     {
         let renderer = renderer.clone();
         let palette_mode = palette_mode.clone();
@@ -174,8 +185,12 @@ pub(crate) fn wire_palette(palette: web_sys::Element, renderer: &SharedRenderer,
         let mut palette_el: Element = palette.clone().into();
         palette_el.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
-            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
-            let Some(color) = el.get_attribute("data-color") else { return };
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
+            let Some(color) = el.get_attribute("data-color") else {
+                return;
+            };
             {
                 let mut r = renderer.borrow_mut();
                 if *palette_mode.borrow() == "bgcolor" {
@@ -285,13 +300,17 @@ pub(crate) fn wire_border_menu(menu: web_sys::Element, renderer: &SharedRenderer
     let mut el: Element = menu.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let item = elx
             .get_attribute("data-border")
             .map(|_| elx.clone())
             .or_else(|| elx.closest("[data-border]").ok().flatten());
         let Some(item) = item else { return };
-        let Some(mode) = item.get_attribute("data-border") else { return };
+        let Some(mode) = item.get_attribute("data-border") else {
+            return;
+        };
         {
             let mut r = renderer.borrow_mut();
             r.set_borders(&mode);
@@ -332,13 +351,17 @@ pub(crate) fn wire_freeze_menu(menu: web_sys::Element, renderer: &SharedRenderer
     let mut el: Element = menu.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let item = elx
             .get_attribute("data-freeze")
             .map(|_| elx.clone())
             .or_else(|| elx.closest("[data-freeze]").ok().flatten());
         let Some(item) = item else { return };
-        let Some(mode) = item.get_attribute("data-freeze") else { return };
+        let Some(mode) = item.get_attribute("data-freeze") else {
+            return;
+        };
         {
             let mut r = renderer.borrow_mut();
             match mode.as_str() {
@@ -384,13 +407,17 @@ pub(crate) fn wire_valign_menu(menu: web_sys::Element, renderer: &SharedRenderer
     let mut el: Element = menu.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let item = elx
             .get_attribute("data-valign")
             .map(|_| elx.clone())
             .or_else(|| elx.closest("[data-valign]").ok().flatten());
         let Some(item) = item else { return };
-        let Some(mode) = item.get_attribute("data-valign") else { return };
+        let Some(mode) = item.get_attribute("data-valign") else {
+            return;
+        };
         {
             let mut r = renderer.borrow_mut();
             r.set_valign(&mode);
@@ -427,13 +454,17 @@ pub(crate) fn wire_halign_menu(menu: web_sys::Element, renderer: &SharedRenderer
     let mut el: Element = menu.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let item = elx
             .get_attribute("data-align")
             .map(|_| elx.clone())
             .or_else(|| elx.closest("[data-align]").ok().flatten());
         let Some(item) = item else { return };
-        let Some(mode) = item.get_attribute("data-align") else { return };
+        let Some(mode) = item.get_attribute("data-align") else {
+            return;
+        };
         {
             let mut r = renderer.borrow_mut();
             r.set_align(&mode);
@@ -446,20 +477,29 @@ pub(crate) fn wire_halign_menu(menu: web_sys::Element, renderer: &SharedRenderer
 
 /// Wire a toolbar dropdown: a row click applies the value, updates the button
 /// title, and closes the menu; an outside click closes it.
-pub(crate) fn wire_dropdown(menu: web_sys::Element, kind: DdKind, title_id: &'static str, renderer: &SharedRenderer) {
+pub(crate) fn wire_dropdown(
+    menu: web_sys::Element,
+    kind: DdKind,
+    title_id: &'static str,
+    renderer: &SharedRenderer,
+) {
     {
         let renderer = renderer.clone();
         let menu_for_hide = menu.clone();
         let mut menu_el: Element = menu.clone().into();
         menu_el.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
-            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
             let item = el
                 .get_attribute("data-ddval")
                 .map(|_| el.clone())
                 .or_else(|| el.closest("[data-ddval]").ok().flatten());
             let Some(item) = item else { return };
-            let Some(mut val) = item.get_attribute("data-ddval") else { return };
+            let Some(mut val) = item.get_attribute("data-ddval") else {
+                return;
+            };
 
             // "Custom…" in the format dropdown prompts for a format string.
             let mut title_text = item.text_content();
@@ -525,4 +565,3 @@ pub(crate) fn wire_dropdown(menu: web_sys::Element, kind: DdKind, title_id: &'st
         cb.forget();
     }
 }
-

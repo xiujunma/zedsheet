@@ -1,12 +1,12 @@
+#[allow(unused_imports)]
+use super::*;
+use crate::component::element::Element;
+use gloo::utils::window;
 use std::cell::RefCell;
 use std::rc::Rc;
-use gloo::utils::window;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlInputElement, KeyboardEvent};
-use crate::component::element::Element;
-#[allow(unused_imports)]
-use super::*;
 
 pub(crate) fn find_panel_html() -> String {
     "<div style=\"display:flex;align-items:center;gap:4px;margin-bottom:6px;\">\
@@ -98,14 +98,22 @@ pub(crate) fn wire_find(panel: web_sys::Element, renderer: &SharedRenderer, sync
     // Find input: recompute on each keystroke; Enter advances.
     {
         let refresh = refresh.clone();
-        let mut el: Element = find_input.clone().dyn_into::<web_sys::Element>().unwrap().into();
+        let mut el: Element = find_input
+            .clone()
+            .dyn_into::<web_sys::Element>()
+            .unwrap()
+            .into();
         el.add_event_listener("input", move |_e: web_sys::Event| refresh());
     }
     {
         let idx = idx.clone();
         let matches = matches.clone();
         let reveal_current = reveal_current.clone();
-        let mut el: Element = find_input.clone().dyn_into::<web_sys::Element>().unwrap().into();
+        let mut el: Element = find_input
+            .clone()
+            .dyn_into::<web_sys::Element>()
+            .unwrap()
+            .into();
         el.add_event_listener("keydown", move |e: web_sys::Event| {
             let ke: KeyboardEvent = e.dyn_into().unwrap();
             if ke.key() == "Enter" {
@@ -151,7 +159,11 @@ pub(crate) fn wire_find(panel: web_sys::Element, renderer: &SharedRenderer, sync
             el.add_event_listener("click", move |_e: web_sys::Event| {
                 let cur = {
                     let m = matches.borrow();
-                    if m.is_empty() { None } else { Some(m[*idx.borrow()]) }
+                    if m.is_empty() {
+                        None
+                    } else {
+                        Some(m[*idx.borrow()])
+                    }
                 };
                 if let Some((ri, ci)) = cur {
                     {
@@ -196,7 +208,10 @@ pub(crate) fn wire_find(panel: web_sys::Element, renderer: &SharedRenderer, sync
         if let Some(btn) = qsel(".zs-find-close") {
             let mut el: Element = btn.into();
             el.add_event_listener("click", move |_e: web_sys::Event| {
-                let _ = panel_for_close.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = panel_for_close
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
             });
         }
     }
@@ -206,7 +221,10 @@ pub(crate) fn wire_find(panel: web_sys::Element, renderer: &SharedRenderer, sync
         el.add_event_listener("keydown", move |e: web_sys::Event| {
             let ke: KeyboardEvent = e.dyn_into().unwrap();
             if ke.key() == "Escape" {
-                let _ = panel_for_esc.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = panel_for_esc
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
             }
         });
     }
@@ -219,7 +237,10 @@ pub(crate) fn wire_find(panel: web_sys::Element, renderer: &SharedRenderer, sync
             let ke: KeyboardEvent = event.dyn_into().unwrap();
             if (ke.ctrl_key() || ke.meta_key()) && ke.key().to_lowercase() == "f" {
                 ke.prevent_default();
-                let _ = panel.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "block");
+                let _ = panel
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "block");
                 let _ = find_input.focus();
                 find_input.select();
             }

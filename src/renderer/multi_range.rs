@@ -78,10 +78,18 @@ impl MultiRangeState {
         let mut r1 = 0usize;
         let mut c1 = 0usize;
         for r in &self.ranges {
-            if r.sri < r0 { r0 = r.sri; }
-            if r.sci < c0 { c0 = r.sci; }
-            if r.eri > r1 { r1 = r.eri; }
-            if r.eci > c1 { c1 = r.eci; }
+            if r.sri < r0 {
+                r0 = r.sri;
+            }
+            if r.sci < c0 {
+                c0 = r.sci;
+            }
+            if r.eri > r1 {
+                r1 = r.eri;
+            }
+            if r.eci > c1 {
+                c1 = r.eci;
+            }
         }
         Some((r0, c0, r1, c1))
     }
@@ -277,7 +285,10 @@ mod tests {
         // And the gap (2,2)..(4,4) untouched.
         for ri in 2..=4 {
             for ci in 2..=4 {
-                assert!(!d.get_cell_style(ri, ci).bold, "({ri},{ci}) must be untouched");
+                assert!(
+                    !d.get_cell_style(ri, ci).bold,
+                    "({ri},{ci}) must be untouched"
+                );
             }
         }
     }
@@ -353,7 +364,11 @@ mod tests {
         s.extend_last(7, 7);
         let after = s.normalized();
         assert_eq!(before[0], after[0], "first range must not move");
-        assert_eq!(after[1], (3, 3, 7, 7), "last range grew from (3,3,3,3) to (3,3,7,7)");
+        assert_eq!(
+            after[1],
+            (3, 3, 7, 7),
+            "last range grew from (3,3,3,3) to (3,3,7,7)"
+        );
     }
 
     #[test]

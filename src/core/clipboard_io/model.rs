@@ -55,16 +55,34 @@ mod tests {
 
     #[test]
     fn parsed_cell_constructors() {
-        assert_eq!(ParsedCell::text("a"), ParsedCell { text: "a".into(), row_span: 1, col_span: 1 });
+        assert_eq!(
+            ParsedCell::text("a"),
+            ParsedCell {
+                text: "a".into(),
+                row_span: 1,
+                col_span: 1
+            }
+        );
         assert_eq!(ParsedCell::empty().text, "");
         assert!(!ParsedCell::text("a").is_merged());
-        assert!(ParsedCell { text: "a".into(), row_span: 2, col_span: 1 }.is_merged());
+        assert!(ParsedCell {
+            text: "a".into(),
+            row_span: 2,
+            col_span: 1
+        }
+        .is_merged());
     }
 
     #[test]
     fn empty_grid_detection() {
         assert!(ParsedGrid::default().is_empty());
-        assert!(ParsedGrid { cells: vec![vec![]] }.is_empty());
-        assert!(!ParsedGrid { cells: vec![vec![ParsedCell::text("x")]] }.is_empty());
+        assert!(ParsedGrid {
+            cells: vec![vec![]]
+        }
+        .is_empty());
+        assert!(!ParsedGrid {
+            cells: vec![vec![ParsedCell::text("x")]]
+        }
+        .is_empty());
     }
 }

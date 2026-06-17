@@ -2,13 +2,13 @@
 //! ones (bar / line / pie) bound to a data range and anchored at a cell.
 //! Mirrors the conditional-formatting dialog (issue #11).
 
-use wasm_bindgen::JsCast;
-use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
+#[allow(unused_imports)]
+use super::*;
 use crate::component::element::Element;
 use crate::core::chart::Chart;
 use crate::renderer::alphabets::xy2expr;
-#[allow(unused_imports)]
-use super::*;
+use wasm_bindgen::JsCast;
+use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -63,7 +63,9 @@ pub(crate) fn chart_modal_html() -> String {
 
 /// Re-render the existing-charts list inside the dialog.
 fn render_chart_list(modal: &web_sys::Element, renderer: &SharedRenderer) {
-    let Ok(Some(list)) = modal.query_selector(".zs-chart-list") else { return };
+    let Ok(Some(list)) = modal.query_selector(".zs-chart-list") else {
+        return;
+    };
     let charts: Vec<Chart> = renderer.borrow().data.charts.clone();
     if charts.is_empty() {
         list.set_inner_html("<div style=\"color:#999;padding:2px 0;\">No charts yet.</div>");
@@ -71,7 +73,11 @@ fn render_chart_list(modal: &web_sys::Element, renderer: &SharedRenderer) {
     }
     let mut html = String::new();
     for (i, ch) in charts.iter().enumerate() {
-        let title = if ch.title.is_empty() { "(untitled)" } else { &ch.title };
+        let title = if ch.title.is_empty() {
+            "(untitled)"
+        } else {
+            &ch.title
+        };
         html.push_str(&format!(
             "<div style=\"display:flex;align-items:center;gap:8px;padding:3px 0;\">\
                <span style=\"flex:1;\">{} · {} · {} @ {}</span>\
@@ -118,7 +124,9 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
     let mut el: Element = modal.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let val = |sel: &str| -> String {
             modal_node
                 .query_selector(sel)
@@ -129,7 +137,12 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 .unwrap_or_default()
         };
 
-        if elx.closest(".zs-chart-close, .zs-chart-done").ok().flatten().is_some() {
+        if elx
+            .closest(".zs-chart-close, .zs-chart-done")
+            .ok()
+            .flatten()
+            .is_some()
+        {
             let _ = modal_node
                 .unchecked_ref::<HtmlElement>()
                 .style()
@@ -138,7 +151,10 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
         }
 
         if let Some(del) = elx.closest("[data-chartdel]").ok().flatten() {
-            if let Some(idx) = del.get_attribute("data-chartdel").and_then(|v| v.parse().ok()) {
+            if let Some(idx) = del
+                .get_attribute("data-chartdel")
+                .and_then(|v| v.parse().ok())
+            {
                 {
                     let mut r = renderer.borrow_mut();
                     r.remove_chart(idx);
@@ -169,8 +185,7 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
             // Reject inputs that could never draw, so the dialog gives
             // immediate feedback.
             let range_ok = crate::core::cell_range::CellRange::from_str(&chart.range).is_ok();
-            let anchor_ok =
-                crate::formula::parser::looks_like_cell_ref(&chart.anchor);
+            let anchor_ok = crate::formula::parser::looks_like_cell_ref(&chart.anchor);
             if !range_ok || !anchor_ok {
                 if let Some(w) = web_sys::window() {
                     let _ = w.alert_with_message(

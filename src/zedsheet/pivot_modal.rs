@@ -16,13 +16,13 @@ use std::cell::RefCell;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 
-use crate::component::element::Element;
-use crate::core::data_proxy::SheetsRegistry;
-use crate::core::cell_range::CellRange;
-use crate::core::pivot::{Agg, PivotTable};
-use crate::renderer::alphabets::xy2expr;
 #[allow(unused_imports)]
 use super::*;
+use crate::component::element::Element;
+use crate::core::cell_range::CellRange;
+use crate::core::data_proxy::SheetsRegistry;
+use crate::core::pivot::{Agg, PivotTable};
+use crate::renderer::alphabets::xy2expr;
 
 /// Mutable state for the modal: tracks the current target zone and which
 /// field indexes are in each zone. Persisted across re-renders of the
@@ -134,13 +134,13 @@ pub(crate) fn pivot_modal_html() -> String {
 
 /// Re-render the available-fields list and the three zones from `state`.
 /// `headers` is the source range's first row (column labels).
-fn render_chips(
-    modal: &web_sys::Element,
-    state: &PivotState,
-    headers: &[String],
-) {
-    let Ok(Some(avail)) = modal.query_selector(".zs-pivot-available") else { return };
-    let Ok(Some(zones)) = modal.query_selector(".zs-pivot-zones") else { return };
+fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]) {
+    let Ok(Some(avail)) = modal.query_selector(".zs-pivot-available") else {
+        return;
+    };
+    let Ok(Some(zones)) = modal.query_selector(".zs-pivot-zones") else {
+        return;
+    };
 
     // Highlight the active target zone button.
     if let Ok(btns) = modal.query_selector_all(".zs-pivot-zone") {
@@ -156,10 +156,10 @@ fn render_chips(
                             | ("filters", Zone::Filters) => true,
                             _ => false,
                         };
-                        let _ = bel.unchecked_ref::<HtmlElement>().style().set_property(
-                            "background",
-                            if active { "#e8eef7" } else { "" },
-                        );
+                        let _ = bel
+                            .unchecked_ref::<HtmlElement>()
+                            .style()
+                            .set_property("background", if active { "#e8eef7" } else { "" });
                     }
                 }
             }
@@ -168,7 +168,12 @@ fn render_chips(
 
     // Available: any field not currently in a zone.
     let mut used = vec![false; headers.len()];
-    for &ci in state.rows.iter().chain(state.cols.iter()).chain(state.filters.iter()) {
+    for &ci in state
+        .rows
+        .iter()
+        .chain(state.cols.iter())
+        .chain(state.filters.iter())
+    {
         if ci < used.len() {
             used[ci] = true;
         }
@@ -197,15 +202,15 @@ fn render_chips(
         ));
     }
     if !any {
-        html.push_str(
-            "<span style=\"color:#999;font-size:11px;\">All fields placed</span>",
-        );
+        html.push_str("<span style=\"color:#999;font-size:11px;\">All fields placed</span>");
     }
     avail.set_inner_html(&html);
 
     // Zones
     let mut zh = String::new();
-    zh.push_str(&format!("<div style=\"margin-bottom:4px;color:#999;font-size:11px;\">Rows</div>"));
+    zh.push_str(&format!(
+        "<div style=\"margin-bottom:4px;color:#999;font-size:11px;\">Rows</div>"
+    ));
     if state.rows.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;margin-bottom:8px;\">(empty)</div>");
     } else {
@@ -213,7 +218,9 @@ fn render_chips(
             zh.push_str(&chip_in_zone(ci, "rows", &headers[ci]));
         }
     }
-    zh.push_str(&format!("<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Columns</div>"));
+    zh.push_str(&format!(
+        "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Columns</div>"
+    ));
     if state.cols.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;margin-bottom:8px;\">(empty)</div>");
     } else {
@@ -224,7 +231,9 @@ fn render_chips(
     // Values zone (issue #59): one chip per value field, each with its
     // own agg `<select>` and a `data-value-index` so the agg-change and
     // remove handlers can target the right entry.
-    zh.push_str(&format!("<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Values</div>"));
+    zh.push_str(&format!(
+        "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Values</div>"
+    ));
     if state.values.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;\">(empty)</div>");
     } else {
@@ -268,9 +277,7 @@ fn render_chips(
         "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Filters</div>"
     ));
     if state.filters.is_empty() {
-        zh.push_str(
-            "<div style=\"color:#bbb;font-size:11px;margin-bottom:4px;\">(empty)</div>",
-        );
+        zh.push_str("<div style=\"color:#bbb;font-size:11px;margin-bottom:4px;\">(empty)</div>");
     } else {
         for &ci in &state.filters {
             zh.push_str(&chip_in_zone(ci, "filters", &headers[ci]));
@@ -289,12 +296,20 @@ fn chip_in_zone(ci: usize, zone: &str, header: &str) -> String {
           <span class=\"zs-pivot-remove\" data-field=\"{}\" data-zone=\"{}\" \
             style=\"cursor:pointer;color:#999;font-weight:bold;\">×</span>\
         </span>",
-        ci, zone, esc(header), ci, zone,
+        ci,
+        zone,
+        esc(header),
+        ci,
+        zone,
     )
 }
 
 fn sel(actual: Agg, want: Agg) -> &'static str {
-    if actual == want { " selected" } else { "" }
+    if actual == want {
+        " selected"
+    } else {
+        ""
+    }
 }
 
 /// Prefill range from the live selection, default output name to "Pivot1"
@@ -348,16 +363,17 @@ thread_local! {
 
 /// Read the first row of the source range and return the column headers
 /// (one per column). Used to label the available-field chips.
-fn read_source_headers(data: &crate::core::data_proxy::DataProxy, _state: &PivotState) -> Vec<String> {
+fn read_source_headers(
+    data: &crate::core::data_proxy::DataProxy,
+    _state: &PivotState,
+) -> Vec<String> {
     // Best-effort: parse the source range from the input. If parsing fails
     // we return a single-column placeholder so the chips render (the user
     // will see no real labels until they fix the range).
     let range_str = || -> Option<String> {
         web_sys::window()
             .and_then(|w| w.document())
-            .and_then(|d| {
-                d.query_selector(".zs-pivot-range").ok().flatten()
-            })
+            .and_then(|d| d.query_selector(".zs-pivot-range").ok().flatten())
             .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
             .map(|i| i.value())
     };
@@ -410,10 +426,17 @@ pub(crate) fn wire_pivot_modal(
     let mut el: Element = modal.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
 
         // Close / Cancel
-        if elx.closest(".zs-pivot-close, .zs-pivot-cancel").ok().flatten().is_some() {
+        if elx
+            .closest(".zs-pivot-close, .zs-pivot-cancel")
+            .ok()
+            .flatten()
+            .is_some()
+        {
             let _ = modal_for_click
                 .unchecked_ref::<HtmlElement>()
                 .style()
@@ -492,10 +515,14 @@ pub(crate) fn wire_pivot_modal(
                         st.values.retain(|&(v, _)| v != ci);
                         match target {
                             Zone::Rows => {
-                                if !st.rows.contains(&ci) { st.rows.push(ci); }
+                                if !st.rows.contains(&ci) {
+                                    st.rows.push(ci);
+                                }
                             }
                             Zone::Columns => {
-                                if !st.cols.contains(&ci) { st.cols.push(ci); }
+                                if !st.cols.contains(&ci) {
+                                    st.cols.push(ci);
+                                }
                             }
                             Zone::Values => {
                                 // Multi-value (issue #59): append another
@@ -512,7 +539,9 @@ pub(crate) fn wire_pivot_modal(
                             // default to "All" (empty engine-level list)
                             // — they aren't editable in v1.
                             Zone::Filters => {
-                                if !st.filters.contains(&ci) { st.filters.push(ci); }
+                                if !st.filters.contains(&ci) {
+                                    st.filters.push(ci);
+                                }
                             }
                         }
                     });
@@ -535,14 +564,20 @@ pub(crate) fn wire_pivot_modal(
     el2.add_event_listener("change", move |event: web_sys::Event| {
         let _ = modal_for_agg; // captured
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
-        if elx.closest(".zs-pivot-agg").ok().flatten().is_none() { return; }
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
+        if elx.closest(".zs-pivot-agg").ok().flatten().is_none() {
+            return;
+        }
         // Read the value-index attribute before we consume `elx` via
         // `dyn_into` (issue #59). Both reads target the same element —
         // `elx.clone()` keeps the original semantics of "use the
         // element-typed reference for closest lookups".
         let vi_str = elx.get_attribute("data-value-index");
-        let Ok(sel) = elx.dyn_into::<HtmlSelectElement>() else { return };
+        let Ok(sel) = elx.dyn_into::<HtmlSelectElement>() else {
+            return;
+        };
         let agg = match sel.value().as_str() {
             "count" => Agg::Count,
             "avg" => Agg::Avg,
@@ -585,11 +620,17 @@ pub(crate) fn wire_pivot_modal(
         let mut el4: Element = Element::from(modal_node.clone());
         el4.add_event_listener("dragstart", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
-            let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+            let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
             // The dragstart fires on the chip span (or its inner label);
             // climb to the closest chip.
-            let Some(chip) = elx.closest(".zs-pivot-chip").ok().flatten() else { return };
-            let Some(field_str) = chip.get_attribute("data-field") else { return };
+            let Some(chip) = elx.closest(".zs-pivot-chip").ok().flatten() else {
+                return;
+            };
+            let Some(field_str) = chip.get_attribute("data-field") else {
+                return;
+            };
             let de: web_sys::DataTransfer = event.unchecked_into();
             let _ = de.set_data("text/plain", &field_str);
         });
@@ -601,11 +642,15 @@ pub(crate) fn wire_pivot_modal(
         el4.add_event_listener("drop", move |event: web_sys::Event| {
             event.prevent_default();
             let Some(target) = event.target() else { return };
-            let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+            let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
             // The drop's dataTransfer carries the field_idx string.
             let de: web_sys::DataTransfer = event.unchecked_into();
             let field_str = de.get_data("text/plain").unwrap_or_default();
-            let Ok(ci) = field_str.parse::<usize>() else { return };
+            let Ok(ci) = field_str.parse::<usize>() else {
+                return;
+            };
             // The actual drop target — chip moved here. Find which
             // container the drop landed in.
             let in_available = elx.closest(".zs-pivot-available").ok().flatten().is_some();
@@ -625,16 +670,22 @@ pub(crate) fn wire_pivot_modal(
                     let target = st.target_zone;
                     match target {
                         Zone::Rows => {
-                            if !st.rows.contains(&ci) { st.rows.push(ci); }
+                            if !st.rows.contains(&ci) {
+                                st.rows.push(ci);
+                            }
                         }
                         Zone::Columns => {
-                            if !st.cols.contains(&ci) { st.cols.push(ci); }
+                            if !st.cols.contains(&ci) {
+                                st.cols.push(ci);
+                            }
                         }
                         Zone::Values => {
                             st.values.push((ci, Agg::Sum));
                         }
                         Zone::Filters => {
-                            if !st.filters.contains(&ci) { st.filters.push(ci); }
+                            if !st.filters.contains(&ci) {
+                                st.filters.push(ci);
+                            }
                         }
                     }
                 }

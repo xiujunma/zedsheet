@@ -215,7 +215,14 @@ mod tests {
             vec![RawCell::new("a", 1, 1), RawCell::new("b", 1, 1)],
         ];
         let g = grid_from_rows(&rows);
-        assert_eq!(g.cells[0][0], ParsedCell { text: "wide".into(), row_span: 1, col_span: 2 });
+        assert_eq!(
+            g.cells[0][0],
+            ParsedCell {
+                text: "wide".into(),
+                row_span: 1,
+                col_span: 2
+            }
+        );
         assert_eq!(g.cells[0][1], ParsedCell::empty());
         assert_eq!(texts(&g)[1], vec!["a", "b"]);
     }
@@ -229,7 +236,14 @@ mod tests {
             vec![RawCell::new("C", 1, 1)],
         ];
         let g = grid_from_rows(&rows);
-        assert_eq!(g.cells[0][0], ParsedCell { text: "A".into(), row_span: 2, col_span: 1 });
+        assert_eq!(
+            g.cells[0][0],
+            ParsedCell {
+                text: "A".into(),
+                row_span: 2,
+                col_span: 1
+            }
+        );
         assert_eq!(g.cells[0][1].text, "B");
         assert_eq!(g.cells[1][0], ParsedCell::empty(), "covered by A's rowspan");
         assert_eq!(g.cells[1][1].text, "C");
@@ -244,7 +258,10 @@ mod tests {
 
     #[test]
     fn nonce_extraction() {
-        assert_eq!(nonce_in_html("<table data-zedsheet-nonce=\"99\"><tr></tr></table>"), Some(99));
+        assert_eq!(
+            nonce_in_html("<table data-zedsheet-nonce=\"99\"><tr></tr></table>"),
+            Some(99)
+        );
         assert_eq!(nonce_in_html("<table><tr><td>x</td></tr></table>"), None);
         assert_eq!(nonce_in_html("data-zedsheet-nonce=\"notnum\""), None);
     }

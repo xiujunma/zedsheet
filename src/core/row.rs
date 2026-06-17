@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use super::cell::Cell;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
@@ -49,7 +49,11 @@ impl Row {
     }
 
     pub fn get_height(&self) -> f64 {
-        if self.hide { 0.0 } else { self.height }
+        if self.hide {
+            0.0
+        } else {
+            self.height
+        }
     }
 
     pub fn set_height(&mut self, height: f64) {

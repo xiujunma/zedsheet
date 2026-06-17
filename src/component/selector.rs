@@ -1,11 +1,11 @@
-use crate::component::element::{Element, h};
+use crate::component::element::{h, Element};
 
 #[derive(Debug, Clone)]
 pub struct SelectorState {
-    pub ri: usize,  // row index
-    pub ci: usize,  // col index
-    pub eri: usize, // end row index
-    pub eci: usize, // end col index
+    pub ri: usize,      // row index
+    pub ci: usize,      // col index
+    pub eri: usize,     // end row index
+    pub eci: usize,     // end col index
     pub move_ri: usize, // move start row
     pub move_ci: usize, // move start col
     pub mouse_down: bool,
@@ -136,7 +136,16 @@ impl Editor {
         self.container = Some(container);
     }
 
-    pub fn start_edit(&mut self, ri: usize, ci: usize, text: &str, x: f64, y: f64, width: f64, height: f64) {
+    pub fn start_edit(
+        &mut self,
+        ri: usize,
+        ci: usize,
+        text: &str,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) {
         self.state.ri = ri;
         self.state.ci = ci;
         self.state.text = text.to_string();
@@ -244,7 +253,11 @@ pub struct Scrollbar {
 
 impl Scrollbar {
     pub fn new(vertical: bool) -> Self {
-        let class = if vertical { "x-scrollbar-v" } else { "x-scrollbar-h" };
+        let class = if vertical {
+            "x-scrollbar-v"
+        } else {
+            "x-scrollbar-h"
+        };
         let element = h("div", Some(class));
 
         Scrollbar {
@@ -254,7 +267,15 @@ impl Scrollbar {
         }
     }
 
-    pub fn set_params(&mut self, x: f64, y: f64, width: f64, height: f64, content_width: f64, content_height: f64) {
+    pub fn set_params(
+        &mut self,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        content_width: f64,
+        content_height: f64,
+    ) {
         self.state.x = x;
         self.state.y = y;
         self.state.width = width;

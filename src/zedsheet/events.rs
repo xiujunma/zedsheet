@@ -1,13 +1,13 @@
+#[allow(unused_imports)]
+use super::*;
+use crate::component::element::Element;
+use crate::renderer::table_renderer::{DragKind, PasteMode};
+use gloo::utils::{document, window};
 use std::cell::RefCell;
 use std::rc::Rc;
-use gloo::utils::{document, window};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlTextAreaElement, KeyboardEvent, MouseEvent, WheelEvent};
-use crate::component::element::Element;
-use crate::renderer::table_renderer::{DragKind, PasteMode};
-#[allow(unused_imports)]
-use super::*;
 
 pub(crate) fn wire_events(
     canvas_el: &mut Element,
@@ -86,14 +86,24 @@ pub(crate) fn wire_events(
                     DragKind::RowResize(ri) => renderer.borrow().row_height_at(ri),
                     _ => 0f64,
                 };
-                *drag.borrow_mut() = Some(DragState { kind, start_x: x, start_y: y, start_size });
+                *drag.borrow_mut() = Some(DragState {
+                    kind,
+                    start_x: x,
+                    start_y: y,
+                    start_size,
+                });
                 return;
             }
 
             // Scrollbar track → start a scroll drag and jump immediately.
             let sb = renderer.borrow().scrollbar_target(x, y);
             if let Some(kind) = sb {
-                *drag.borrow_mut() = Some(DragState { kind, start_x: x, start_y: y, start_size: 0f64 });
+                *drag.borrow_mut() = Some(DragState {
+                    kind,
+                    start_x: x,
+                    start_y: y,
+                    start_size: 0f64,
+                });
                 apply_scroll_drag(&renderer, kind, x, y);
                 return;
             }
@@ -101,8 +111,12 @@ pub(crate) fn wire_events(
             // Fill handle → start a fill drag from the current selection.
             if renderer.borrow().is_on_fill_handle(x, y) {
                 renderer.borrow_mut().start_fill();
-                *drag.borrow_mut() =
-                    Some(DragState { kind: DragKind::Fill, start_x: x, start_y: y, start_size: 0f64 });
+                *drag.borrow_mut() = Some(DragState {
+                    kind: DragKind::Fill,
+                    start_x: x,
+                    start_y: y,
+                    start_size: 0f64,
+                });
                 return;
             }
 
@@ -120,7 +134,9 @@ pub(crate) fn wire_events(
                     show_filter_menu(
                         menu_for_open.as_ref(),
                         &renderer_for_open,
-                        f_ci, x, y,
+                        f_ci,
+                        x,
+                        y,
                         &visible_for_open,
                     );
                 });
@@ -183,7 +199,10 @@ pub(crate) fn wire_events(
                     show_list_popover(
                         popover_for_open.as_ref(),
                         &renderer_for_open,
-                        origin_ri, origin_ci, x, y,
+                        origin_ri,
+                        origin_ci,
+                        x,
+                        y,
                         &visible_for_open,
                     );
                 });
@@ -334,7 +353,14 @@ pub(crate) fn wire_events(
             if let Some((ri, ci)) = hit {
                 // Edit the merge origin when the cell is part of a merge.
                 let (ri, ci) = renderer.borrow().merge_origin(ri, ci);
-                start_edit(&renderer, &textarea, editor_error.as_ref(), &editing, ri, ci);
+                start_edit(
+                    &renderer,
+                    &textarea,
+                    editor_error.as_ref(),
+                    &editing,
+                    ri,
+                    ci,
+                );
             }
         });
     }
@@ -374,8 +400,20 @@ pub(crate) fn wire_events(
             }
             let dy = we.delta_y();
             let dx = we.delta_x();
-            let d_rows = if dy > 0.0 { 1 } else if dy < 0.0 { -1 } else { 0 };
-            let d_cols = if dx > 0.0 { 1 } else if dx < 0.0 { -1 } else { 0 };
+            let d_rows = if dy > 0.0 {
+                1
+            } else if dy < 0.0 {
+                -1
+            } else {
+                0
+            };
+            let d_cols = if dx > 0.0 {
+                1
+            } else if dx < 0.0 {
+                -1
+            } else {
+                0
+            };
             if d_rows != 0 || d_cols != 0 {
                 let mut r = renderer.borrow_mut();
                 r.scroll_by(d_rows, d_cols);
@@ -506,7 +544,14 @@ pub(crate) fn wire_events(
                         let s = r.get_selector();
                         (s.ri, s.ci)
                     };
-                    start_edit(&renderer, &textarea, editor_error.as_ref(), &editing, ri, ci);
+                    start_edit(
+                        &renderer,
+                        &textarea,
+                        editor_error.as_ref(),
+                        &editing,
+                        ri,
+                        ci,
+                    );
                     ke.prevent_default();
                     return;
                 }
@@ -542,7 +587,9 @@ pub(crate) fn wire_events(
                     // Issue #9: on validation failure, keep the editor open
                     // and skip the selection move so the user can fix the
                     // value in place.
-                    if commit_edit(&renderer, &textarea_inner, editor_error.as_ref(), &editing).is_ok() {
+                    if commit_edit(&renderer, &textarea_inner, editor_error.as_ref(), &editing)
+                        .is_ok()
+                    {
                         let mut r = renderer.borrow_mut();
                         r.move_selection(1, 0);
                         r.render();
@@ -552,7 +599,9 @@ pub(crate) fn wire_events(
                 "Tab" => {
                     ke.prevent_default();
                     ke.stop_propagation();
-                    if commit_edit(&renderer, &textarea_inner, editor_error.as_ref(), &editing).is_ok() {
+                    if commit_edit(&renderer, &textarea_inner, editor_error.as_ref(), &editing)
+                        .is_ok()
+                    {
                         let mut r = renderer.borrow_mut();
                         r.move_selection(0, 1);
                         r.render();

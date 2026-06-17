@@ -28,11 +28,13 @@ pub fn to_xlsx(sheets: &[DataProxy]) -> Result<Vec<u8>, String> {
                 }
                 let (row, col) = (r as u32, c as u16);
                 if let Some(expr) = text.strip_prefix('=') {
-                    ws.write_formula(row, col, expr).map_err(|e| e.to_string())?;
+                    ws.write_formula(row, col, expr)
+                        .map_err(|e| e.to_string())?;
                 } else if let Ok(n) = text.trim().parse::<f64>() {
                     ws.write_number(row, col, n).map_err(|e| e.to_string())?;
                 } else {
-                    ws.write_string(row, col, &text).map_err(|e| e.to_string())?;
+                    ws.write_string(row, col, &text)
+                        .map_err(|e| e.to_string())?;
                 }
             }
         }

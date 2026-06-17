@@ -1,14 +1,14 @@
-use std::rc::Rc;
-use gloo::utils::window;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::JsCast;
-use web_sys::{HtmlElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent};
-use crate::component::element::Element;
-use crate::config::CSS_PREFIX;
-use std::cell::RefCell;
 use super::autocomplete;
 #[allow(unused_imports)]
 use super::*;
+use crate::component::element::Element;
+use crate::config::CSS_PREFIX;
+use gloo::utils::window;
+use std::cell::RefCell;
+use std::rc::Rc;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
+use web_sys::{HtmlElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent};
 
 pub(crate) fn formula_bar_html() -> String {
     "<input class=\"zs-name-box\" style=\"width:80px;height:100%;box-sizing:border-box;border:none;border-right:1px solid #e0e2e4;padding:0 6px;outline:none;font-size:13px;\" />\
@@ -123,14 +123,18 @@ fn ac_visible(popover: &HtmlElement) -> bool {
 /// commit the cell.
 fn wire_autocomplete(input: &HtmlInputElement) {
     let doc = gloo::utils::document();
-    let Ok(popover) = doc.create_element("div") else { return };
+    let Ok(popover) = doc.create_element("div") else {
+        return;
+    };
     let _ = popover.set_attribute(
         "style",
         "display:none;position:fixed;z-index:1200;background:#fff;\
          border:1px solid #ccc;box-shadow:1px 2px 6px rgba(0,0,0,0.15);\
          max-height:240px;overflow-y:auto;font-size:13px;min-width:160px;",
     );
-    let Ok(pop): Result<HtmlElement, _> = popover.clone().dyn_into() else { return };
+    let Ok(pop): Result<HtmlElement, _> = popover.clone().dyn_into() else {
+        return;
+    };
     if let Some(body) = doc.body() {
         let _ = body.append_child(&popover);
     }
@@ -167,12 +171,20 @@ fn wire_autocomplete(input: &HtmlInputElement) {
             let n = m.len();
             match ke.key().as_str() {
                 "ArrowDown" if n > 0 => {
-                    let next = { let mut i = index.borrow_mut(); *i = (*i + 1) % n; *i };
+                    let next = {
+                        let mut i = index.borrow_mut();
+                        *i = (*i + 1) % n;
+                        *i
+                    };
                     ke.prevent_default();
                     ac_refresh(&inp, &pop, next);
                 }
                 "ArrowUp" if n > 0 => {
-                    let next = { let mut i = index.borrow_mut(); *i = (*i + n - 1) % n; *i };
+                    let next = {
+                        let mut i = index.borrow_mut();
+                        *i = (*i + n - 1) % n;
+                        *i
+                    };
                     ke.prevent_default();
                     ac_refresh(&inp, &pop, next);
                 }
@@ -203,7 +215,9 @@ fn wire_autocomplete(input: &HtmlInputElement) {
         el.add_event_listener("mousedown", move |event: web_sys::Event| {
             event.prevent_default();
             let Some(target) = event.target() else { return };
-            let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+            let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
             if let Ok(Some(item)) = elx.closest("[data-ac-name]") {
                 if let Some(name) = item.get_attribute("data-ac-name") {
                     ac_accept(&inp, &name);
@@ -257,7 +271,10 @@ pub(crate) fn wire_formula_bar(
     // run under a still-open editor — leaving it floating over a moved
     // selection with two competing values. On validation failure, focus is
     // sent straight back to the invalid editor (issue #9 keeps it open).
-    for input in [name_box.clone(), formula_input.clone()].into_iter().flatten() {
+    for input in [name_box.clone(), formula_input.clone()]
+        .into_iter()
+        .flatten()
+    {
         let renderer = renderer.clone();
         let textarea = textarea.clone();
         let editing = editing.clone();
@@ -277,7 +294,8 @@ pub(crate) fn wire_formula_bar(
     }
 
     // fx picker: click fx to open the menu, click a function to insert it.
-    if let (Some(fx_span), Some(menu), Some(fi)) = (fx_span, fx_menu.clone(), formula_input.clone()) {
+    if let (Some(fx_span), Some(menu), Some(fi)) = (fx_span, fx_menu.clone(), formula_input.clone())
+    {
         // Open under the fx label.
         {
             let menu = menu.clone();
@@ -292,8 +310,12 @@ pub(crate) fn wire_formula_bar(
             let mut el: Element = menu.clone().into();
             el.add_event_listener("click", move |event: web_sys::Event| {
                 let Some(target) = event.target() else { return };
-                let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
-                let Some(name) = elx.get_attribute("data-fxfn") else { return };
+                let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+                    return;
+                };
+                let Some(name) = elx.get_attribute("data-fxfn") else {
+                    return;
+                };
                 let value = format!("={}()", name);
                 let caret = value.len().saturating_sub(1) as u32;
                 // Focus FIRST: the focus guard above may commit an open cell
@@ -537,7 +559,11 @@ pub(crate) fn start_edit(
         r.select_cell(ri, ci);
         r.render();
         // Size the editor to the whole merged region, not just the anchor cell.
-        (r.merged_screen_rect(ri, ci), r.cell_text_at(ri, ci), r.zoom())
+        (
+            r.merged_screen_rect(ri, ci),
+            r.cell_text_at(ri, ci),
+            r.zoom(),
+        )
     };
     let style = textarea.style();
     let _ = style.set_property("left", &format!("{}px", rect.x));
@@ -621,7 +647,11 @@ pub(crate) fn reconcile_editor(
 /// the allowed values for the cell. The popover element is mutated in
 /// place; its `data-cell` attribute records the (ri, ci) for the click
 /// handler.
-pub(crate) fn cancel_edit(textarea: &HtmlTextAreaElement, editor_error: Option<&HtmlElement>, editing: &EditingCell) {
+pub(crate) fn cancel_edit(
+    textarea: &HtmlTextAreaElement,
+    editor_error: Option<&HtmlElement>,
+    editing: &EditingCell,
+) {
     *editing.borrow_mut() = None;
     let _ = textarea.style().set_property("display", "none");
     let _ = textarea.style().set_property("border", "");

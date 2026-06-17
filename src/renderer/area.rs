@@ -1,8 +1,11 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use crate::{core::data_proxy::DataProxy, renderer::table_renderer::{AreaCell, Rect}};
 use super::range::Range;
+use crate::{
+    core::data_proxy::DataProxy,
+    renderer::table_renderer::{AreaCell, Rect},
+};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct Area {
@@ -14,21 +17,23 @@ pub struct Area {
     pub x: f64,
     pub y: f64,
     pub width: f64,
-    pub height: f64
+    pub height: f64,
 }
 
 impl Area {
-    pub fn new(data: DataProxy, range: Range, x: f64, y: f64, width: f64, height: f64) -> Self
-    {
+    pub fn new(data: DataProxy, range: Range, x: f64, y: f64, width: f64, height: f64) -> Self {
         let mut row_map: HashMap<usize, (f64, f64)> = HashMap::new();
         let mut col_map: HashMap<usize, (f64, f64)> = HashMap::new();
 
         let mut total_height: f64 = 0f64;
-        range.each_row(|index| {
-            let h = data.get_row_height(index);
-            row_map.insert(index, (total_height, h));
-            total_height += h;
-        }, None);
+        range.each_row(
+            |index| {
+                let h = data.get_row_height(index);
+                row_map.insert(index, (total_height, h));
+                total_height += h;
+            },
+            None,
+        );
 
         let mut height = height;
         if height <= 0f64 {
@@ -36,14 +41,17 @@ impl Area {
         }
 
         let mut total_width: f64 = 0f64;
-        range.each_col(|index| {
-            let w = data.get_col_width(index);
-            col_map.insert(index, (total_width, w));
-            total_width += w;
-        }, None);
+        range.each_col(
+            |index| {
+                let w = data.get_col_width(index);
+                col_map.insert(index, (total_width, w));
+                total_width += w;
+            },
+            None,
+        );
 
         let mut width = width;
-        if width <= 0f64 { 
+        if width <= 0f64 {
             width = total_width;
         }
 
@@ -54,7 +62,7 @@ impl Area {
             x,
             y,
             width,
-            height
+            height,
         }
     }
 
@@ -69,34 +77,40 @@ impl Area {
     }
 
     pub fn contains_x(&self, x: f64) -> bool {
-        return x >= self.x && x <= self.x + self.width
+        return x >= self.x && x <= self.x + self.width;
     }
 
     pub fn contains_y(&self, y: f64) -> bool {
-        return y >= self.y && y <= self.y + self.height
+        return y >= self.y && y <= self.y + self.height;
     }
     pub fn contains(&self, x: f64, y: f64) -> bool {
-        return self.contains_x(x) && self.contains_y(y)
+        return self.contains_x(x) && self.contains_y(y);
     }
 
     pub fn each_row<F>(&self, mut f: F)
     where
         F: FnMut(usize, f64, f64),
     {
-        self.range.each_row(|row| {
-            let (y, height) = self.row_map.get(&row).unwrap();
-            f(row, *y, *height);
-        }, None);
+        self.range.each_row(
+            |row| {
+                let (y, height) = self.row_map.get(&row).unwrap();
+                f(row, *y, *height);
+            },
+            None,
+        );
     }
 
     pub fn each_col<F>(&self, mut f: F)
     where
         F: FnMut(usize, f64, f64),
     {
-        self.range.each_col(|col| {
-            let (x, width) = self.col_map.get(&col).unwrap();
-            f(col, *x, *width);
-        }, None);
+        self.range.each_col(
+            |col| {
+                let (x, width) = self.col_map.get(&col).unwrap();
+                f(col, *x, *width);
+            },
+            None,
+        );
     }
 
     pub fn each<F>(&self, mut f: F)
@@ -105,13 +119,22 @@ impl Area {
     {
         self.each_row(|row, y, height| {
             self.each_col(|col, x, width| {
-                f(row, col, Rect { x, y, width, height });
+                f(
+                    row,
+                    col,
+                    Rect {
+                        x,
+                        y,
+                        width,
+                        height,
+                    },
+                );
             });
         });
     }
 
     pub fn rect_row(&self, start_row: usize, end_row: usize) -> Rect {
-        let (mut y , mut height) = (0f64, 0f64);
+        let (mut y, mut height) = (0f64, 0f64);
         if start_row >= self.range.start_row {
             y = self.row_map.get(&start_row).map_or(0f64, |(y, _)| *y);
         }
@@ -128,7 +151,7 @@ impl Area {
             y,
             width: self.width,
             height,
-        }
+        };
     }
 
     pub fn rect_col(&self, start_col: usize, end_col: usize) -> Rect {
@@ -149,7 +172,7 @@ impl Area {
             y: 0f64,
             width,
             height: self.height,
-        }
+        };
     }
 
     pub fn rect(&self, r: &Range) -> Rect {
@@ -160,7 +183,7 @@ impl Area {
             y: rect_row.y,
             width: rect_col.width,
             height: rect_row.height,
-        }
+        };
     }
 
     pub fn cell_at(&self, x: f64, y: f64) -> AreaCell {

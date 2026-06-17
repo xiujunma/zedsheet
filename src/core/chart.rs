@@ -4,9 +4,9 @@
 //! the sheet and updates with the data. This module is pure and host-tested;
 //! the canvas drawing lives in `renderer::chart_render`.
 
-use serde::{Deserialize, Serialize};
 use crate::core::cell_range::CellRange;
 use crate::core::data_proxy::DataProxy;
+use serde::{Deserialize, Serialize};
 
 fn default_chart_w() -> f64 {
     360.0
@@ -83,7 +83,11 @@ pub fn extract_chart_data(sheet: &DataProxy, range: &str) -> Option<ChartData> {
         .map(|(i, ri)| {
             if label_col {
                 let v = raw(ri, c0);
-                if v.trim().is_empty() { (i + 1).to_string() } else { v }
+                if v.trim().is_empty() {
+                    (i + 1).to_string()
+                } else {
+                    v
+                }
             } else {
                 (i + 1).to_string()
             }
@@ -165,12 +169,7 @@ mod tests {
 
     #[test]
     fn multiple_series_and_no_labels() {
-        let d = sheet(&[
-            (0, 0, "10"),
-            (0, 1, "1"),
-            (1, 0, "20"),
-            (1, 1, "2"),
-        ]);
+        let d = sheet(&[(0, 0, "10"), (0, 1, "1"), (1, 0, "20"), (1, 1, "2")]);
         let data = extract_chart_data(&d, "A1:B2").unwrap();
         assert_eq!(data.labels, vec!["1", "2"]); // positional
         assert_eq!(data.series.len(), 2);

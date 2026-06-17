@@ -34,8 +34,18 @@ const MONTH_ABBR: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 const MONTH_FULL: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September",
-    "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 /// True if `pattern` is an Excel date/time format code rather than a number
@@ -62,7 +72,8 @@ fn looks_like_date_pattern(pattern: &str) -> bool {
             }
         }
     }
-    bare.chars().any(|c| matches!(c, 'y' | 'm' | 'd' | 'h' | 's'))
+    bare.chars()
+        .any(|c| matches!(c, 'y' | 'm' | 'd' | 'h' | 's'))
 }
 
 enum DateSeg {
@@ -129,7 +140,11 @@ pub fn format_date_pattern(serial: f64, pattern: &str) -> String {
     let ampm = segs.iter().any(|s| matches!(s, DateSeg::AmPm));
     let hour = if ampm {
         let h = hour24 % 12;
-        if h == 0 { 12 } else { h }
+        if h == 0 {
+            12
+        } else {
+            h
+        }
     } else {
         hour24
     };
@@ -137,7 +152,13 @@ pub fn format_date_pattern(serial: f64, pattern: &str) -> String {
     // month-vs-minute rule (minute when adjacent to hours or seconds).
     let letters: Vec<char> = segs
         .iter()
-        .filter_map(|s| if let DateSeg::Tok(c, _) = s { Some(*c) } else { None })
+        .filter_map(|s| {
+            if let DateSeg::Tok(c, _) = s {
+                Some(*c)
+            } else {
+                None
+            }
+        })
         .collect();
     let mut ti: usize = 0;
     let mut out = String::new();
@@ -153,8 +174,16 @@ pub fn format_date_pattern(serial: f64, pattern: &str) -> String {
                     } else {
                         format!("{:04}", year)
                     }),
-                    'd' => out.push_str(&if n >= 2 { format!("{day:02}") } else { format!("{day}") }),
-                    'h' => out.push_str(&if n >= 2 { format!("{hour:02}") } else { format!("{hour}") }),
+                    'd' => out.push_str(&if n >= 2 {
+                        format!("{day:02}")
+                    } else {
+                        format!("{day}")
+                    }),
+                    'h' => out.push_str(&if n >= 2 {
+                        format!("{hour:02}")
+                    } else {
+                        format!("{hour}")
+                    }),
                     's' => out.push_str(&if n >= 2 {
                         format!("{second:02}")
                     } else {
@@ -243,7 +272,11 @@ pub fn format_custom(value: f64, pattern: &str) -> String {
     let suffix: String = chars[end + 1..].iter().collect();
 
     let percent = section.contains('%');
-    let scaled = if percent { value.abs() * 100.0 } else { value.abs() };
+    let scaled = if percent {
+        value.abs() * 100.0
+    } else {
+        value.abs()
+    };
 
     let (int_pat, frac_pat) = match numpat.split_once('.') {
         Some((i, f)) => (i.to_string(), Some(f.to_string())),
@@ -417,7 +450,10 @@ mod tests {
         // `mm` between `hh` and `ss` is minutes, not month.
         assert_eq!(format_value("0.5", "hh:mm:ss"), "12:00:00");
         let dt = (to_serial(2024, 1, 15) + 0.5).to_string();
-        assert_eq!(format_value(&dt, "yyyy-mm-dd hh:mm:ss"), "2024-01-15 12:00:00");
+        assert_eq!(
+            format_value(&dt, "yyyy-mm-dd hh:mm:ss"),
+            "2024-01-15 12:00:00"
+        );
         // Non-numeric passes through unchanged.
         assert_eq!(format_value("hello", "yyyy-mm-dd"), "hello");
         // A literal containing date letters (quoted) must NOT trigger date mode.

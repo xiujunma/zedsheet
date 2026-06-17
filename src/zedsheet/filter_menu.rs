@@ -3,13 +3,13 @@
 //! A single panel is reused across columns, mirroring the list-validity
 //! popover (issue #9).
 
+#[allow(unused_imports)]
+use super::*;
+use crate::component::element::Element;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
-use crate::component::element::Element;
-#[allow(unused_imports)]
-use super::*;
 
 /// Minimal HTML-attribute/text escaping for user cell values.
 fn esc(s: &str) -> String {
@@ -46,7 +46,11 @@ pub(crate) fn show_filter_menu(
     ));
     for (v, n, checked) in &items {
         let escaped = esc(v);
-        let label = if v.is_empty() { "(Blanks)".to_string() } else { escaped.clone() };
+        let label = if v.is_empty() {
+            "(Blanks)".to_string()
+        } else {
+            escaped.clone()
+        };
         html.push_str(&format!(
             "<label style=\"display:block;padding:3px 12px 3px 24px;cursor:pointer;white-space:nowrap;\">\
                <input type=\"checkbox\" data-fval=\"{escaped}\" {}/> {label} ({n})\
@@ -70,7 +74,11 @@ pub(crate) fn show_filter_menu(
     let vh = web_sys::window()
         .and_then(|w| w.inner_height().ok().and_then(|v| v.as_f64()))
         .unwrap_or(800.0);
-    let top = if y + 280.0 > vh { (y - 280.0).max(0.0) } else { y };
+    let top = if y + 280.0 > vh {
+        (y - 280.0).max(0.0)
+    } else {
+        y
+    };
     let style = m.unchecked_ref::<web_sys::HtmlElement>().style();
     let _ = style.set_property("left", &format!("{}px", x));
     let _ = style.set_property("top", &format!("{}px", top));
@@ -94,7 +102,9 @@ pub(crate) fn wire_filter_menu(
     let mut el: Element = menu.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let ci: usize = menu_node
             .get_attribute("data-ci")
             .and_then(|v| v.parse().ok())
@@ -112,8 +122,9 @@ pub(crate) fn wire_filter_menu(
             let checked = elx.unchecked_ref::<HtmlInputElement>().checked();
             if let Ok(list) = menu_node.query_selector_all("input[data-fval]") {
                 for i in 0..list.length() {
-                    if let Some(input) =
-                        list.item(i).and_then(|n| n.dyn_into::<HtmlInputElement>().ok())
+                    if let Some(input) = list
+                        .item(i)
+                        .and_then(|n| n.dyn_into::<HtmlInputElement>().ok())
                     {
                         input.set_checked(checked);
                     }
@@ -140,8 +151,9 @@ pub(crate) fn wire_filter_menu(
             if let Ok(list) = menu_node.query_selector_all("input[data-fval]") {
                 total = list.length() as usize;
                 for i in 0..list.length() {
-                    if let Some(input) =
-                        list.item(i).and_then(|n| n.dyn_into::<HtmlInputElement>().ok())
+                    if let Some(input) = list
+                        .item(i)
+                        .and_then(|n| n.dyn_into::<HtmlInputElement>().ok())
                     {
                         if input.checked() {
                             values.push(input.get_attribute("data-fval").unwrap_or_default());

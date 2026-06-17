@@ -30,7 +30,9 @@ pub enum Agg {
 }
 
 impl Default for Agg {
-    fn default() -> Self { Agg::Sum }
+    fn default() -> Self {
+        Agg::Sum
+    }
 }
 
 impl Agg {
@@ -216,8 +218,12 @@ impl PivotTable {
             Some((_sheet, rest)) => rest,
             None => &self.source_range,
         };
-        let r = CellRange::from_str(a1)
-            .map_err(|()| format!("source range {:?} is not a valid A1 reference", self.source_range))?;
+        let r = CellRange::from_str(a1).map_err(|()| {
+            format!(
+                "source range {:?} is not a valid A1 reference",
+                self.source_range
+            )
+        })?;
         let r0 = r.sri.min(r.eri);
         let c0 = r.sci.min(r.eci);
         let r1 = r.eri.max(r.sri);
@@ -308,7 +314,11 @@ impl std::hash::Hash for PrimKey {
 pub fn key_to_display(k: &Key) -> String {
     match k {
         Key::Single(p) => prim_to_display(p),
-        Key::Tuple(parts) => parts.iter().map(prim_to_display).collect::<Vec<_>>().join(" / "),
+        Key::Tuple(parts) => parts
+            .iter()
+            .map(prim_to_display)
+            .collect::<Vec<_>>()
+            .join(" / "),
     }
 }
 
@@ -377,48 +387,53 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
     // AND *every* active slicer's value is in its `selected_values` set.
     // An empty `selected_values` is the "All" / "(Multiple Items)"
     // sentinel and matches every row, for both filters and slicers.
-    let filter_pred: Box<dyn Fn(usize) -> bool> = if pt.filter_fields.is_empty() && source.slicers.is_empty() {
-        Box::new(|_| true)
-    } else {
-        // Pre-compute the raw text for each filter field, per row, so the
-        // predicate is a cheap pointer comparison inside the loop.
-        let filters: Vec<(usize, std::collections::HashSet<String>)> = pt
-            .filter_fields
-            .iter()
-            .map(|f| (c0 + f.field_idx, f.selected_values.iter().cloned().collect()))
-            .collect();
-        // Slicers (issue #61): at most one per field; the last write wins
-        // if the source carries two on the same field. Each binding
-        // filters by the source cell's raw text, so the slicer's "values"
-        // are the same strings the user sees in the source cells (and
-        // the same strings `FilterField` uses, so the two filter
-        // mechanisms behave consistently).
-        let slicers: Vec<(usize, std::collections::HashSet<String>)> = {
-            // De-duplicate by field index, keeping the last write — the
-            // modal would prevent this, but the engine must agree on
-            // a deterministic answer for hand-edited or legacy specs.
-            let mut last_per_field: std::collections::HashMap<usize, std::collections::HashSet<String>> =
-                std::collections::HashMap::new();
-            for s in source.slicers.iter() {
-                last_per_field.insert(
-                    s.field_idx,
-                    s.selected_values.iter().cloned().collect(),
-                );
-            }
-            last_per_field
-                .into_iter()
-                .map(|(field_idx, allowed)| (c0 + field_idx, allowed))
-                .collect()
-        };
-        Box::new(move |ri: usize| {
-            filters.iter().all(|(ci, allowed)| {
-                // An empty `allowed` set is the "All" sentinel — passes.
-                allowed.is_empty() || allowed.contains(&source.cell_raw_value(ri, *ci))
-            }) && slicers.iter().all(|(ci, allowed)| {
-                allowed.is_empty() || allowed.contains(&source.cell_raw_value(ri, *ci))
+    let filter_pred: Box<dyn Fn(usize) -> bool> =
+        if pt.filter_fields.is_empty() && source.slicers.is_empty() {
+            Box::new(|_| true)
+        } else {
+            // Pre-compute the raw text for each filter field, per row, so the
+            // predicate is a cheap pointer comparison inside the loop.
+            let filters: Vec<(usize, std::collections::HashSet<String>)> = pt
+                .filter_fields
+                .iter()
+                .map(|f| {
+                    (
+                        c0 + f.field_idx,
+                        f.selected_values.iter().cloned().collect(),
+                    )
+                })
+                .collect();
+            // Slicers (issue #61): at most one per field; the last write wins
+            // if the source carries two on the same field. Each binding
+            // filters by the source cell's raw text, so the slicer's "values"
+            // are the same strings the user sees in the source cells (and
+            // the same strings `FilterField` uses, so the two filter
+            // mechanisms behave consistently).
+            let slicers: Vec<(usize, std::collections::HashSet<String>)> = {
+                // De-duplicate by field index, keeping the last write — the
+                // modal would prevent this, but the engine must agree on
+                // a deterministic answer for hand-edited or legacy specs.
+                let mut last_per_field: std::collections::HashMap<
+                    usize,
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
+                for s in source.slicers.iter() {
+                    last_per_field.insert(s.field_idx, s.selected_values.iter().cloned().collect());
+                }
+                last_per_field
+                    .into_iter()
+                    .map(|(field_idx, allowed)| (c0 + field_idx, allowed))
+                    .collect()
+            };
+            Box::new(move |ri: usize| {
+                filters.iter().all(|(ci, allowed)| {
+                    // An empty `allowed` set is the "All" sentinel — passes.
+                    allowed.is_empty() || allowed.contains(&source.cell_raw_value(ri, *ci))
+                }) && slicers.iter().all(|(ci, allowed)| {
+                    allowed.is_empty() || allowed.contains(&source.cell_raw_value(ri, *ci))
+                })
             })
-        })
-    };
+        };
 
     // First pass: bucket values by (row_key, col_key, value_field_idx).
     // Each bucket holds one `Option<f64>` per source row in that bucket
@@ -434,7 +449,9 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         }
         let rk = make_key(source, ri, c0, &pt.row_fields, pt);
         let ck = make_key(source, ri, c0, &pt.col_fields, pt);
-        let entry = buckets.entry((rk, ck)).or_insert_with(|| Vec::with_capacity(nv));
+        let entry = buckets
+            .entry((rk, ck))
+            .or_insert_with(|| Vec::with_capacity(nv));
         // Grow lazily on first encounter so the value-field index lines up.
         for (v_idx, vf) in value_fields.iter().enumerate() {
             if v_idx >= entry.len() {
@@ -524,9 +541,7 @@ pub fn compute(source: &DataProxy, pt: &PivotTable) -> Result<PivotResult, Strin
         .map(|v_idx| {
             let all: Vec<Option<f64>> = buckets
                 .values()
-                .flat_map(|per_v| {
-                    per_v.get(v_idx).into_iter().flat_map(|v| v.iter().cloned())
-                })
+                .flat_map(|per_v| per_v.get(v_idx).into_iter().flat_map(|v| v.iter().cloned()))
                 .collect();
             aggregate(&value_fields[v_idx].agg, &all)
         })
@@ -622,9 +637,7 @@ fn parse_date_key(raw: &str, group: DateGroup) -> Option<String> {
 fn parse_iso_or_slash(s: &str) -> Option<DateYmd> {
     // Strip the time portion if present.
     let date_part = s.split(|c| c == 'T' || c == ' ').next()?;
-    let parts: Vec<&str> = date_part
-        .split(|c| c == '-' || c == '/')
-        .collect();
+    let parts: Vec<&str> = date_part.split(|c| c == '-' || c == '/').collect();
     if parts.len() != 3 {
         return None;
     }
@@ -643,7 +656,9 @@ fn parse_iso_or_slash(s: &str) -> Option<DateYmd> {
 /// data columns don't accidentally become 1900-era dates.
 fn parse_excel_serial(s: &str) -> Option<DateYmd> {
     // Reject any string with a decimal point, sign, or exponent.
-    if s.chars().any(|c| c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E') {
+    if s.chars()
+        .any(|c| c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')
+    {
         return None;
     }
     let n: i64 = s.parse().ok()?;
@@ -722,7 +737,11 @@ fn format_group(d: &DateYmd, g: DateGroup) -> String {
 fn civil_from_days(z: i64) -> Option<DateYmd> {
     // Shift to Hinnant's `days_from_zero` epoch (0000-03-01).
     let z = z + 719_468;
-    let era = if z >= 0 { z / 146_097 } else { (z - 146_096) / 146_097 };
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
     let doe = (z - era * 146_097) as u64; // [0, 146_096]
     let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
     let y = yoe as i64 + era * 400;
@@ -947,13 +966,7 @@ pub fn materialize(
 
 /// Write a numeric value as text into a cell and apply the given style.
 /// `None` is written as empty (no number); we'll still apply the style.
-fn write_value_cell(
-    out: &mut DataProxy,
-    ri: usize,
-    ci: usize,
-    v: Option<f64>,
-    style_idx: usize,
-) {
+fn write_value_cell(out: &mut DataProxy, ri: usize, ci: usize, v: Option<f64>, style_idx: usize) {
     match v {
         Some(n) => {
             // Use a fixed display: integers without trailing `.0`, floats
@@ -983,12 +996,15 @@ pub fn read_field_headers(source: &DataProxy, r0: usize, c0: usize, c1: usize) -
         .collect()
 }
 
-
 fn aggregate(agg: &Agg, vs: &[Option<f64>]) -> Option<f64> {
     match agg {
         Agg::Count => {
             let n = vs.iter().filter(|v| v.is_some()).count();
-            if n == 0 { None } else { Some(n as f64) }
+            if n == 0 {
+                None
+            } else {
+                Some(n as f64)
+            }
         }
         Agg::Sum => {
             let mut sum = 0.0;
@@ -997,7 +1013,11 @@ fn aggregate(agg: &Agg, vs: &[Option<f64>]) -> Option<f64> {
                 sum += v;
                 any = true;
             }
-            if any { Some(sum) } else { None }
+            if any {
+                Some(sum)
+            } else {
+                None
+            }
         }
         Agg::Avg => {
             let nums: Vec<f64> = vs.iter().filter_map(|v| *v).collect();
@@ -1008,10 +1028,16 @@ fn aggregate(agg: &Agg, vs: &[Option<f64>]) -> Option<f64> {
             }
         }
         Agg::Min => vs.iter().filter_map(|v| *v).fold(None, |acc, v| {
-            Some(match acc { None => v, Some(a) => a.min(v) })
+            Some(match acc {
+                None => v,
+                Some(a) => a.min(v),
+            })
         }),
         Agg::Max => vs.iter().filter_map(|v| *v).fold(None, |acc, v| {
-            Some(match acc { None => v, Some(a) => a.max(v) })
+            Some(match acc {
+                None => v,
+                Some(a) => a.max(v),
+            })
         }),
     }
 }
@@ -1039,7 +1065,13 @@ mod tests {
         dp
     }
 
-    fn pt(source: &str, row_fields: Vec<usize>, col_fields: Vec<usize>, value: usize, agg: Agg) -> PivotTable {
+    fn pt(
+        source: &str,
+        row_fields: Vec<usize>,
+        col_fields: Vec<usize>,
+        value: usize,
+        agg: Agg,
+    ) -> PivotTable {
         PivotTable {
             source_range: source.into(),
             source_sheet: "S".into(),
@@ -1070,12 +1102,15 @@ mod tests {
 
     #[test]
     fn sum_aggregates_numeric_values() {
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "100"],
-            &["North", "200"],
-            &["South", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "100"],
+                &["North", "200"],
+                &["South", "50"],
+            ],
+        );
         let p = pt("S!A1:B4", vec![0], vec![], 1, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.row_keys.len(), 2);
@@ -1091,13 +1126,16 @@ mod tests {
 
     #[test]
     fn count_excludes_blanks() {
-        let dp = sheet_from_rows("S", &[
-            &["Name", "Score"],
-            &["Alice", "10"],
-            &["Alice", ""],     // blank → not counted
-            &["Bob", "20"],
-            &["Bob", "30"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Name", "Score"],
+                &["Alice", "10"],
+                &["Alice", ""], // blank → not counted
+                &["Bob", "20"],
+                &["Bob", "30"],
+            ],
+        );
         let p = pt("S!A1:B5", vec![0], vec![], 1, Agg::Count);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.body[0][0], Some(1.0)); // Alice: 1 non-blank
@@ -1107,12 +1145,10 @@ mod tests {
 
     #[test]
     fn avg_with_text_numeric_coercion() {
-        let dp = sheet_from_rows("S", &[
-            &["X", "Y"],
-            &["a", "10"],
-            &["a", "20"],
-            &["a", "30"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[&["X", "Y"], &["a", "10"], &["a", "20"], &["a", "30"]],
+        );
         let p = pt("S!A1:B4", vec![0], vec![], 1, Agg::Avg);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.body[0][0], Some(20.0));
@@ -1120,13 +1156,16 @@ mod tests {
 
     #[test]
     fn min_max_ignore_blanks() {
-        let dp = sheet_from_rows("S", &[
-            &["X", "V"],
-            &["a", "5"],
-            &["a", ""],
-            &["a", "10"],
-            &["a", "abc"], // not a number → dropped from min/max
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["X", "V"],
+                &["a", "5"],
+                &["a", ""],
+                &["a", "10"],
+                &["a", "abc"], // not a number → dropped from min/max
+            ],
+        );
         let pmin = pt("S!A1:B5", vec![0], vec![], 1, Agg::Min);
         let rmin = compute(&dp, &pmin).unwrap();
         assert_eq!(rmin.body[0][0], Some(5.0));
@@ -1148,12 +1187,7 @@ mod tests {
     #[test]
     fn no_row_fields_means_single_total_row() {
         // Single value column, no row/col grouping.
-        let dp = sheet_from_rows("S", &[
-            &["Amount"],
-            &["10"],
-            &["20"],
-            &["30"],
-        ]);
+        let dp = sheet_from_rows("S", &[&["Amount"], &["10"], &["20"], &["30"]]);
         let p = pt("S!A1:A4", vec![], vec![], 0, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.row_keys.len(), 1);
@@ -1192,20 +1226,11 @@ mod tests {
     #[test]
     fn filter_with_no_selected_values_passes_all_rows() {
         // Empty `selected_values` is the "All" sentinel — every row passes.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["South", "20"],
-        ]);
-        let p = pt_filtered(
-            "S!A1:B3",
-            vec![0],
-            vec![],
-            1,
-            Agg::Sum,
-            0,
-            vec![],
+        let dp = sheet_from_rows(
+            "S",
+            &[&["Region", "Amount"], &["North", "10"], &["South", "20"]],
         );
+        let p = pt_filtered("S!A1:B3", vec![0], vec![], 1, Agg::Sum, 0, vec![]);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.grand_total, vec![Some(30.0)]);
         assert_eq!(r.row_keys.len(), 2);
@@ -1214,21 +1239,16 @@ mod tests {
     #[test]
     fn filter_excludes_rows_not_in_selected_values() {
         // Filter Region ∈ {North} — South rows drop out.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["South", "20"],
-            &["North", "5"],
-        ]);
-        let p = pt_filtered(
-            "S!A1:B4",
-            vec![0],
-            vec![],
-            1,
-            Agg::Sum,
-            0,
-            vec!["North"],
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "10"],
+                &["South", "20"],
+                &["North", "5"],
+            ],
         );
+        let p = pt_filtered("S!A1:B4", vec![0], vec![], 1, Agg::Sum, 0, vec!["North"]);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.grand_total, vec![Some(15.0)]);
         // Only the North row_key survives.
@@ -1239,13 +1259,16 @@ mod tests {
     #[test]
     fn filter_grand_total_excludes_filtered_rows() {
         // The grand total must also reflect the filter — not the unfiltered sum.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["South", "20"],
-            &["East", "30"],
-            &["West", "40"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "10"],
+                &["South", "20"],
+                &["East", "30"],
+                &["West", "40"],
+            ],
+        );
         let p = pt_filtered(
             "S!A1:B5",
             vec![0],
@@ -1263,19 +1286,8 @@ mod tests {
     fn filter_with_no_matching_values_yields_empty_body() {
         // The filter selection excludes every row — body cells are None,
         // but the row_keys still reflect the surviving source.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-        ]);
-        let p = pt_filtered(
-            "S!A1:B2",
-            vec![0],
-            vec![],
-            1,
-            Agg::Sum,
-            0,
-            vec!["Mars"],
-        );
+        let dp = sheet_from_rows("S", &[&["Region", "Amount"], &["North", "10"]]);
+        let p = pt_filtered("S!A1:B2", vec![0], vec![], 1, Agg::Sum, 0, vec!["Mars"]);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.grand_total, vec![None]);
         // No row_keys survive — the only source row failed the filter.
@@ -1284,11 +1296,10 @@ mod tests {
 
     #[test]
     fn no_col_fields_means_single_total_column() {
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "5"],
-            &["South", "7"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[&["Region", "Amount"], &["North", "5"], &["South", "7"]],
+        );
         let p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.col_keys.len(), 1);
@@ -1300,19 +1311,25 @@ mod tests {
     #[test]
     fn multi_row_field_uses_tuple_key() {
         // Two row fields: Region + Product. Same (Region, Product) collapses.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Product", "Amount"],
-            &["North", "Apple", "10"],
-            &["North", "Apple", "20"],
-            &["North", "Banana", "5"],
-            &["South", "Apple", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Product", "Amount"],
+                &["North", "Apple", "10"],
+                &["North", "Apple", "20"],
+                &["North", "Banana", "5"],
+                &["South", "Apple", "50"],
+            ],
+        );
         let p = pt("S!A1:C5", vec![0, 1], vec![], 2, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.row_keys.len(), 3);
         // Distinct (Region, Product) combos in first-appearance order.
         let names: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
-        assert_eq!(names, vec!["North / Apple", "North / Banana", "South / Apple"]);
+        assert_eq!(
+            names,
+            vec!["North / Apple", "North / Banana", "South / Apple"]
+        );
         assert_eq!(r.body[0][0], Some(30.0)); // North+Apple: 10+20
         assert_eq!(r.body[1][0], Some(5.0));
         assert_eq!(r.body[2][0], Some(50.0));
@@ -1320,11 +1337,14 @@ mod tests {
 
     #[test]
     fn headers_row_excluded_from_data() {
-        let dp = sheet_from_rows("S", &[
-            &["Label", "V"],   // header row — should NOT be aggregated
-            &["Label", "100"], // this row's "Label" / "V" are data
-            &["X", "200"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Label", "V"],   // header row — should NOT be aggregated
+                &["Label", "100"], // this row's "Label" / "V" are data
+                &["X", "200"],
+            ],
+        );
         let p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         // Two data rows: ("Label", 100) and ("X", 200). The header "Label" is
@@ -1336,11 +1356,7 @@ mod tests {
     #[test]
     fn text_numeric_keys_collapse() {
         // 100 and "100" in the same key column must be the same bucket.
-        let dp = sheet_from_rows("S", &[
-            &["K", "V"],
-            &["100", "10"],
-            &["100", "20"],
-        ]);
+        let dp = sheet_from_rows("S", &[&["K", "V"], &["100", "10"], &["100", "20"]]);
         let p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         assert_eq!(r.row_keys.len(), 1);
@@ -1350,12 +1366,15 @@ mod tests {
     #[test]
     fn col_field_creates_cross_tab() {
         // Quarter as a column field; each row × quarter cell = sum of Amount.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Quarter", "Amount"],
-            &["North", "Q1", "10"],
-            &["North", "Q2", "20"],
-            &["South", "Q1", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Quarter", "Amount"],
+                &["North", "Q1", "10"],
+                &["North", "Q2", "20"],
+                &["South", "Q1", "50"],
+            ],
+        );
         let p = pt("S!A1:C4", vec![0], vec![1], 2, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         // 2 row keys, 2 col keys (Q1, Q2) in first-appearance order.
@@ -1408,12 +1427,15 @@ mod tests {
 
     #[test]
     fn materialize_writes_header_body_and_totals() {
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "100"],
-            &["North", "200"],
-            &["South", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "100"],
+                &["North", "200"],
+                &["South", "50"],
+            ],
+        );
         let p = pt("S!A1:B4", vec![0], vec![], 1, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         let headers = read_field_headers(&dp, 0, 0, 1);
@@ -1439,12 +1461,15 @@ mod tests {
 
     #[test]
     fn materialize_with_col_field_lays_out_header_rows() {
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Quarter", "Amount"],
-            &["North", "Q1", "10"],
-            &["North", "Q2", "20"],
-            &["South", "Q1", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Quarter", "Amount"],
+                &["North", "Q1", "10"],
+                &["North", "Q2", "20"],
+                &["South", "Q1", "50"],
+            ],
+        );
         let p = pt("S!A1:C4", vec![0], vec![1], 2, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         let headers = read_field_headers(&dp, 0, 0, 2);
@@ -1473,12 +1498,7 @@ mod tests {
     #[test]
     fn materialize_with_no_row_or_col_fields_writes_single_total() {
         // Single value column, no grouping axes → 1×1 body + grand total.
-        let dp = sheet_from_rows("S", &[
-            &["Amount"],
-            &["10"],
-            &["20"],
-            &["30"],
-        ]);
+        let dp = sheet_from_rows("S", &[&["Amount"], &["10"], &["20"], &["30"]]);
         let p = pt("S!A1:A4", vec![], vec![], 0, Agg::Sum);
         let r = compute(&dp, &p).unwrap();
         let headers = read_field_headers(&dp, 0, 0, 0);
@@ -1536,13 +1556,16 @@ mod tests {
         // Source: 4 rows of numeric Amounts and a numeric Items count
         // column (the engine's Agg::Count works on numeric values, so
         // both columns have to be numeric for this test).
-        let dp = sheet_from_rows("S", &[
-            &["Amount", "Items"],
-            &["10", "1"],
-            &["20", "1"],
-            &["30", "1"],
-            &["40", "1"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Amount", "Items"],
+                &["10", "1"],
+                &["20", "1"],
+                &["30", "1"],
+                &["40", "1"],
+            ],
+        );
         // Sum of Amount + Count of Items (4 non-blank rows).
         let p = pt_multi(
             "S!A1:B5",
@@ -1567,13 +1590,16 @@ mod tests {
     fn two_value_fields_with_col_field() {
         // Quarter as a col field; Sum of Amount + Count of Amount per cell.
         // 2 value fields × 2 col keys = 4 body columns per row.
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Quarter", "Amount"],
-            &["North", "Q1", "10"],
-            &["North", "Q2", "20"],
-            &["South", "Q1", "50"],
-            &["South", "Q2", "30"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Quarter", "Amount"],
+                &["North", "Q1", "10"],
+                &["North", "Q2", "20"],
+                &["South", "Q1", "50"],
+                &["South", "Q2", "30"],
+            ],
+        );
         let p = pt_multi(
             "S!A1:C5",
             vec![0],
@@ -1587,12 +1613,24 @@ mod tests {
         // body[r][v*nc + c]: each row has 4 cells, Sum-block first.
         // North: Sum(Q1=10, Q2=20), Count(Q1=1, Q2=1)
         // South: Sum(Q1=50, Q2=30), Count(Q1=1, Q2=1)
-        assert_eq!(r.body[0], vec![Some(10.0), Some(20.0), Some(1.0), Some(1.0)]);
-        assert_eq!(r.body[1], vec![Some(50.0), Some(30.0), Some(1.0), Some(1.0)]);
+        assert_eq!(
+            r.body[0],
+            vec![Some(10.0), Some(20.0), Some(1.0), Some(1.0)]
+        );
+        assert_eq!(
+            r.body[1],
+            vec![Some(50.0), Some(30.0), Some(1.0), Some(1.0)]
+        );
         // row_totals[r][v]: North sum=30, count=2; South sum=80, count=2.
-        assert_eq!(r.row_totals, vec![vec![Some(30.0), Some(2.0)], vec![Some(80.0), Some(2.0)]]);
+        assert_eq!(
+            r.row_totals,
+            vec![vec![Some(30.0), Some(2.0)], vec![Some(80.0), Some(2.0)]]
+        );
         // col_totals[c][v]: Q1 sum=60 count=2; Q2 sum=50 count=2.
-        assert_eq!(r.col_totals, vec![vec![Some(60.0), Some(2.0)], vec![Some(50.0), Some(2.0)]]);
+        assert_eq!(
+            r.col_totals,
+            vec![vec![Some(60.0), Some(2.0)], vec![Some(50.0), Some(2.0)]]
+        );
         // grand_total[v]: total sum=110, total count=4.
         assert_eq!(r.grand_total, vec![Some(110.0), Some(4.0)]);
     }
@@ -1601,13 +1639,7 @@ mod tests {
     fn three_value_fields_mixed_aggs() {
         // Three aggregations on the same value column: Sum, Count, Avg.
         // Avg of [10, 20, 30, 40] = 25.
-        let dp = sheet_from_rows("S", &[
-            &["Amount"],
-            &["10"],
-            &["20"],
-            &["30"],
-            &["40"],
-        ]);
+        let dp = sheet_from_rows("S", &[&["Amount"], &["10"], &["20"], &["30"], &["40"]]);
         let p = pt_multi(
             "S!A1:A5",
             vec![],
@@ -1625,14 +1657,16 @@ mod tests {
         // a hand-edited spec), the new `value_fields` wins. This pins the
         // precedence: the engine must not silently fall through to the
         // legacy field.
-        let dp = sheet_from_rows("S", &[
-            &["A", "B", "C"],
-            &["x", "10", "100"],
-            &["y", "20", "200"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[&["A", "B", "C"], &["x", "10", "100"], &["y", "20", "200"]],
+        );
         let mut p = pt("S!A1:C3", vec![0], vec![], 1, Agg::Count); // legacy: Count of B
-        // New spec says Sum of C.
-        p.value_fields = vec![ValueField { field: 2, agg: Agg::Sum }];
+                                                                   // New spec says Sum of C.
+        p.value_fields = vec![ValueField {
+            field: 2,
+            agg: Agg::Sum,
+        }];
         let r = compute(&dp, &p).unwrap();
         // Grand total is Sum of C across all rows: 100 + 200 = 300.
         assert_eq!(r.grand_total, vec![Some(300.0)]);
@@ -1646,12 +1680,15 @@ mod tests {
         //   row 1: row-key field name | col keys | Total | col keys | Total
         //   body  : row-key label | values... | values...
         //   totals: "Total" | sums/counts | sums/counts
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Quarter", "Amount"],
-            &["North", "Q1", "10"],
-            &["North", "Q2", "20"],
-            &["South", "Q1", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Quarter", "Amount"],
+                &["North", "Q1", "10"],
+                &["North", "Q2", "20"],
+                &["South", "Q1", "50"],
+            ],
+        );
         let p = pt_multi(
             "S!A1:C4",
             vec![0],
@@ -1748,12 +1785,15 @@ mod tests {
         // Source has dates spanning 2023 and 2024; Year grouping should
         // collapse to two row keys ("2023", "2024") with the corresponding
         // sum of Amounts.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2023-01-15", "10"],
-            &["2023-06-20", "20"],
-            &["2024-01-10", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2023-01-15", "10"],
+                &["2023-06-20", "20"],
+                &["2024-01-10", "50"],
+            ],
+        );
         let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Year));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1767,12 +1807,15 @@ mod tests {
     fn date_group_quarter_buckets_by_year_quarter() {
         // Same dates — Quarter grouping collapses the two 2023 entries
         // into one bucket (Q1 vs Q2 differ), keeps 2024 as Q1.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2023-01-15", "10"],
-            &["2023-06-20", "20"],
-            &["2024-01-10", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2023-01-15", "10"],
+                &["2023-06-20", "20"],
+                &["2024-01-10", "50"],
+            ],
+        );
         let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Quarter));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1786,12 +1829,15 @@ mod tests {
     fn date_group_month_buckets_by_year_month() {
         // Same dates — Month grouping produces three distinct keys
         // spanning two years.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2023-01-15", "10"],
-            &["2023-06-20", "20"],
-            &["2024-01-10", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2023-01-15", "10"],
+                &["2023-06-20", "20"],
+                &["2024-01-10", "50"],
+            ],
+        );
         let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Month));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1801,12 +1847,15 @@ mod tests {
     #[test]
     fn date_group_day_buckets_by_exact_date() {
         // Same dates — Day grouping preserves all three distinct dates.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2023-01-15", "10"],
-            &["2023-06-20", "20"],
-            &["2024-01-10", "50"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2023-01-15", "10"],
+                &["2023-06-20", "20"],
+                &["2024-01-10", "50"],
+            ],
+        );
         let p = pt_dated("S!A1:B4", 0, 1, Agg::Sum, Some(DateGroup::Day));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1816,11 +1865,14 @@ mod tests {
     #[test]
     fn date_group_with_us_format_text_dates() {
         // US-style `M/D/YYYY` text dates parse correctly.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["1/15/2023", "10"],
-            &["6/20/2023", "20"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["1/15/2023", "10"],
+                &["6/20/2023", "20"],
+            ],
+        );
         let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Quarter));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1830,11 +1882,14 @@ mod tests {
     #[test]
     fn date_group_with_eu_format_text_dates() {
         // EU-style `D/M/YYYY` — first part > 12 disambiguates from US.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["15/1/2023", "10"],
-            &["20/6/2023", "20"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["15/1/2023", "10"],
+                &["20/6/2023", "20"],
+            ],
+        );
         let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Month));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1846,11 +1901,14 @@ mod tests {
         // Excel serial 45306 = 2024-01-15, 45366 = 2024-03-15 (2024 is a
         // leap year, so Jan 15 → Mar 15 = 60 days). We hand-pick serials
         // in the 1..200_000 range so the parser accepts them as dates.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["45306", "10"], // 2024-01-15
-            &["45366", "20"], // 2024-03-15
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["45306", "10"], // 2024-01-15
+                &["45366", "20"], // 2024-03-15
+            ],
+        );
         let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Month));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1861,11 +1919,14 @@ mod tests {
     fn date_group_with_iso_datetime_strips_time() {
         // ISO 8601 with a `T…` time suffix — the time portion is dropped
         // before parsing.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2024-03-15T10:30:00", "10"],
-            &["2024-03-15T18:00:00", "20"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2024-03-15T10:30:00", "10"],
+                &["2024-03-15T18:00:00", "20"],
+            ],
+        );
         let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Day));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1878,11 +1939,14 @@ mod tests {
         // A non-date string falls through to the existing text-key path
         // so the user still sees it as a distinct bucket — better than
         // silently dropping the row.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2024-03-15", "10"],
-            &["not a date", "5"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2024-03-15", "10"],
+                &["not a date", "5"],
+            ],
+        );
         let p = pt_dated("S!A1:B3", 0, 1, Agg::Sum, Some(DateGroup::Month));
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
@@ -1894,23 +1958,25 @@ mod tests {
         // Two row fields: a date column (grouped) and a category column
         // (raw). The category column stays as raw text while the date
         // collapses by month.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Region", "Amount"],
-            &["2024-01-15", "North", "10"],
-            &["2024-01-20", "South", "5"],
-            &["2024-02-10", "North", "20"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Region", "Amount"],
+                &["2024-01-15", "North", "10"],
+                &["2024-01-20", "South", "5"],
+                &["2024-02-10", "North", "20"],
+            ],
+        );
         let mut p = pt("S!A1:C4", vec![0, 1], vec![], 2, Agg::Sum);
         p.date_groups.insert(0, DateGroup::Month);
         let r = compute(&dp, &p).unwrap();
         let keys: Vec<String> = r.row_keys.iter().map(key_to_display).collect();
         // The (date-key, region) tuple — same Region across months
         // doesn't collapse.
-        assert_eq!(keys, vec![
-            "2024-01 / North",
-            "2024-01 / South",
-            "2024-02 / North",
-        ]);
+        assert_eq!(
+            keys,
+            vec!["2024-01 / North", "2024-01 / South", "2024-02 / North",]
+        );
         assert_eq!(r.body[0][0], Some(10.0));
         assert_eq!(r.body[1][0], Some(5.0));
         assert_eq!(r.body[2][0], Some(20.0));
@@ -1920,12 +1986,15 @@ mod tests {
     fn date_group_in_col_field() {
         // Date grouping on a column field: cross-tab by Region (rows) and
         // month (cols).
-        let dp = sheet_from_rows("S", &[
-            &["Region", "Date", "Amount"],
-            &["North", "2024-01-15", "10"],
-            &["North", "2024-02-10", "20"],
-            &["South", "2024-01-20", "5"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Date", "Amount"],
+                &["North", "2024-01-15", "10"],
+                &["North", "2024-02-10", "20"],
+                &["South", "2024-01-20", "5"],
+            ],
+        );
         let mut p = pt("S!A1:C4", vec![0], vec![1], 2, Agg::Sum);
         p.date_groups.insert(1, DateGroup::Month);
         let r = compute(&dp, &p).unwrap();
@@ -1943,11 +2012,14 @@ mod tests {
     fn date_group_empty_map_preserves_existing_behavior() {
         // Backward compat: a spec without `date_groups` deserializes with
         // an empty map, and the engine runs exactly as it did before #60.
-        let dp = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2024-01-15", "10"],
-            &["2024-02-10", "20"],
-        ]);
+        let dp = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2024-01-15", "10"],
+                &["2024-02-10", "20"],
+            ],
+        );
         let p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
         // Sanity: no date_groups entry set on the spec.
         assert!(p.date_groups.is_empty());
@@ -2046,10 +2118,7 @@ mod tests {
         // (a date-grouped field's text is a date by intent), so the test
         // pins the current behavior. If we want stricter rejection later,
         // this is the test to flip.
-        assert_eq!(
-            parse_date_key("100", DateGroup::Year),
-            Some("1900".into())
-        );
+        assert_eq!(parse_date_key("100", DateGroup::Year), Some("1900".into()));
         // 0 and 200_000 are out of range → None.
         assert_eq!(parse_date_key("0", DateGroup::Year), None);
         assert_eq!(parse_date_key("200000", DateGroup::Year), None);
@@ -2092,13 +2161,16 @@ mod tests {
         slicer_field: usize,
         selected_values: Vec<&str>,
     ) -> (DataProxy, PivotTable) {
-        let mut src = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["South", "20"],
-            &["North", "5"],
-            &["East", "30"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "10"],
+                &["South", "20"],
+                &["North", "5"],
+                &["East", "30"],
+            ],
+        );
         if !selected_values.is_empty() {
             src.slicers.push(Slicer {
                 id: "slicer_test".into(),
@@ -2197,24 +2269,33 @@ mod tests {
         // Two slicers on two different fields: a row passes only if it
         // passes both. (We don't have a Region+Amount multi-source
         // helper, so build a custom source.)
-        let mut src = sheet_from_rows("S", &[
-            &["Region", "Quarter", "Amount"],
-            &["North", "Q1", "10"],
-            &["North", "Q2", "20"],
-            &["South", "Q1", "30"],
-            &["South", "Q2", "40"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Quarter", "Amount"],
+                &["North", "Q1", "10"],
+                &["North", "Q2", "20"],
+                &["South", "Q1", "30"],
+                &["South", "Q2", "40"],
+            ],
+        );
         src.slicers.push(Slicer {
             id: "s_region".into(),
             field_idx: 0,
             selected_values: vec!["North".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         src.slicers.push(Slicer {
             id: "s_quarter".into(),
             field_idx: 1,
             selected_values: vec!["Q1".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         let p = pt("S!A1:C5", vec![0], vec![], 2, Agg::Sum);
         let r = compute(&src, &p).unwrap();
@@ -2229,22 +2310,27 @@ mod tests {
         // selection actually filters. (The modal would enforce
         // uniqueness; this test pins the engine's behavior for the
         // case the modal fails to prevent.)
-        let mut src = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["South", "20"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[&["Region", "Amount"], &["North", "10"], &["South", "20"]],
+        );
         src.slicers.push(Slicer {
             id: "s_first".into(),
             field_idx: 0,
             selected_values: vec!["North".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         src.slicers.push(Slicer {
             id: "s_last".into(),
             field_idx: 0,
             selected_values: vec!["South".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         let p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
         let r = compute(&src, &p).unwrap();
@@ -2258,17 +2344,23 @@ mod tests {
         // the same string the user sees in the source cell. Numeric
         // source values are stringified at write time, so a slicer
         // selection of "10" matches the cell "10".
-        let mut src = sheet_from_rows("S", &[
-            &["Score", "Amount"],
-            &["10", "100"],
-            &["20", "200"],
-            &["10", "50"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Score", "Amount"],
+                &["10", "100"],
+                &["20", "200"],
+                &["10", "50"],
+            ],
+        );
         src.slicers.push(Slicer {
             id: "s_score".into(),
             field_idx: 0,
             selected_values: vec!["10".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         // Pivot on Amount, no row field — slicer is on Score, which
         // the pivot doesn't reference. Engine should still apply the
@@ -2284,15 +2376,15 @@ mod tests {
         // A Slicer on the source sheet survives `get_data` → `set_data`
         // (the same path the JS API uses for `get_data`/`load_data`),
         // so the floating-panel state persists across workbook save/load.
-        let mut src = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-        ]);
+        let mut src = sheet_from_rows("S", &[&["Region", "Amount"], &["North", "10"]]);
         src.slicers.push(Slicer {
             id: "s_region".into(),
             field_idx: 0,
             selected_values: vec!["North".into(), "South".into()],
-            x: 100.0, y: 200.0, width: 180.0, height: 120.0,
+            x: 100.0,
+            y: 200.0,
+            width: 180.0,
+            height: 120.0,
         });
         let json = src.get_data_json();
         let v: serde_json::Value = serde_json::from_str(&json).expect("get_data JSON parses");
@@ -2331,17 +2423,23 @@ mod tests {
         // the workbook JSON with the slicer intact. The slicer applies
         // on the rehydrated source so the rehydrated pivot computes the
         // same filtered result.
-        let mut src = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["South", "20"],
-            &["North", "5"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "10"],
+                &["South", "20"],
+                &["North", "5"],
+            ],
+        );
         src.slicers.push(Slicer {
             id: "s_region".into(),
             field_idx: 0,
             selected_values: vec!["North".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         src.pivots.push(pt("S!A1:B4", vec![0], vec![], 1, Agg::Sum));
         let json = src.get_data_json();
@@ -2362,19 +2460,25 @@ mod tests {
         // Date-group the row field by month, and add a slicer on the
         // value field. Both filters must apply: the source rows are
         // first narrowed by the slicer, then bucketed by month.
-        let mut src = sheet_from_rows("S", &[
-            &["Date", "Region", "Amount"],
-            &["2024-01-15", "North", "10"],
-            &["2024-01-20", "South", "5"],
-            &["2024-02-10", "North", "20"],
-            &["2024-02-15", "South", "30"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Region", "Amount"],
+                &["2024-01-15", "North", "10"],
+                &["2024-01-20", "South", "5"],
+                &["2024-02-10", "North", "20"],
+                &["2024-02-15", "South", "30"],
+            ],
+        );
         // Slicer: only "North" rows survive.
         src.slicers.push(Slicer {
             id: "s_region".into(),
             field_idx: 1,
             selected_values: vec!["North".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         // Pivot: Date grouped by month (row), Sum of Amount.
         let mut p = pt("S!A1:C5", vec![0], vec![], 2, Agg::Sum);
@@ -2386,8 +2490,8 @@ mod tests {
         assert_eq!(keys, vec!["2024-01", "2024-02"]);
         assert_eq!(r.body[0][0], Some(10.0)); // North 2024-01
         assert_eq!(r.body[1][0], Some(20.0)); // North 2024-02
-        // Grand total: only North rows (10 + 20 = 30); South (5 + 30)
-        // was excluded by the slicer.
+                                              // Grand total: only North rows (10 + 20 = 30); South (5 + 30)
+                                              // was excluded by the slicer.
         assert_eq!(r.grand_total, vec![Some(30.0)]);
     }
 
@@ -2396,18 +2500,24 @@ mod tests {
         // Slicer on a column field, multi-value pivot on another field:
         // both should apply — the slicer narrows the source rows, the
         // multi-value pivot produces two body columns.
-        let mut src = sheet_from_rows("S", &[
-            &["Region", "Amount"],
-            &["North", "10"],
-            &["North", "20"],
-            &["South", "5"],
-            &["South", "30"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Region", "Amount"],
+                &["North", "10"],
+                &["North", "20"],
+                &["South", "5"],
+                &["South", "30"],
+            ],
+        );
         src.slicers.push(Slicer {
             id: "s_region".into(),
             field_idx: 0,
             selected_values: vec!["North".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         let p = pt_multi(
             "S!A1:B5",
@@ -2426,11 +2536,14 @@ mod tests {
     fn slicer_value_filtered_to_nothing_even_with_date_grouping() {
         // The slicer is the dominant filter: when it selects nothing,
         // the date grouping produces no row keys. (Excel behavior.)
-        let mut src = sheet_from_rows("S", &[
-            &["Date", "Amount"],
-            &["2024-01-15", "10"],
-            &["2024-02-10", "20"],
-        ]);
+        let mut src = sheet_from_rows(
+            "S",
+            &[
+                &["Date", "Amount"],
+                &["2024-01-15", "10"],
+                &["2024-02-10", "20"],
+            ],
+        );
         src.slicers.push(Slicer {
             id: "s_dummy".into(),
             // Slicer on a field that has no pivot role — but the
@@ -2439,7 +2552,10 @@ mod tests {
             // narrows the body to nothing.
             field_idx: 1,
             selected_values: vec!["999".into()],
-            x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
         });
         let mut p = pt("S!A1:B3", vec![0], vec![], 1, Agg::Sum);
         p.date_groups.insert(0, DateGroup::Month);

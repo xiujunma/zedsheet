@@ -1,10 +1,10 @@
+#[allow(unused_imports)]
+use super::*;
+use crate::component::element::Element;
+use crate::core::data_proxy::DataProxy;
 use gloo::utils::window;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlTextAreaElement};
-use crate::component::element::Element;
-use crate::core::data_proxy::DataProxy;
-#[allow(unused_imports)]
-use super::*;
 
 pub(crate) fn render_tabs(menu_el: &web_sys::Element, names: &[String], active: usize) {
     let mut html = String::new();
@@ -88,13 +88,18 @@ pub(crate) fn wire_bottombar(
         let mut menu_el_mut = menu_el;
         menu_el_mut.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
-            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
             let li = el
                 .get_attribute("data-index")
                 .map(|_| el.clone())
                 .or_else(|| el.closest("[data-index]").ok().flatten());
             let Some(li) = li else { return };
-            if let Some(idx) = li.get_attribute("data-index").and_then(|s| s.parse::<usize>().ok()) {
+            if let Some(idx) = li
+                .get_attribute("data-index")
+                .and_then(|s| s.parse::<usize>().ok())
+            {
                 // Commit a pending edit to THIS sheet before swapping data.
                 if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
                     return;
@@ -113,9 +118,17 @@ pub(crate) fn wire_bottombar(
         let menu_for = menu_node.clone();
         let mut menu_dbl: Element = menu_node.clone().into();
         menu_dbl.add_event_listener("dblclick", move |event: web_sys::Event| {
-            let Some(idx) = tab_index_from_event(&event) else { return };
-            let cur_name = sheets.borrow().get(idx).map(|d| d.name.clone()).unwrap_or_default();
-            if let Ok(Some(name)) = window().prompt_with_message_and_default("Sheet name:", &cur_name) {
+            let Some(idx) = tab_index_from_event(&event) else {
+                return;
+            };
+            let cur_name = sheets
+                .borrow()
+                .get(idx)
+                .map(|d| d.name.clone())
+                .unwrap_or_default();
+            if let Ok(Some(name)) =
+                window().prompt_with_message_and_default("Sheet name:", &cur_name)
+            {
                 let name = name.trim().to_string();
                 if name.is_empty() {
                     return;
@@ -145,7 +158,9 @@ pub(crate) fn wire_bottombar(
         let mut menu_ctx: Element = menu_node.clone().into();
         menu_ctx.add_event_listener("contextmenu", move |event: web_sys::Event| {
             event.prevent_default();
-            let Some(idx) = tab_index_from_event(&event) else { return };
+            let Some(idx) = tab_index_from_event(&event) else {
+                return;
+            };
             if sheets.borrow().len() <= 1 {
                 return;
             }
@@ -154,7 +169,10 @@ pub(crate) fn wire_bottombar(
                 return;
             }
             let nm = sheets.borrow()[idx].name.clone();
-            if !matches!(window().confirm_with_message(&format!("Delete sheet \"{}\"?", nm)), Ok(true)) {
+            if !matches!(
+                window().confirm_with_message(&format!("Delete sheet \"{}\"?", nm)),
+                Ok(true)
+            ) {
                 return;
             }
             let len_after = {
@@ -236,5 +254,6 @@ pub(crate) fn tab_index_from_event(event: &web_sys::Event) -> Option<usize> {
         .get_attribute("data-index")
         .map(|_| el.clone())
         .or_else(|| el.closest("[data-index]").ok().flatten())?;
-    li.get_attribute("data-index").and_then(|s| s.parse::<usize>().ok())
+    li.get_attribute("data-index")
+        .and_then(|s| s.parse::<usize>().ok())
 }

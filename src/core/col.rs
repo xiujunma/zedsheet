@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Col {
@@ -26,7 +26,11 @@ impl Col {
     }
 
     pub fn get_width(&self) -> f64 {
-        if self.hide { 0.0 } else { self.width }
+        if self.hide {
+            0.0
+        } else {
+            self.width
+        }
     }
 
     pub fn set_width(&mut self, width: f64) {
@@ -76,7 +80,9 @@ impl Cols {
     }
 
     pub fn get_width(&self, ci: usize) -> f64 {
-        self.get(ci).map(|c| c.get_width()).unwrap_or(self.default_width)
+        self.get(ci)
+            .map(|c| c.get_width())
+            .unwrap_or(self.default_width)
     }
 
     pub fn set_width(&mut self, ci: usize, width: f64) {

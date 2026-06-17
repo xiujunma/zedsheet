@@ -63,7 +63,10 @@ fn write_storage(selector: &str, json: &str) {
 /// Register (or clear, with `None`) the host's change callback for a mount.
 pub fn set_on_change(selector: &str, cb: Option<js_sys::Function>) {
     STATE.with(|s| {
-        s.borrow_mut().entry(selector.to_string()).or_default().on_change = cb;
+        s.borrow_mut()
+            .entry(selector.to_string())
+            .or_default()
+            .on_change = cb;
     });
 }
 
@@ -81,7 +84,10 @@ pub fn seed_baseline(selector: &str, json: &str) {
 /// Enable persistence for a mount (called once mount + restore has finished).
 pub fn arm(selector: &str) {
     STATE.with(|s| {
-        s.borrow_mut().entry(selector.to_string()).or_default().armed = true;
+        s.borrow_mut()
+            .entry(selector.to_string())
+            .or_default()
+            .armed = true;
     });
 }
 

@@ -1,10 +1,12 @@
-
 pub fn clone_deep<T: serde::Serialize + for<'de> serde::Deserialize<'de>>(obj: &T) -> T {
     let json = serde_json::to_string(obj).unwrap();
     serde_json::from_str(&json).unwrap()
 }
 
-pub fn merge<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(target: &mut T, sources: &[T]) {
+pub fn merge<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    target: &mut T,
+    sources: &[T],
+) {
     let json = serde_json::to_string(target).unwrap();
     let mut map: serde_json::Value = serde_json::from_str(&json).unwrap();
 

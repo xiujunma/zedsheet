@@ -5,17 +5,17 @@ use std::fmt::Display;
 use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::multi_range::MultiRangeState;
-use crate::renderer::render::{AreaRenderer, render};
+use crate::renderer::render::{render, AreaRenderer};
 use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
-use crate::core::data_proxy::{
-    ActiveSheet, DataProxy, SheetsRegistry, Style as CellStyle, Border as CellBorder,
-};
-use crate::core::cell_range::CellRange;
 use crate::core::cell::Cell as DataCell;
+use crate::core::cell_range::CellRange;
 use crate::core::clipboard_io::ParsedGrid;
+use crate::core::data_proxy::{
+    ActiveSheet, Border as CellBorder, DataProxy, SheetsRegistry, Style as CellStyle,
+};
 
 /// A snapshot of cells held for copy/cut/paste.
 #[derive(Clone)]
@@ -118,7 +118,13 @@ fn transpose_clipboard(cb: &ClipboardData) -> ClipboardData {
                 cell.merge = Some((cs, rs));
             }
             cells[j].push(cell);
-            values[j].push(cb.values.get(i).and_then(|r| r.get(j)).cloned().unwrap_or_default());
+            values[j].push(
+                cb.values
+                    .get(i)
+                    .and_then(|r| r.get(j))
+                    .cloned()
+                    .unwrap_or_default(),
+            );
         }
     }
     ClipboardData {
@@ -349,7 +355,6 @@ impl Default for Row {
             style: 0usize,
         }
     }
-    
 }
 
 #[derive(Debug, Clone)]
@@ -371,7 +376,8 @@ impl Default for Col {
     }
 }
 
-#[derive(Debug, Clone)]pub struct RowHeader {
+#[derive(Debug, Clone)]
+pub struct RowHeader {
     pub width: f64,
     pub cols: usize,
     pub merges: Vec<String>,
@@ -384,7 +390,7 @@ impl AreaRenderer for RowHeader {
             cell_type: String::from("text"),
             style: 0usize,
             formula: String::from(""),
-        })
+        });
     }
 
     fn get_merges(&self) -> Vec<String> {
@@ -410,7 +416,7 @@ impl AreaRenderer for ColHeader {
             cell_type: String::from("text"),
             style: 0usize,
             formula: String::from(""),
-        })
+        });
     }
 
     fn get_merges(&self) -> Vec<String> {
@@ -418,7 +424,8 @@ impl AreaRenderer for ColHeader {
     }
 
     fn cell_render(&self, canvas: &Canvas, rect: &Rect, _cell: &Cell, _style: &str) -> bool {
-        canvas.set_fill_style("#0069c2")
+        canvas
+            .set_fill_style("#0069c2")
             .begin_path()
             .move_to(rect.width - 12f64, 2f64)
             .line_to(rect.width - 2f64, 2f64)
@@ -526,7 +533,12 @@ pub(crate) struct WorkbookSnapshot {
 }
 
 impl TableRenderer {
-    pub fn new(container: HtmlCanvasElement, width: f64, height: f64, data: DataProxy) -> TableRenderer {
+    pub fn new(
+        container: HtmlCanvasElement,
+        width: f64,
+        height: f64,
+        data: DataProxy,
+    ) -> TableRenderer {
         let mut r = TableRenderer {
             target: container,
             data,
@@ -619,10 +631,13 @@ impl TableRenderer {
             self.start_col,
             self.data.row_count(),
             self.data.col_count(),
-            self.width, self.height,
-            self.scroll_rows, self.scroll_cols,
+            self.width,
+            self.height,
+            self.scroll_rows,
+            self.scroll_cols,
             self.row_header.clone(),
-            self.col_header.clone()));
+            self.col_header.clone(),
+        ));
 
         render(self);
     }
@@ -687,15 +702,17 @@ impl TableRenderer {
         return self;
     }
 
-    fn cell_renderer<F>(&mut self, cell_renderer: F) -> &Self 
-    where F: Fn(Canvas, Rect, Cell, String) -> bool + 'static
+    fn cell_renderer<F>(&mut self, cell_renderer: F) -> &Self
+    where
+        F: Fn(Canvas, Rect, Cell, String) -> bool + 'static,
     {
         self.cell_renderer = Box::new(cell_renderer);
         return self;
     }
 
-    fn formatter<F>(&mut self, formatter: F) -> &Self 
-    where F: Fn(Cell, String) + 'static
+    fn formatter<F>(&mut self, formatter: F) -> &Self
+    where
+        F: Fn(Cell, String) + 'static,
     {
         self.formatter = Box::new(formatter);
         return self;
@@ -879,10 +896,18 @@ impl TableRenderer {
     pub fn refresh_outline_gutters(&mut self) {
         let row_lvls = crate::core::outline::max_level(&self.data.row_groups);
         let col_lvls = crate::core::outline::max_level(&self.data.col_groups);
-        self.row_header.width =
-            BASE_ROW_HEADER_W + if row_lvls > 0 { row_lvls as f64 * OUTLINE_LANE + 4.0 } else { 0.0 };
-        self.col_header.height =
-            BASE_COL_HEADER_H + if col_lvls > 0 { col_lvls as f64 * OUTLINE_LANE + 4.0 } else { 0.0 };
+        self.row_header.width = BASE_ROW_HEADER_W
+            + if row_lvls > 0 {
+                row_lvls as f64 * OUTLINE_LANE + 4.0
+            } else {
+                0.0
+            };
+        self.col_header.height = BASE_COL_HEADER_H
+            + if col_lvls > 0 {
+                col_lvls as f64 * OUTLINE_LANE + 4.0
+            } else {
+                0.0
+            };
     }
 
     /// Group the selection's rows (context menu). Document state → undoable.
@@ -1003,7 +1028,15 @@ impl TableRenderer {
                 if y < self.col_header.height - 0.5 || y >= self.height {
                     return None; // scrolled out of view
                 }
-                Some((i, Rect { x: lane + 1.0, y: y + 1.0, width: 11.0, height: 11.0 }))
+                Some((
+                    i,
+                    Rect {
+                        x: lane + 1.0,
+                        y: y + 1.0,
+                        width: 11.0,
+                        height: 11.0,
+                    },
+                ))
             })
             .collect()
     }
@@ -1022,7 +1055,15 @@ impl TableRenderer {
                 if x < self.row_header.width - 0.5 || x >= self.width {
                     return None;
                 }
-                Some((i, Rect { x: x + 1.0, y: lane + 1.0, width: 11.0, height: 11.0 }))
+                Some((
+                    i,
+                    Rect {
+                        x: x + 1.0,
+                        y: lane + 1.0,
+                        width: 11.0,
+                        height: 11.0,
+                    },
+                ))
             })
             .collect()
     }
@@ -1035,7 +1076,17 @@ impl TableRenderer {
             return Vec::new();
         }
         (1..=max + 1)
-            .map(|k| (k, Rect { x: 2.0 + (k - 1) as f64 * 13.0, y: 2.0, width: 11.0, height: 11.0 }))
+            .map(|k| {
+                (
+                    k,
+                    Rect {
+                        x: 2.0 + (k - 1) as f64 * 13.0,
+                        y: 2.0,
+                        width: 11.0,
+                        height: 11.0,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -1045,7 +1096,17 @@ impl TableRenderer {
             return Vec::new();
         }
         (1..=max + 1)
-            .map(|k| (k, Rect { x: 2.0 + (k - 1) as f64 * 13.0, y: 15.0, width: 11.0, height: 11.0 }))
+            .map(|k| {
+                (
+                    k,
+                    Rect {
+                        x: 2.0 + (k - 1) as f64 * 13.0,
+                        y: 15.0,
+                        width: 11.0,
+                        height: 11.0,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -1113,7 +1174,12 @@ impl TableRenderer {
         self.multi_range.clear();
         self.selection_anchor = (ri, ci);
         let (r0, c0, r1, c1) = self.data.expand_range_with_merges(ri, ci, ri, ci);
-        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+        self.selector = SelectorRect {
+            ri: r0,
+            ci: c0,
+            eri: r1,
+            eci: c1,
+        };
     }
 
     /// Select a cell and scroll it into view.
@@ -1186,13 +1252,15 @@ impl TableRenderer {
     /// mousedown cell so dragging in any direction works.
     pub fn select_to(&mut self, ri: usize, ci: usize) {
         let (ar, ac) = self.selection_anchor;
-        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(
-            ar.min(ri),
-            ac.min(ci),
-            ar.max(ri),
-            ac.max(ci),
-        );
-        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+        let (r0, c0, r1, c1) =
+            self.data
+                .expand_range_with_merges(ar.min(ri), ac.min(ci), ar.max(ri), ac.max(ci));
+        self.selector = SelectorRect {
+            ri: r0,
+            ci: c0,
+            eri: r1,
+            eci: c1,
+        };
     }
 
     // --- Multi-range selection (issue #19) ---
@@ -1214,7 +1282,9 @@ impl TableRenderer {
     /// in single-rect mode. Used by `set_borders` "outer" mode.
     pub fn union_bounds(&self) -> (usize, usize, usize, usize) {
         if self.multi_range.is_active() {
-            self.multi_range.union().unwrap_or_else(|| self.selection_bounds())
+            self.multi_range
+                .union()
+                .unwrap_or_else(|| self.selection_bounds())
         } else {
             self.selection_bounds()
         }
@@ -1253,7 +1323,12 @@ impl TableRenderer {
     pub fn add_range(&mut self, r0: usize, c0: usize, r1: usize, c1: usize) {
         let (r0, c0, r1, c1) = self.data.expand_range_with_merges(r0, c0, r1, c1);
         self.multi_range.add(r0, c0, r1, c1);
-        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+        self.selector = SelectorRect {
+            ri: r0,
+            ci: c0,
+            eri: r1,
+            eci: c1,
+        };
         self.selection_anchor = (r0, c0);
     }
 
@@ -1288,17 +1363,19 @@ impl TableRenderer {
             return;
         }
         let (ar, ac) = self.selection_anchor;
-        let (r0, c0, r1, c1) = self.data.expand_range_with_merges(
-            ar.min(ri),
-            ac.min(ci),
-            ar.max(ri),
-            ac.max(ci),
-        );
+        let (r0, c0, r1, c1) =
+            self.data
+                .expand_range_with_merges(ar.min(ri), ac.min(ci), ar.max(ri), ac.max(ci));
         // Pass the raw cursor: extend_last normalizes against its own anchor, so
         // this grows the range in every direction. Passing the pre-maxed
         // (r1, c1) collapsed reverse (up/left) drags to the anchor (issue #19).
         self.multi_range.extend_last(ri, ci);
-        self.selector = SelectorRect { ri: r0, ci: c0, eri: r1, eci: c1 };
+        self.selector = SelectorRect {
+            ri: r0,
+            ci: c0,
+            eri: r1,
+            eci: c1,
+        };
     }
 
     /// The origin (top-left) of the merge covering (ri, ci), else (ri, ci).
@@ -1321,13 +1398,21 @@ impl TableRenderer {
         let avail_h = self.height - self.col_header.height;
         let avail_w = self.width - self.row_header.width;
         while ri > self.body_start_row() {
-            let visible: f64 = (self.body_start_row()..=ri).map(|r| self.row_height_at(r)).sum();
-            if visible <= avail_h { break; }
+            let visible: f64 = (self.body_start_row()..=ri)
+                .map(|r| self.row_height_at(r))
+                .sum();
+            if visible <= avail_h {
+                break;
+            }
             self.scroll_rows += 1;
         }
         while ci > self.body_start_col() {
-            let visible: f64 = (self.body_start_col()..=ci).map(|c| self.col_width_at(c)).sum();
-            if visible <= avail_w { break; }
+            let visible: f64 = (self.body_start_col()..=ci)
+                .map(|c| self.col_width_at(c))
+                .sum();
+            if visible <= avail_w {
+                break;
+            }
             self.scroll_cols += 1;
         }
     }
@@ -1366,7 +1451,11 @@ impl TableRenderer {
     /// Attach a validator to every cell in `ref_str` (e.g. `"A1:B3"`).
     /// Snapshots before mutating so the change is undoable. Caller is
     /// responsible for `render()`.
-    pub fn set_validations_for_range(&mut self, ref_str: &str, validator: crate::core::validation::Validator) {
+    pub fn set_validations_for_range(
+        &mut self,
+        ref_str: &str,
+        validator: crate::core::validation::Validator,
+    ) {
         self.snapshot();
         self.data.validations.add("cell", ref_str, validator);
     }
@@ -1453,9 +1542,9 @@ impl TableRenderer {
         const MAX_UNDO: usize = 100;
         self.undo_stack.push(WorkbookSnapshot {
             active: 0, // Overwritten by callers that know the real index;
-                        // for a pure-data mutator the active index didn't
-                        // change so 0 is the right "no-op" for the registry
-                        // restore path.
+            // for a pure-data mutator the active index didn't
+            // change so 0 is the right "no-op" for the registry
+            // restore path.
             sheets: vec![self.data.clone()],
         });
         if self.undo_stack.len() > MAX_UNDO {
@@ -1497,11 +1586,7 @@ impl TableRenderer {
         !self.redo_stack.is_empty()
     }
 
-    pub fn undo(
-        &mut self,
-        sheets: &SheetsRegistry,
-        active: &ActiveSheet,
-    ) {
+    pub fn undo(&mut self, sheets: &SheetsRegistry, active: &ActiveSheet) {
         if let Some(prev) = self.undo_stack.pop() {
             // The renderer doesn't own the registry; snapshot the current
             // workbook state for redo before we touch anything.
@@ -1522,11 +1607,7 @@ impl TableRenderer {
         }
     }
 
-    pub fn redo(
-        &mut self,
-        sheets: &SheetsRegistry,
-        active: &ActiveSheet,
-    ) {
+    pub fn redo(&mut self, sheets: &SheetsRegistry, active: &ActiveSheet) {
         if let Some(next) = self.redo_stack.pop() {
             let zoom = self.data.zoom();
             let current_active = *active.borrow();
@@ -1626,27 +1707,41 @@ impl TableRenderer {
     /// disarm. No-op if not armed (or, via the style funnel, on a read-only
     /// sheet). Single-use, matching Excel's single-click Format Painter.
     pub fn apply_format_painter(&mut self) {
-        let Some(style) = self.format_painter.take() else { return };
+        let Some(style) = self.format_painter.take() else {
+            return;
+        };
         self.update_selection_style(move |s| *s = style.clone());
     }
 
     pub fn toggle_bold(&mut self) {
-        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).bold;
+        let t = !self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .bold;
         self.update_selection_style(move |s| s.bold = t);
     }
 
     pub fn toggle_italic(&mut self) {
-        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).italic;
+        let t = !self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .italic;
         self.update_selection_style(move |s| s.italic = t);
     }
 
     pub fn toggle_underline(&mut self) {
-        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).underline;
+        let t = !self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .underline;
         self.update_selection_style(move |s| s.underline = t);
     }
 
     pub fn toggle_strike(&mut self) {
-        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).strike;
+        let t = !self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .strike;
         self.update_selection_style(move |s| s.strike = t);
     }
 
@@ -1671,28 +1766,41 @@ impl TableRenderer {
     }
 
     pub fn toggle_text_wrap(&mut self) {
-        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).text_wrap;
+        let t = !self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .text_wrap;
         self.update_selection_style(move |s| s.text_wrap = t);
     }
 
     /// Set the rotation angle in degrees for the selected cells. `0.0`
     /// (or any `None`-ish value) clears the rotation (issue #25).
     pub fn set_rotation(&mut self, angle: f64) {
-        let r = if angle.abs() < 1e-9 { None } else { Some(angle) };
+        let r = if angle.abs() < 1e-9 {
+            None
+        } else {
+            Some(angle)
+        };
         self.update_selection_style(move |s| s.rotation = r);
     }
 
     /// Toggle shrink-to-fit on the selected cells (issue #25). When on, the
     /// renderer scales the font down so the text fits without wrapping.
     pub fn toggle_shrink_to_fit(&mut self) {
-        let t = !self.data.get_cell_style(self.selector.ri, self.selector.ci).shrink_to_fit;
+        let t = !self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .shrink_to_fit;
         self.update_selection_style(move |s| s.shrink_to_fit = t);
     }
 
     /// Bump the left indent by `delta` pixels (negative `delta` decreases).
     /// Indent is clamped at 0 (issue #25).
     pub fn bump_indent(&mut self, delta: i64) {
-        let cur = self.data.get_cell_style(self.selector.ri, self.selector.ci).indent as i64;
+        let cur = self
+            .data
+            .get_cell_style(self.selector.ri, self.selector.ci)
+            .indent as i64;
         let next = (cur + delta).max(0) as usize;
         self.update_selection_style(move |s| s.indent = next);
     }
@@ -1733,15 +1841,30 @@ impl TableRenderer {
                             top: None,
                             bottom: None,
                         });
-                        let want_top = mode == "all" || mode == "top" || (mode == "outer" && ri == r0);
-                        let want_bottom = mode == "all" || mode == "bottom" || (mode == "outer" && ri == r1);
-                        let want_left = mode == "all" || mode == "left" || (mode == "outer" && ci == c0);
-                        let want_right = mode == "all" || mode == "right" || (mode == "outer" && ci == c1);
-                        if want_top { b.top = line.clone(); }
-                        if want_bottom { b.bottom = line.clone(); }
-                        if want_left { b.left = line.clone(); }
-                        if want_right { b.right = line.clone(); }
-                        let empty = b.top.is_none() && b.bottom.is_none() && b.left.is_none() && b.right.is_none();
+                        let want_top =
+                            mode == "all" || mode == "top" || (mode == "outer" && ri == r0);
+                        let want_bottom =
+                            mode == "all" || mode == "bottom" || (mode == "outer" && ri == r1);
+                        let want_left =
+                            mode == "all" || mode == "left" || (mode == "outer" && ci == c0);
+                        let want_right =
+                            mode == "all" || mode == "right" || (mode == "outer" && ci == c1);
+                        if want_top {
+                            b.top = line.clone();
+                        }
+                        if want_bottom {
+                            b.bottom = line.clone();
+                        }
+                        if want_left {
+                            b.left = line.clone();
+                        }
+                        if want_right {
+                            b.right = line.clone();
+                        }
+                        let empty = b.top.is_none()
+                            && b.bottom.is_none()
+                            && b.left.is_none()
+                            && b.right.is_none();
                         style.border = if empty { None } else { Some(b) };
                     }
                     let idx = self.data.add_style(style);
@@ -1826,7 +1949,15 @@ impl TableRenderer {
             cells.push(row);
             values.push(vrow);
         }
-        self.clipboard = Some(ClipboardData { r0, c0, r1, c1, cells, values, is_cut });
+        self.clipboard = Some(ClipboardData {
+            r0,
+            c0,
+            r1,
+            c1,
+            cells,
+            values,
+            is_cut,
+        });
         true
     }
 
@@ -1860,7 +1991,9 @@ impl TableRenderer {
             return;
         }
         self.snapshot();
-        let Some(cb) = self.clipboard.take() else { return };
+        let Some(cb) = self.clipboard.take() else {
+            return;
+        };
         let src = if mode == PasteMode::Transpose {
             transpose_clipboard(&cb)
         } else {
@@ -1878,7 +2011,11 @@ impl TableRenderer {
                     if !self.data.is_cell_editable(r, c) {
                         continue;
                     }
-                    let value = src.values.get(i).and_then(|v| v.get(j)).map_or("", |s| s.as_str());
+                    let value = src
+                        .values
+                        .get(i)
+                        .and_then(|v| v.get(j))
+                        .map_or("", |s| s.as_str());
                     let src_ref = crate::renderer::alphabets::xy2expr(src.c0 + j, src.r0 + i);
                     match paste_cell_plan(mode, cell, value, &src_ref) {
                         CellWrite::Full(c2) => self.data.set_cell(r, c, c2),
@@ -1935,12 +2072,7 @@ impl TableRenderer {
         // over part of a merge must unmerge it, never leave it half-overwritten.
         let width = grid.cells.iter().map(|row| row.len()).max().unwrap_or(0);
         if width > 0 {
-            let extent = CellRange::new(
-                r0,
-                c0,
-                r0 + grid.rows().saturating_sub(1),
-                c0 + width - 1,
-            );
+            let extent = CellRange::new(r0, c0, r0 + grid.rows().saturating_sub(1), c0 + width - 1);
             self.data.unmerge_intersecting(&extent);
         }
         // First pass: text. Second pass: merges (which clear covered cells, so
@@ -2235,8 +2367,7 @@ impl TableRenderer {
         let headers = crate::core::pivot::read_field_headers(&self.data, r0, c0, c1);
         // 3. Materialize to a new DataProxy, set read-only, push to registry.
         let output_name = pt.output_sheet.clone();
-        let mut out_sheet =
-            crate::core::pivot::materialize(&pt, &result, &headers, &output_name);
+        let mut out_sheet = crate::core::pivot::materialize(&pt, &result, &headers, &output_name);
         out_sheet.set_read_only(true);
         out_sheet.set_sheets(sheets);
         // 4. Install: spec on the source, output appended/replaced. The spec
@@ -2272,21 +2403,25 @@ impl TableRenderer {
     /// Re-run the pivot whose `output_sheet` matches the currently active
     /// sheet's name, if any. Called from the "Refresh pivot" context-menu
     /// item on an output sheet (issue #35).
-    pub fn refresh_active_pivot(
-        &mut self,
-        sheets: &SheetsRegistry,
-        active: &ActiveSheet,
-    ) -> bool {
+    pub fn refresh_active_pivot(&mut self, sheets: &SheetsRegistry, active: &ActiveSheet) -> bool {
         let active_name = self.data.name.clone();
         // Find the pivot spec on the *source* sheet. We don't know which
         // source sheet it is from the active sheet name alone, so we scan
         // every sheet for a pivot whose `output_sheet` matches.
-        let source_idx = sheets.borrow().iter().position(|d| {
-            d.pivots.iter().any(|p| p.output_sheet == active_name)
-        });
-        let Some(source_idx) = source_idx else { return false; };
+        let source_idx = sheets
+            .borrow()
+            .iter()
+            .position(|d| d.pivots.iter().any(|p| p.output_sheet == active_name));
+        let Some(source_idx) = source_idx else {
+            return false;
+        };
         let source = sheets.borrow()[source_idx].clone();
-        let pt = source.pivots.iter().find(|p| p.output_sheet == active_name).unwrap().clone();
+        let pt = source
+            .pivots
+            .iter()
+            .find(|p| p.output_sheet == active_name)
+            .unwrap()
+            .clone();
 
         // Save the workbook state for undo (issue #62).
         self.snapshot_workbook(sheets, active);
@@ -2309,7 +2444,8 @@ impl TableRenderer {
         };
         let headers = crate::core::pivot::read_field_headers(&source, r0, c0, c1);
         let cur = *active.borrow();
-        let mut new_sheet = crate::core::pivot::materialize(&pt, &result, &headers, &pt.output_sheet);
+        let mut new_sheet =
+            crate::core::pivot::materialize(&pt, &result, &headers, &pt.output_sheet);
         new_sheet.set_read_only(true);
         new_sheet.set_sheets(sheets);
         sheets.borrow_mut()[cur] = new_sheet;
@@ -2362,12 +2498,7 @@ impl TableRenderer {
                 Err(_) => continue,
             };
             let headers = crate::core::pivot::read_field_headers(&source, r0, c0, c1);
-            let mut out = crate::core::pivot::materialize(
-                pt,
-                &result,
-                &headers,
-                &pt.output_sheet,
-            );
+            let mut out = crate::core::pivot::materialize(pt, &result, &headers, &pt.output_sheet);
             out.set_read_only(true);
             out.set_sheets(sheets);
             updates.push((pt.output_sheet.clone(), out));
@@ -2465,7 +2596,11 @@ impl TableRenderer {
         }
         self.snapshot();
         let (r0, c0, _, _) = self.selection_bounds();
-        let was = self.data.get_cell(r0, c0).map(|c| c.editable).unwrap_or(true);
+        let was = self
+            .data
+            .get_cell(r0, c0)
+            .map(|c| c.editable)
+            .unwrap_or(true);
         self.data.set_cell_editable(r0, c0, !was);
     }
 
@@ -2989,7 +3124,13 @@ mod tests {
         out.set_read_only(true);
         out.set_sheets(&sheets);
 
-        let new_idx = install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt.clone(), out);
+        let new_idx = install_pivot_into_registry(
+            &sheets,
+            &Rc::new(RefCell::new(0)),
+            src.clone(),
+            pt.clone(),
+            out,
+        );
 
         // The source in the registry has the spec, so Refresh / save/load work.
         let new_idx = new_idx.expect("install should succeed");
@@ -3041,11 +3182,21 @@ mod tests {
         out.set_read_only(true);
         out.set_sheets(&sheets);
 
-        let new_idx = install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt.clone(), out)
-            .expect("install should succeed");
+        let new_idx = install_pivot_into_registry(
+            &sheets,
+            &Rc::new(RefCell::new(0)),
+            src.clone(),
+            pt.clone(),
+            out,
+        )
+        .expect("install should succeed");
 
         let after = sheets.borrow();
-        assert_eq!(after.len(), 2, "no append — the existing sheet was replaced");
+        assert_eq!(
+            after.len(),
+            2,
+            "no append — the existing sheet was replaced"
+        );
         assert_eq!(new_idx, 1);
         assert_eq!(after[0].pivots.len(), 1, "source still gets the spec");
         assert_eq!(after[1].name, "Pivot1");
@@ -3079,7 +3230,8 @@ mod tests {
         let headers = read_field_headers(&src, 0, 0, 1);
         let out = materialize(&pt, &result, &headers, "Pivot1");
 
-        let _ = install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt, out);
+        let _ =
+            install_pivot_into_registry(&sheets, &Rc::new(RefCell::new(0)), src.clone(), pt, out);
 
         // Caller's source is unchanged — the registry got a separate, spec-
         // bearing clone.
@@ -3132,13 +3284,7 @@ mod tests {
         let r1 = compute(&src1, &pt1).unwrap();
         let h1 = read_field_headers(&src1, 0, 0, 1);
         let out1 = materialize(&pt1, &r1, &h1, "P_from_1");
-        let _ = install_pivot_into_registry(
-            &sheets,
-            &active,
-            src1.clone(),
-            pt1,
-            out1,
-        );
+        let _ = install_pivot_into_registry(&sheets, &active, src1.clone(), pt1, out1);
 
         // User switches tabs — the wiring re-reads the live active.
         *active.borrow_mut() = 1;
@@ -3157,13 +3303,7 @@ mod tests {
         let r2 = compute(&src2, &pt2).unwrap();
         let h2 = read_field_headers(&src2, 0, 0, 1);
         let out2 = materialize(&pt2, &r2, &h2, "P_from_2");
-        let _ = install_pivot_into_registry(
-            &sheets,
-            &active,
-            src2,
-            pt2,
-            out2,
-        );
+        let _ = install_pivot_into_registry(&sheets, &active, src2, pt2, out2);
 
         // Each sheet has its own spec, routed by the active value the
         // helper was given at the time of the call. A stale `active=0`
@@ -3180,8 +3320,14 @@ mod tests {
     fn paste_cell_plan_picks_the_right_write_per_mode() {
         let mut cell = DataCell::with_text("=A1+1");
         cell.style = Some(3);
-        assert!(matches!(paste_cell_plan(PasteMode::All, &cell, "42", "A1"), CellWrite::Full(_)));
-        assert!(matches!(paste_cell_plan(PasteMode::Transpose, &cell, "42", "A1"), CellWrite::Full(_)));
+        assert!(matches!(
+            paste_cell_plan(PasteMode::All, &cell, "42", "A1"),
+            CellWrite::Full(_)
+        ));
+        assert!(matches!(
+            paste_cell_plan(PasteMode::Transpose, &cell, "42", "A1"),
+            CellWrite::Full(_)
+        ));
         match paste_cell_plan(PasteMode::Values, &cell, "42", "A1") {
             CellWrite::Text(t) => assert_eq!(t, "42"), // computed value, not the formula
             w => panic!("{w:?}"),
@@ -3200,7 +3346,10 @@ mod tests {
         }
         // Formats with no source style leaves the destination untouched.
         let plain = DataCell::with_text("x");
-        assert!(matches!(paste_cell_plan(PasteMode::Formats, &plain, "", ""), CellWrite::Skip));
+        assert!(matches!(
+            paste_cell_plan(PasteMode::Formats, &plain, "", ""),
+            CellWrite::Skip
+        ));
     }
 
     #[test]
@@ -3222,7 +3371,15 @@ mod tests {
             cells.push(row);
             values.push(vrow);
         }
-        let cb = ClipboardData { r0: 0, c0: 0, r1: 1, c1: 2, cells, values, is_cut: false };
+        let cb = ClipboardData {
+            r0: 0,
+            c0: 0,
+            r1: 1,
+            c1: 2,
+            cells,
+            values,
+            is_cut: false,
+        };
         let t = transpose_clipboard(&cb);
         assert_eq!(t.cells.len(), 3); // 3 rows now
         assert_eq!(t.cells[0].len(), 2); // 2 cols now

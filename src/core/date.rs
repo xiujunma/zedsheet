@@ -67,7 +67,11 @@ pub fn from_serial(serial: f64) -> (i64, u32, u32) {
 pub fn time_parts(serial: f64) -> (u32, u32, u32) {
     let frac = serial - serial.floor();
     let total = ((frac * 86_400.0).round() as i64).rem_euclid(86_400);
-    ((total / 3600) as u32, ((total % 3600) / 60) as u32, (total % 60) as u32)
+    (
+        (total / 3600) as u32,
+        ((total % 3600) / 60) as u32,
+        (total % 60) as u32,
+    )
 }
 
 /// Parse a date / time / datetime string into a serial number, or `None` if it
@@ -176,7 +180,11 @@ fn parse_time(s: &str) -> Option<f64> {
     }
     let h: i64 = nums[0].parse().ok()?;
     let mi: i64 = nums[1].parse().ok()?;
-    let se: i64 = if nums.len() == 3 { nums[2].parse().ok()? } else { 0 };
+    let se: i64 = if nums.len() == 3 {
+        nums[2].parse().ok()?
+    } else {
+        0
+    };
     if !(0..=23).contains(&h) || !(0..=59).contains(&mi) || !(0..=59).contains(&se) {
         return None;
     }
@@ -244,7 +252,10 @@ mod tests {
     fn parse_time_and_datetime() {
         assert_eq!(parse_date("12:00"), Some(0.5));
         assert_eq!(parse_date("06:00:00"), Some(0.25));
-        assert_eq!(parse_date("2024-01-15 12:00:00"), Some(to_serial(2024, 1, 15) + 0.5));
+        assert_eq!(
+            parse_date("2024-01-15 12:00:00"),
+            Some(to_serial(2024, 1, 15) + 0.5)
+        );
         assert_eq!(parse_date("25:00"), None); // hour out of range
     }
 
@@ -253,7 +264,10 @@ mod tests {
         let s = to_serial(2024, 1, 15);
         assert_eq!(format_serial(s, DateKind::Date), "2024-01-15");
         assert_eq!(format_serial(s + 0.5, DateKind::Time), "12:00:00");
-        assert_eq!(format_serial(s + 0.5, DateKind::DateTime), "2024-01-15 12:00:00");
+        assert_eq!(
+            format_serial(s + 0.5, DateKind::DateTime),
+            "2024-01-15 12:00:00"
+        );
         assert_eq!(format_serial(1.5, DateKind::Duration), "36:00:00");
     }
 

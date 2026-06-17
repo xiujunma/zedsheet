@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
 use crate::core::cell_range::CellRange;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Filter {
@@ -223,20 +223,25 @@ impl AutoFilter {
             self.ref_ = Some(ref_.to_string());
         }
         if let Some(filters) = data.get("filters").and_then(|v| v.as_array()) {
-            self.filters = filters.iter().filter_map(|f| {
-                let ci = f.get("ci")?.as_u64()? as usize;
-                let operator = f.get("operator")?.as_str()?.to_string();
-                let value: Vec<String> = f.get("value")?.as_array()?
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                Some(Filter::new(ci, &operator, value))
-            }).collect();
+            self.filters = filters
+                .iter()
+                .filter_map(|f| {
+                    let ci = f.get("ci")?.as_u64()? as usize;
+                    let operator = f.get("operator")?.as_str()?.to_string();
+                    let value: Vec<String> = f
+                        .get("value")?
+                        .as_array()?
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    Some(Filter::new(ci, &operator, value))
+                })
+                .collect();
         }
         if let Some(sort) = data.get("sort").and_then(|v| v.as_object()) {
             if let (Some(ci), Some(order)) = (
                 sort.get("ci").and_then(|v| v.as_u64()).map(|v| v as usize),
-                sort.get("order").and_then(|v| v.as_str())
+                sort.get("order").and_then(|v| v.as_str()),
             ) {
                 self.sort = Some(Sort::new(ci, order));
             }

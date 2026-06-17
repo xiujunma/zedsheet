@@ -62,14 +62,22 @@ impl Table {
     /// First and last data-body row. The body sits between the header and
     /// the totals row; a header-only table yields `None`.
     pub fn data_rows(&self) -> Option<(usize, usize)> {
-        let last = if self.totals_row { self.eri.checked_sub(1)? } else { self.eri };
+        let last = if self.totals_row {
+            self.eri.checked_sub(1)?
+        } else {
+            self.eri
+        };
         (last > self.sri).then_some((self.sri + 1, last))
     }
 
     /// The last row typing below which should auto-expand the table (the
     /// data body's end — a totals row doesn't move the growth edge).
     pub fn growth_row(&self) -> usize {
-        if self.totals_row { self.eri.saturating_sub(1) } else { self.eri }
+        if self.totals_row {
+            self.eri.saturating_sub(1)
+        } else {
+            self.eri
+        }
     }
 }
 
@@ -77,7 +85,11 @@ impl Table {
 /// and outline groups shift). An insert inside a table grows it.
 pub fn shift_tables_for_insert(tables: &mut [Table], is_row: bool, at: usize, n: usize) {
     for t in tables.iter_mut() {
-        let (start, end) = if is_row { (&mut t.sri, &mut t.eri) } else { (&mut t.sci, &mut t.eci) };
+        let (start, end) = if is_row {
+            (&mut t.sri, &mut t.eri)
+        } else {
+            (&mut t.sci, &mut t.eci)
+        };
         if at <= *start {
             *start += n;
             *end += n;
@@ -91,7 +103,11 @@ pub fn shift_tables_for_insert(tables: &mut [Table], is_row: bool, at: usize, n:
 /// disappears entirely is removed.
 pub fn shift_tables_for_delete(tables: &mut Vec<Table>, is_row: bool, at: usize) {
     tables.retain_mut(|t| {
-        let (start, end) = if is_row { (&mut t.sri, &mut t.eri) } else { (&mut t.sci, &mut t.eci) };
+        let (start, end) = if is_row {
+            (&mut t.sri, &mut t.eri)
+        } else {
+            (&mut t.sci, &mut t.eci)
+        };
         if at < *start {
             *start -= 1;
             *end -= 1;

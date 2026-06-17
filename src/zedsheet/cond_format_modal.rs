@@ -3,12 +3,12 @@
 //! Validation modal (issue #9): mounted hidden at root, opened from the
 //! context menu via a shared open-handle.
 
-use wasm_bindgen::JsCast;
-use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
-use crate::component::element::Element;
-use crate::core::cond_format::CondRule;
 #[allow(unused_imports)]
 use super::*;
+use crate::component::element::Element;
+use crate::core::cond_format::CondRule;
+use wasm_bindgen::JsCast;
+use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -113,7 +113,9 @@ pub(crate) fn cond_format_modal_html() -> String {
 
 /// Re-render the existing-rules list inside the dialog.
 fn render_rules_list(modal: &web_sys::Element, renderer: &SharedRenderer) {
-    let Ok(Some(list)) = modal.query_selector(".zs-cf-list") else { return };
+    let Ok(Some(list)) = modal.query_selector(".zs-cf-list") else {
+        return;
+    };
     let rules: Vec<CondRule> = renderer.borrow().data.cond_formats.clone();
     if rules.is_empty() {
         list.set_inner_html("<div style=\"color:#999;padding:2px 0;\">No rules yet.</div>");
@@ -133,9 +135,7 @@ fn render_rules_list(modal: &web_sys::Element, renderer: &SharedRenderer) {
             ),
             "icons" => format!("{} ({})", op_label(&r.op), esc(&r.v1)),
             "top" | "bottom" => format!("{} {}", op_label(&r.op), esc(&r.v1)),
-            "databar" | "above-avg" | "below-avg" | "dup" | "unique" => {
-                op_label(&r.op).to_string()
-            }
+            "databar" | "above-avg" | "below-avg" | "dup" | "unique" => op_label(&r.op).to_string(),
             _ => format!("{} {}", op_label(&r.op), esc(&r.v1)),
         };
         let swatch = r
@@ -285,7 +285,9 @@ pub(crate) fn wire_cond_format_modal(
     let mut el: Element = modal.into();
     el.add_event_listener("click", move |event: web_sys::Event| {
         let Some(target) = event.target() else { return };
-        let Ok(elx) = target.dyn_into::<web_sys::Element>() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
         let val = |sel: &str| -> String {
             modal_node
                 .query_selector(sel)
@@ -296,7 +298,12 @@ pub(crate) fn wire_cond_format_modal(
                 .unwrap_or_default()
         };
 
-        if elx.closest(".zs-cf-close, .zs-cf-done").ok().flatten().is_some() {
+        if elx
+            .closest(".zs-cf-close, .zs-cf-done")
+            .ok()
+            .flatten()
+            .is_some()
+        {
             let _ = modal_node
                 .unchecked_ref::<HtmlElement>()
                 .style()
@@ -374,10 +381,22 @@ pub(crate) fn wire_cond_format_modal(
                 range,
                 op,
                 v1: if uses_v1 { v1 } else { String::new() },
-                v2: if uses_v2 { val(".zs-cf-v2") } else { String::new() },
-                v3: if uses_v3 { val(".zs-cf-v3") } else { String::new() },
-                bgcolor: (!no_style).then(|| val(".zs-cf-bg")).filter(|s| !s.is_empty()),
-                color: (!no_style && !bar).then(|| val(".zs-cf-color")).filter(|s| !s.is_empty()),
+                v2: if uses_v2 {
+                    val(".zs-cf-v2")
+                } else {
+                    String::new()
+                },
+                v3: if uses_v3 {
+                    val(".zs-cf-v3")
+                } else {
+                    String::new()
+                },
+                bgcolor: (!no_style)
+                    .then(|| val(".zs-cf-bg"))
+                    .filter(|s| !s.is_empty()),
+                color: (!no_style && !bar)
+                    .then(|| val(".zs-cf-color"))
+                    .filter(|s| !s.is_empty()),
                 bold: bold && !no_style && !bar,
             };
             // A rule with an unparsable range can never match — reject it

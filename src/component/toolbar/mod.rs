@@ -1,4 +1,4 @@
-use crate::component::element::{Element, h};
+use crate::component::element::{h, Element};
 use crate::config::CSS_PREFIX;
 
 #[derive(Debug, Clone)]
@@ -188,7 +188,10 @@ impl Default for Toolbar {
 /// Whether a toolbar icon button opens a dropdown menu (so it should show a
 /// down-caret). The format/font/fontsize dropdowns render their own caret.
 fn is_dropdown_action(action: &str) -> bool {
-    matches!(action, "halign" | "valign" | "freeze" | "borders" | "formula")
+    matches!(
+        action,
+        "halign" | "valign" | "freeze" | "borders" | "formula"
+    )
 }
 
 /// Human-readable tooltip text for a toolbar button's `data-action`.

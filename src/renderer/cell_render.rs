@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
-use std::f64::consts::PI;
-use regex::Regex;
 use crate::renderer::canvas::Canvas;
-use crate::renderer::table_renderer::{Align, BorderLine, Cell, Rect, Style, TextLineType, VerticalAlign};
+use crate::renderer::table_renderer::{
+    Align, BorderLine, Cell, Rect, Style, TextLineType, VerticalAlign,
+};
+use regex::Regex;
+use std::f64::consts::PI;
 
 use super::table_renderer::BorderLineStyle;
 
@@ -11,28 +13,26 @@ use super::table_renderer::BorderLineStyle;
 pub struct TextLine {
     pub width: f64,
     pub length: usize,
-    pub start: usize
+    pub start: usize,
 }
 
 pub fn text_x(align: &Align, width: f64, padding: f64) -> f64 {
     return match align {
-        Align::Left => {
-            padding
-        },
-        Align::Center => {
-            width / 2_f64
-        },
-        Align::Right => {
-            width - padding
-        }
-    }
+        Align::Left => padding,
+        Align::Center => width / 2_f64,
+        Align::Right => width - padding,
+    };
 }
 
-pub fn text_y(align: VerticalAlign, height: f64, text_height: f64, font_height: f64, padding: f64) -> f64 {
+pub fn text_y(
+    align: VerticalAlign,
+    height: f64,
+    text_height: f64,
+    font_height: f64,
+    padding: f64,
+) -> f64 {
     return match align {
-        VerticalAlign::Top => {
-            padding
-        },
+        VerticalAlign::Top => padding,
         VerticalAlign::Middle => {
             let y = height / 2_f64 - font_height / 2_f64;
             let min_height = font_height / 2_f64 + padding;
@@ -41,14 +41,20 @@ pub fn text_y(align: VerticalAlign, height: f64, text_height: f64, font_height: 
             } else {
                 y
             }
-        },
-        VerticalAlign::Bottom => {
-            height - padding - text_height
         }
-    }
+        VerticalAlign::Bottom => height - padding - text_height,
+    };
 }
 
-pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: VerticalAlign, x: f64, y: f64, w: f64, h: f64) -> (f64, f64, f64, f64) {
+pub fn text_line(
+    text_line_type: TextLineType,
+    align: Align,
+    vertical_align: VerticalAlign,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> (f64, f64, f64, f64) {
     let mut ty = 0f64;
     if text_line_type == TextLineType::Underline {
         if vertical_align == VerticalAlign::Top {
@@ -72,7 +78,7 @@ pub fn text_line(text_line_type: TextLineType, align: Align, vertical_align: Ver
         tx = w
     }
 
-    return (x - tx, y - ty, x - tx + w, y - ty)
+    return (x - tx, y - ty, x - tx + w, y - ty);
 }
 
 pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String {
@@ -88,26 +94,30 @@ pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String 
     format!("{} {}px {}", font, size, family)
 }
 
-pub fn cell_border_render(canvas: &Canvas, rect: &Rect, border_line: &BorderLine, auto_align: Option<bool>) {
-    canvas.save()
-        .begin_path()
-        .translate(rect.x, rect.y);
+pub fn cell_border_render(
+    canvas: &Canvas,
+    rect: &Rect,
+    border_line: &BorderLine,
+    auto_align: Option<bool>,
+) {
+    canvas.save().begin_path().translate(rect.x, rect.y);
 
     let line_rects = |index: usize, offset: f64| -> (f64, f64, f64, f64) {
         let array = vec![
-            ( 0f64 - offset, 0f64, rect.width + offset, 0f64),
+            (0f64 - offset, 0f64, rect.width + offset, 0f64),
             (rect.width, 0f64, rect.width, rect.height),
             (0f64 - offset, rect.height, rect.width + offset, rect.height),
-            (0f64, 0f64, 0f64, rect.height)
+            (0f64, 0f64, 0f64, rect.height),
         ];
         array[index]
     };
 
     let directions = vec![
-        border_line.top.clone(), 
-        border_line.right.clone(), 
-        border_line.bottom.clone(), 
-        border_line.left.clone()];
+        border_line.top.clone(),
+        border_line.right.clone(),
+        border_line.bottom.clone(),
+        border_line.left.clone(),
+    ];
 
     for (i, it) in directions.into_iter().enumerate() {
         match it {
@@ -138,18 +148,24 @@ pub fn cell_border_render(canvas: &Canvas, rect: &Rect, border_line: &BorderLine
                     .set_line_width(line_width)
                     .set_line_dash(&line_dash)
                     .line(rects.0, rects.1, rects.2, rects.3);
-            },
+            }
             _ => {}
         }
     }
     canvas.restore();
-
 }
 
-pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Style, cell_renderer: R, formatter: F)
-    where R: Fn(&Canvas, &Rect, &Cell, &str) -> bool + 'static,
-          F: Fn(&Cell) -> String + 'static 
-    {
+pub fn cell_render<R, F>(
+    canvas: &Canvas,
+    cell: &Cell,
+    rect: &Rect,
+    style: &Style,
+    cell_renderer: R,
+    formatter: F,
+) where
+    R: Fn(&Canvas, &Rect, &Cell, &str) -> bool + 'static,
+    F: Fn(&Cell) -> String + 'static,
+{
     let text = formatter(cell);
 
     canvas.save().begin_path().translate(rect.x, rect.y);
@@ -159,17 +175,17 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Styl
     match &style.bgcolor {
         Some(bgcolor) => {
             canvas.set_fill_style(bgcolor);
-        },
+        }
         _ => {}
     }
 
     match style.rotation {
         Some(rotation) => {
-            canvas.rotate(rotation * ( PI / 180_f64));
-        },
+            canvas.rotate(rotation * (PI / 180_f64));
+        }
         _ => {}
     }
-    
+
     canvas.save();
     if !cell_renderer(canvas, rect, cell, text.as_str()) {
         canvas.restore();
@@ -185,16 +201,20 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Styl
             .begin_path()
             .set_text_align(style.align.to_string().as_str())
             .set_text_baseline(style.valign.to_string().as_str())
-            .set_font(font_string(&style.font_family, style.font_size as f64, style.italic, style.bold).as_str())
+            .set_font(
+                font_string(
+                    &style.font_family,
+                    style.font_size as f64,
+                    style.italic,
+                    style.bold,
+                )
+                .as_str(),
+            )
             .set_fill_style(style.color.as_str());
 
         let (xp, yp) = match style.padding {
-            Some(padding) => {
-                padding
-            },
-            _ => {
-                (5f64, 5f64)
-            }
+            Some(padding) => padding,
+            _ => (5f64, 5f64),
         };
 
         let tx = text_x(&style.align, rect.width.clone(), xp);
@@ -209,7 +229,7 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Styl
                 let mut text_line = TextLine {
                     width: 0f64,
                     length: 0,
-                    start: 0
+                    start: 0,
                 };
 
                 for i in 0..it.len() {
@@ -218,7 +238,7 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Styl
                         text_line = TextLine {
                             width: 0f64,
                             length: 0,
-                            start: i
+                            start: i,
                         }
                     }
                     text_line.length += 1;
@@ -245,13 +265,27 @@ pub fn cell_render<R, F>(canvas: &Canvas, cell: &Cell, rect: &Rect, style: &Styl
             line_types.push(TextLineType::StrikeThrough);
         }
 
-        let ty = text_y(style.valign.clone(), rect.height.clone(), text_height, font_height, yp);
+        let ty = text_y(
+            style.valign.clone(),
+            rect.height.clone(),
+            text_height,
+            font_height,
+            yp,
+        );
 
         for it in ntxts {
             let text_width = canvas.measure_text_width(it);
             canvas.fill_text(it, tx, ty, None);
             for line_type in line_types.clone() {
-                let (x1, y1, x2, y2) = text_line(line_type, style.align.clone(), style.valign.clone(), tx, ty, text_width, font_height);
+                let (x1, y1, x2, y2) = text_line(
+                    line_type,
+                    style.align.clone(),
+                    style.valign.clone(),
+                    tx,
+                    ty,
+                    text_width,
+                    font_height,
+                );
                 canvas.line(x1, y1, x2, y2);
             }
         }

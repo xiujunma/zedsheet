@@ -198,7 +198,10 @@ mod tests {
         d.get_cell_or_new(0, 0).merge = Some((0, 2));
         let html = to_html(&d, &range(0, 1, 0, 2), 1);
         assert!(html.contains("colspan=\"2\" rowspan=\"1\""), "got: {html}");
-        assert!(html.contains(">merged</td>"), "content comes from the origin");
+        assert!(
+            html.contains(">merged</td>"),
+            "content comes from the origin"
+        );
         assert_eq!(html.matches("<td").count(), 1);
     }
 }

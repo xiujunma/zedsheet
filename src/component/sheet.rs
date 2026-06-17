@@ -31,14 +31,24 @@ pub struct Sheet {
 impl Sheet {
     pub fn new(width: f64, height: f64) -> Self {
         Sheet {
-            state: SheetState { width, height, scroll_x: 0f64, scroll_y: 0f64 },
+            state: SheetState {
+                width,
+                height,
+                scroll_x: 0f64,
+                scroll_y: 0f64,
+            },
             data: DataProxy::new("sheet1"),
         }
     }
 
     pub fn with_data(data: DataProxy, width: f64, height: f64) -> Self {
         Sheet {
-            state: SheetState { width, height, scroll_x: 0f64, scroll_y: 0f64 },
+            state: SheetState {
+                width,
+                height,
+                scroll_x: 0f64,
+                scroll_y: 0f64,
+            },
             data,
         }
     }

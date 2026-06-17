@@ -1,10 +1,10 @@
+use crate::core::cell_range::CellRange;
+use crate::renderer::alphabets::xy2expr;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::OnceLock;
-use regex::Regex;
-use crate::core::cell_range::CellRange;
-use crate::renderer::alphabets::xy2expr;
-use serde::{Serialize, Deserialize};
 
 /// Phone validator pattern, compiled once.
 fn phone_re() -> &'static Regex {
@@ -96,7 +96,11 @@ impl Validator {
                             let in_range = v1 >= min && v1 <= max;
                             return (
                                 in_range,
-                                if in_range { String::new() } else { format!("Between {} and {}", min, max) },
+                                if in_range {
+                                    String::new()
+                                } else {
+                                    format!("Between {} and {}", min, max)
+                                },
                             );
                         }
                     }
@@ -111,34 +115,92 @@ impl Validator {
                             let out_of_range = v1 < min || v1 > max;
                             return (
                                 out_of_range,
-                                if out_of_range { String::new() } else { format!("Not between {} and {}", min, max) },
+                                if out_of_range {
+                                    String::new()
+                                } else {
+                                    format!("Not between {} and {}", min, max)
+                                },
                             );
                         }
                     }
                     return (false, "Invalid validator value".to_string());
                 }
                 "eq" => match self.value.trim().parse::<f64>().ok() {
-                    Some(val) => return (v1 == val, if v1 == val { String::new() } else { format!("Must equal {}", self.value) }),
+                    Some(val) => {
+                        return (
+                            v1 == val,
+                            if v1 == val {
+                                String::new()
+                            } else {
+                                format!("Must equal {}", self.value)
+                            },
+                        )
+                    }
                     None => return (false, "Invalid validator value".to_string()),
                 },
                 "neq" => match self.value.trim().parse::<f64>().ok() {
-                    Some(val) => return (v1 != val, if v1 != val { String::new() } else { format!("Must not equal {}", self.value) }),
+                    Some(val) => {
+                        return (
+                            v1 != val,
+                            if v1 != val {
+                                String::new()
+                            } else {
+                                format!("Must not equal {}", self.value)
+                            },
+                        )
+                    }
                     None => return (false, "Invalid validator value".to_string()),
                 },
                 "lt" => match self.value.trim().parse::<f64>().ok() {
-                    Some(val) => return (v1 < val, if v1 < val { String::new() } else { format!("Must be less than {}", self.value) }),
+                    Some(val) => {
+                        return (
+                            v1 < val,
+                            if v1 < val {
+                                String::new()
+                            } else {
+                                format!("Must be less than {}", self.value)
+                            },
+                        )
+                    }
                     None => return (false, "Invalid validator value".to_string()),
                 },
                 "lte" => match self.value.trim().parse::<f64>().ok() {
-                    Some(val) => return (v1 <= val, if v1 <= val { String::new() } else { format!("Must be less than or equal to {}", self.value) }),
+                    Some(val) => {
+                        return (
+                            v1 <= val,
+                            if v1 <= val {
+                                String::new()
+                            } else {
+                                format!("Must be less than or equal to {}", self.value)
+                            },
+                        )
+                    }
                     None => return (false, "Invalid validator value".to_string()),
                 },
                 "gt" => match self.value.trim().parse::<f64>().ok() {
-                    Some(val) => return (v1 > val, if v1 > val { String::new() } else { format!("Must be greater than {}", self.value) }),
+                    Some(val) => {
+                        return (
+                            v1 > val,
+                            if v1 > val {
+                                String::new()
+                            } else {
+                                format!("Must be greater than {}", self.value)
+                            },
+                        )
+                    }
                     None => return (false, "Invalid validator value".to_string()),
                 },
                 "gte" => match self.value.trim().parse::<f64>().ok() {
-                    Some(val) => return (v1 >= val, if v1 >= val { String::new() } else { format!("Must be greater than or equal to {}", self.value) }),
+                    Some(val) => {
+                        return (
+                            v1 >= val,
+                            if v1 >= val {
+                                String::new()
+                            } else {
+                                format!("Must be greater than or equal to {}", self.value)
+                            },
+                        )
+                    }
                     None => return (false, "Invalid validator value".to_string()),
                 },
                 _ => {}
@@ -366,12 +428,15 @@ impl Validations {
         if let Some(v) = self.get_by_validator(&validator) {
             v.add_ref(ref_);
         } else {
-            self.validations.push(Validation::new(mode, vec![ref_.to_string()], validator));
+            self.validations
+                .push(Validation::new(mode, vec![ref_.to_string()], validator));
         }
     }
 
     pub fn get_by_validator(&mut self, validator: &Validator) -> Option<&mut Validation> {
-        self.validations.iter_mut().find(|v| v.validator.equals(validator))
+        self.validations
+            .iter_mut()
+            .find(|v| v.validator.equals(validator))
     }
 
     pub fn get(&self, ri: usize, ci: usize) -> Option<&Validation> {
@@ -389,330 +454,407 @@ impl Validations {
     }
 
     pub fn get_data(&self) -> Vec<Validation> {
-        self.validations.iter().filter(|v| !v.refs.is_empty()).cloned().collect()
+        self.validations
+            .iter()
+            .filter(|v| !v.refs.is_empty())
+            .cloned()
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-        use super::*;
+    use super::*;
 
-        // --- Validator basics ---
+    // --- Validator basics ---
 
-        #[test]
-        fn validator_new_round_trips() {
-            let v = Validator::new("list", true, "a,b,c", "eq");
-            assert_eq!(v.type_, "list");
-            assert_eq!(v.value, "a,b,c");
-            assert!(v.required);
-            assert_eq!(v.operator, "eq");
-        }
-
-        #[test]
-        fn validator_equals_distinguishes_every_field() {
-            let base = Validator::new("list", true, "a,b", "eq");
-            assert!(base.equals(&Validator::new("list", true, "a,b", "eq")));
-            assert!(!base.equals(&Validator::new("number", true, "a,b", "eq")), "type differs");
-            assert!(!base.equals(&Validator::new("list", false, "a,b", "eq")), "required differs");
-            assert!(!base.equals(&Validator::new("list", true, "a", "eq")), "value differs");
-            assert!(!base.equals(&Validator::new("list", true, "a,b", "neq")), "operator differs");
-        }
-
-        // --- required ---
-
-        #[test]
-        fn validate_required_empty() {
-            let v = Validator::new("list", true, "a", "");
-            assert_eq!(v.validate(""), (false, "Required field".to_string()));
-        }
-
-        #[test]
-        fn validate_required_whitespace_only() {
-            let v = Validator::new("list", true, "a", "");
-            assert_eq!(v.validate("   "), (false, "Required field".to_string()));
-        }
-
-        #[test]
-        fn validate_optional_empty_passes() {
-            let v = Validator::new("list", false, "a", "");
-            assert_eq!(v.validate(""), (true, String::new()));
-        }
-
-        // --- list ---
-
-        #[test]
-        fn validate_list_exact_match() {
-            let v = Validator::new("list", false, "a,b,c", "");
-            assert_eq!(v.validate("b"), (true, String::new()));
-        }
-
-        #[test]
-        fn validate_list_trimmed_match() {
-            // CSV item has surrounding whitespace; input also has surrounding whitespace.
-            // Both are trimmed before comparison (Excel behavior).
-            let v = Validator::new("list", false, "a, b ,c", "");
-            assert_eq!(v.validate("  b  "), (true, String::new()));
-        }
-
-        #[test]
-        fn validate_list_case_insensitive() {
-            let v = Validator::new("list", false, "Yes,No,Maybe", "");
-            assert_eq!(v.validate("yes"), (true, String::new()));
-            assert_eq!(v.validate("MAYBE"), (true, String::new()));
-        }
-
-        #[test]
-        fn validate_list_miss() {
-            let v = Validator::new("list", false, "a,b,c", "");
-            assert_eq!(v.validate("d"), (false, "Value not in list".to_string()));
-        }
-
-        #[test]
-        fn validate_list_single_value() {
-            let v = Validator::new("list", false, "only", "");
-            assert_eq!(v.validate("only"), (true, String::new()));
-            assert_eq!(v.validate("other"), (false, "Value not in list".to_string()));
-        }
-
-        // --- phone / email ---
-
-        #[test]
-        fn validate_phone_valid() {
-            let v = Validator::new("phone", false, "", "");
-            assert_eq!(v.validate("13800000000"), (true, String::new()));
-        }
-
-        #[test]
-        fn validate_phone_too_short() {
-            let v = Validator::new("phone", false, "", "");
-            assert_eq!(v.validate("12345"), (false, "Invalid phone format".to_string()));
-        }
-
-        #[test]
-        fn validate_phone_starts_with_zero() {
-            let v = Validator::new("phone", false, "", "");
-            assert_eq!(v.validate("01234567890"), (false, "Invalid phone format".to_string()));
-        }
-
-        #[test]
-        fn validate_email_valid() {
-            let v = Validator::new("email", false, "", "");
-            assert_eq!(v.validate("a.b+c@sub.example.co"), (true, String::new()));
-        }
-
-        #[test]
-        fn validate_email_invalid() {
-            let v = Validator::new("email", false, "", "");
-            assert_eq!(v.validate("not-an-email"), (false, "Invalid email format".to_string()));
-        }
-
-        #[test]
-        fn validate_email_redos_input_terminates() {
-            // `"a."` repeated with no `@` triggered catastrophic backtracking in
-            // the old nested-quantifier pattern (this test would hang). The
-            // linear pattern rejects it instantly.
-            let v = Validator::new("email", false, "", "");
-            let evil = format!("{}!", "a.".repeat(30));
-            assert_eq!(v.validate(&evil).0, false);
-        }
-
-        // --- numeric operators ---
-
-        #[test]
-        fn validate_eq_numeric_match() {
-            let v = Validator::new("number", false, "5", "eq");
-            assert_eq!(v.validate("5"), (true, String::new()));
-            assert_eq!(v.validate("4"), (false, "Must equal 5".to_string()));
-        }
-
-        #[test]
-        fn validate_neq_numeric() {
-            let v = Validator::new("number", false, "5", "neq");
-            assert_eq!(v.validate("4"), (true, String::new()));
-            assert_eq!(v.validate("5"), (false, "Must not equal 5".to_string()));
-        }
-
-        #[test]
-        fn validate_lt_lte_gt_gte() {
-            let lt = Validator::new("number", false, "10", "lt");
-            assert_eq!(lt.validate("9"), (true, String::new()));
-            assert_eq!(lt.validate("10"), (false, "Must be less than 10".to_string()));
-
-            let lte = Validator::new("number", false, "10", "lte");
-            assert_eq!(lte.validate("10"), (true, String::new()));
-            assert_eq!(lte.validate("11"), (false, "Must be less than or equal to 10".to_string()));
-
-            let gt = Validator::new("number", false, "10", "gt");
-            assert_eq!(gt.validate("11"), (true, String::new()));
-            assert_eq!(gt.validate("10"), (false, "Must be greater than 10".to_string()));
-
-            let gte = Validator::new("number", false, "10", "gte");
-            assert_eq!(gte.validate("10"), (true, String::new()));
-            assert_eq!(gte.validate("9"), (false, "Must be greater than or equal to 10".to_string()));
-        }
-
-        #[test]
-        fn validate_be_inclusive() {
-            let v = Validator::new("number", false, "1,10", "be");
-            assert_eq!(v.validate("1"), (true, String::new()));
-            assert_eq!(v.validate("5"), (true, String::new()));
-            assert_eq!(v.validate("10"), (true, String::new()));
-            assert_eq!(v.validate("0"), (false, "Between 1 and 10".to_string()));
-            assert_eq!(v.validate("11"), (false, "Between 1 and 10".to_string()));
-        }
-
-        #[test]
-        fn validate_nbe_exclusive() {
-            let v = Validator::new("number", false, "1,10", "nbe");
-            assert_eq!(v.validate("0"), (true, String::new()));
-            assert_eq!(v.validate("11"), (true, String::new()));
-            assert_eq!(v.validate("5"), (false, "Not between 1 and 10".to_string()));
-        }
-
-        // --- post-fix: numeric validation rejects non-numeric input ---
-
-        #[test]
-        fn validate_eq_rejects_non_numeric_input() {
-            // Pre-fix bug: parse_value silently coerced to 0.0 and "abc" == 0 was
-            // a false positive. Post-fix, non-numeric input fails.
-            let v = Validator::new("number", false, "5", "eq");
-            let (ok, msg) = v.validate("abc");
-            assert!(!ok, "non-numeric input must fail");
-            assert!(!msg.is_empty(), "must surface an error message");
-        }
-
-        #[test]
-        fn validate_be_rejects_non_numeric_input() {
-            let v = Validator::new("number", false, "1,10", "be");
-            let (ok, _) = v.validate("not a number");
-            assert!(!ok);
-        }
-
-        // --- text-length: operators measure the length, not the value ---
-
-        #[test]
-        fn text_length_measures_length_not_numeric_value() {
-            let v = Validator::new("text-length", false, "5", "lte");
-            assert!(v.validate("abc").0, "len 3 ≤ 5 should pass");
-            assert!(v.validate("12345").0, "len 5 ≤ 5 (measured, not parsed as 12345)");
-            assert!(!v.validate("abcdefg").0, "len 7 > 5 should fail");
-            assert!(!v.validate("123456").0, "len 6 > 5 (length, not numeric value)");
-        }
-
-        // --- Validation::includes / add_ref / remove_ref ---
-
-        #[test]
-        fn validation_includes_single_cell_and_range() {
-            let v = Validation::new("cell", vec!["A1".into(), "C3:E5".into()], Validator::new("list", false, "a", ""));
-            assert!(v.includes(0, 0));
-            assert!(!v.includes(0, 1));
-            assert!(v.includes(2, 2));
-            assert!(v.includes(4, 4));
-            assert!(!v.includes(5, 5));
-        }
-
-        #[test]
-        fn validation_add_ref_intersect_strip() {
-            // add_ref("A1") then add_ref("A1:B2") leaves a single ref A1:B2.
-            let mut v = Validation::new("cell", vec!["A1".into()], Validator::new("list", false, "a", ""));
-            v.add_ref("A1:B2");
-            assert_eq!(v.refs, vec!["A1:B2".to_string()]);
-        }
-
-        #[test]
-        fn validation_remove_ref_drops_overlapping() {
-            let mut v = Validation::new("cell", vec!["A1:B3".into(), "C1".into()], Validator::new("list", false, "a", ""));
-            let cr = CellRange::from_str("A1:B3").unwrap();
-            v.remove_ref(&cr);
-            assert_eq!(v.refs, vec!["C1".to_string()]);
-        }
-
-        // --- Validations container ---
-
-        #[test]
-        fn validations_add_groups_same_validator() {
-            let mut vs = Validations::new();
-            let v = Validator::new("list", false, "a,b", "");
-            vs.add("cell", "A1", v.clone());
-            vs.add("cell", "B5", v.clone());
-            // Both refs collapse into one Validation entry.
-            assert_eq!(vs.validations.len(), 1);
-            assert_eq!(vs.validations[0].refs, vec!["A1".to_string(), "B5".to_string()]);
-        }
-
-        #[test]
-        fn validations_get_returns_matching() {
-            let mut vs = Validations::new();
-            vs.add("cell", "A1", Validator::new("list", false, "a", ""));
-            vs.add("cell", "B5", Validator::new("list", false, "b", ""));
-            assert!(vs.get(0, 0).is_some());
-            assert!(vs.get(4, 1).is_some());
-            assert!(vs.get(10, 10).is_none());
-        }
-
-        #[test]
-        fn validations_validate_populates_error_then_clears() {
-            let mut vs = Validations::new();
-            vs.add("cell", "A1", Validator::new("list", false, "a,b", ""));
-            // First write: invalid value.
-            let ok = vs.validate(0, 0, "z");
-            assert!(!ok, "validate() should return false on invalid input");
-            assert!(vs.get_error(0, 0).is_some(), "invalid input should set an error");
-            // Now a valid value clears it.
-            let ok2 = vs.validate(0, 0, "a");
-            assert!(ok2, "validate() should return true on valid input");
-            assert!(vs.get_error(0, 0).is_none(), "valid input should clear the error");
-        }
-
-        #[test]
-        fn validations_remove_strips_overlapping_refs() {
-            let mut vs = Validations::new();
-            let v = Validator::new("list", false, "a,b", "");
-            vs.add("cell", "A1:B3", v.clone());
-            vs.add("cell", "C1", v.clone());
-            // After remove A1:B2, only B3 + C1 remain in the first validation.
-            let cr = CellRange::from_str("A1:B2").unwrap();
-            vs.remove(&cr);
-            assert!(vs.get(0, 0).is_none(), "A1 is in A1:B2 and should be cleared");
-            assert!(vs.get(1, 1).is_none(), "B2 is in A1:B2 and should be cleared");
-            assert!(vs.get(2, 1).is_some(), "B3 is still covered by A1:B3");
-            assert!(vs.get(0, 2).is_some(), "C1 is still covered");
-        }
-
-        #[test]
-        fn validations_get_data_drops_empty_refs() {
-            let mut vs = Validations::new();
-            let v = Validator::new("list", false, "a,b", "");
-            vs.add("cell", "A1", v.clone());
-            // Remove the only ref — the validation becomes empty.
-            let cr = CellRange::from_str("A1").unwrap();
-            vs.remove(&cr);
-            // get_data() filters empty-ref validations so JSON doesn't carry dead entries.
-            assert!(vs.get_data().is_empty());
-        }
-
-        #[test]
-        fn validations_set_data_round_trip() {
-            let mut vs = Validations::new();
-            vs.add("cell", "A1", Validator::new("list", false, "a,b", ""));
-            vs.add("cell", "C3:E5", Validator::new("number", false, "1,10", "be"));
-            let serialized = vs.get_data();
-            let mut vs2 = Validations::new();
-            vs2.set_data(serialized);
-            // Order is preserved.
-            assert_eq!(vs2.validations.len(), 2);
-            assert!(vs2.get(0, 0).is_some());
-            assert!(vs2.get(4, 4).is_some());
-        }
-
-        #[test]
-        fn validations_validate_returns_bool_meaning() {
-            // Post-fix: validate() now returns true iff the value is valid (errors cleared)
-            // or there is no validator; false iff the value is invalid.
-            let mut vs = Validations::new();
-            vs.add("cell", "A1", Validator::new("list", false, "a,b", ""));
-            assert!(!vs.validate(0, 0, "z"), "invalid input → false");
-            assert!(vs.validate(0, 0, "a"), "valid input → true");
-            assert!(vs.validate(0, 0, ""), "empty input on optional rule → true");
-        }
+    #[test]
+    fn validator_new_round_trips() {
+        let v = Validator::new("list", true, "a,b,c", "eq");
+        assert_eq!(v.type_, "list");
+        assert_eq!(v.value, "a,b,c");
+        assert!(v.required);
+        assert_eq!(v.operator, "eq");
     }
+
+    #[test]
+    fn validator_equals_distinguishes_every_field() {
+        let base = Validator::new("list", true, "a,b", "eq");
+        assert!(base.equals(&Validator::new("list", true, "a,b", "eq")));
+        assert!(
+            !base.equals(&Validator::new("number", true, "a,b", "eq")),
+            "type differs"
+        );
+        assert!(
+            !base.equals(&Validator::new("list", false, "a,b", "eq")),
+            "required differs"
+        );
+        assert!(
+            !base.equals(&Validator::new("list", true, "a", "eq")),
+            "value differs"
+        );
+        assert!(
+            !base.equals(&Validator::new("list", true, "a,b", "neq")),
+            "operator differs"
+        );
+    }
+
+    // --- required ---
+
+    #[test]
+    fn validate_required_empty() {
+        let v = Validator::new("list", true, "a", "");
+        assert_eq!(v.validate(""), (false, "Required field".to_string()));
+    }
+
+    #[test]
+    fn validate_required_whitespace_only() {
+        let v = Validator::new("list", true, "a", "");
+        assert_eq!(v.validate("   "), (false, "Required field".to_string()));
+    }
+
+    #[test]
+    fn validate_optional_empty_passes() {
+        let v = Validator::new("list", false, "a", "");
+        assert_eq!(v.validate(""), (true, String::new()));
+    }
+
+    // --- list ---
+
+    #[test]
+    fn validate_list_exact_match() {
+        let v = Validator::new("list", false, "a,b,c", "");
+        assert_eq!(v.validate("b"), (true, String::new()));
+    }
+
+    #[test]
+    fn validate_list_trimmed_match() {
+        // CSV item has surrounding whitespace; input also has surrounding whitespace.
+        // Both are trimmed before comparison (Excel behavior).
+        let v = Validator::new("list", false, "a, b ,c", "");
+        assert_eq!(v.validate("  b  "), (true, String::new()));
+    }
+
+    #[test]
+    fn validate_list_case_insensitive() {
+        let v = Validator::new("list", false, "Yes,No,Maybe", "");
+        assert_eq!(v.validate("yes"), (true, String::new()));
+        assert_eq!(v.validate("MAYBE"), (true, String::new()));
+    }
+
+    #[test]
+    fn validate_list_miss() {
+        let v = Validator::new("list", false, "a,b,c", "");
+        assert_eq!(v.validate("d"), (false, "Value not in list".to_string()));
+    }
+
+    #[test]
+    fn validate_list_single_value() {
+        let v = Validator::new("list", false, "only", "");
+        assert_eq!(v.validate("only"), (true, String::new()));
+        assert_eq!(
+            v.validate("other"),
+            (false, "Value not in list".to_string())
+        );
+    }
+
+    // --- phone / email ---
+
+    #[test]
+    fn validate_phone_valid() {
+        let v = Validator::new("phone", false, "", "");
+        assert_eq!(v.validate("13800000000"), (true, String::new()));
+    }
+
+    #[test]
+    fn validate_phone_too_short() {
+        let v = Validator::new("phone", false, "", "");
+        assert_eq!(
+            v.validate("12345"),
+            (false, "Invalid phone format".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_phone_starts_with_zero() {
+        let v = Validator::new("phone", false, "", "");
+        assert_eq!(
+            v.validate("01234567890"),
+            (false, "Invalid phone format".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_email_valid() {
+        let v = Validator::new("email", false, "", "");
+        assert_eq!(v.validate("a.b+c@sub.example.co"), (true, String::new()));
+    }
+
+    #[test]
+    fn validate_email_invalid() {
+        let v = Validator::new("email", false, "", "");
+        assert_eq!(
+            v.validate("not-an-email"),
+            (false, "Invalid email format".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_email_redos_input_terminates() {
+        // `"a."` repeated with no `@` triggered catastrophic backtracking in
+        // the old nested-quantifier pattern (this test would hang). The
+        // linear pattern rejects it instantly.
+        let v = Validator::new("email", false, "", "");
+        let evil = format!("{}!", "a.".repeat(30));
+        assert_eq!(v.validate(&evil).0, false);
+    }
+
+    // --- numeric operators ---
+
+    #[test]
+    fn validate_eq_numeric_match() {
+        let v = Validator::new("number", false, "5", "eq");
+        assert_eq!(v.validate("5"), (true, String::new()));
+        assert_eq!(v.validate("4"), (false, "Must equal 5".to_string()));
+    }
+
+    #[test]
+    fn validate_neq_numeric() {
+        let v = Validator::new("number", false, "5", "neq");
+        assert_eq!(v.validate("4"), (true, String::new()));
+        assert_eq!(v.validate("5"), (false, "Must not equal 5".to_string()));
+    }
+
+    #[test]
+    fn validate_lt_lte_gt_gte() {
+        let lt = Validator::new("number", false, "10", "lt");
+        assert_eq!(lt.validate("9"), (true, String::new()));
+        assert_eq!(
+            lt.validate("10"),
+            (false, "Must be less than 10".to_string())
+        );
+
+        let lte = Validator::new("number", false, "10", "lte");
+        assert_eq!(lte.validate("10"), (true, String::new()));
+        assert_eq!(
+            lte.validate("11"),
+            (false, "Must be less than or equal to 10".to_string())
+        );
+
+        let gt = Validator::new("number", false, "10", "gt");
+        assert_eq!(gt.validate("11"), (true, String::new()));
+        assert_eq!(
+            gt.validate("10"),
+            (false, "Must be greater than 10".to_string())
+        );
+
+        let gte = Validator::new("number", false, "10", "gte");
+        assert_eq!(gte.validate("10"), (true, String::new()));
+        assert_eq!(
+            gte.validate("9"),
+            (false, "Must be greater than or equal to 10".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_be_inclusive() {
+        let v = Validator::new("number", false, "1,10", "be");
+        assert_eq!(v.validate("1"), (true, String::new()));
+        assert_eq!(v.validate("5"), (true, String::new()));
+        assert_eq!(v.validate("10"), (true, String::new()));
+        assert_eq!(v.validate("0"), (false, "Between 1 and 10".to_string()));
+        assert_eq!(v.validate("11"), (false, "Between 1 and 10".to_string()));
+    }
+
+    #[test]
+    fn validate_nbe_exclusive() {
+        let v = Validator::new("number", false, "1,10", "nbe");
+        assert_eq!(v.validate("0"), (true, String::new()));
+        assert_eq!(v.validate("11"), (true, String::new()));
+        assert_eq!(v.validate("5"), (false, "Not between 1 and 10".to_string()));
+    }
+
+    // --- post-fix: numeric validation rejects non-numeric input ---
+
+    #[test]
+    fn validate_eq_rejects_non_numeric_input() {
+        // Pre-fix bug: parse_value silently coerced to 0.0 and "abc" == 0 was
+        // a false positive. Post-fix, non-numeric input fails.
+        let v = Validator::new("number", false, "5", "eq");
+        let (ok, msg) = v.validate("abc");
+        assert!(!ok, "non-numeric input must fail");
+        assert!(!msg.is_empty(), "must surface an error message");
+    }
+
+    #[test]
+    fn validate_be_rejects_non_numeric_input() {
+        let v = Validator::new("number", false, "1,10", "be");
+        let (ok, _) = v.validate("not a number");
+        assert!(!ok);
+    }
+
+    // --- text-length: operators measure the length, not the value ---
+
+    #[test]
+    fn text_length_measures_length_not_numeric_value() {
+        let v = Validator::new("text-length", false, "5", "lte");
+        assert!(v.validate("abc").0, "len 3 ≤ 5 should pass");
+        assert!(
+            v.validate("12345").0,
+            "len 5 ≤ 5 (measured, not parsed as 12345)"
+        );
+        assert!(!v.validate("abcdefg").0, "len 7 > 5 should fail");
+        assert!(
+            !v.validate("123456").0,
+            "len 6 > 5 (length, not numeric value)"
+        );
+    }
+
+    // --- Validation::includes / add_ref / remove_ref ---
+
+    #[test]
+    fn validation_includes_single_cell_and_range() {
+        let v = Validation::new(
+            "cell",
+            vec!["A1".into(), "C3:E5".into()],
+            Validator::new("list", false, "a", ""),
+        );
+        assert!(v.includes(0, 0));
+        assert!(!v.includes(0, 1));
+        assert!(v.includes(2, 2));
+        assert!(v.includes(4, 4));
+        assert!(!v.includes(5, 5));
+    }
+
+    #[test]
+    fn validation_add_ref_intersect_strip() {
+        // add_ref("A1") then add_ref("A1:B2") leaves a single ref A1:B2.
+        let mut v = Validation::new(
+            "cell",
+            vec!["A1".into()],
+            Validator::new("list", false, "a", ""),
+        );
+        v.add_ref("A1:B2");
+        assert_eq!(v.refs, vec!["A1:B2".to_string()]);
+    }
+
+    #[test]
+    fn validation_remove_ref_drops_overlapping() {
+        let mut v = Validation::new(
+            "cell",
+            vec!["A1:B3".into(), "C1".into()],
+            Validator::new("list", false, "a", ""),
+        );
+        let cr = CellRange::from_str("A1:B3").unwrap();
+        v.remove_ref(&cr);
+        assert_eq!(v.refs, vec!["C1".to_string()]);
+    }
+
+    // --- Validations container ---
+
+    #[test]
+    fn validations_add_groups_same_validator() {
+        let mut vs = Validations::new();
+        let v = Validator::new("list", false, "a,b", "");
+        vs.add("cell", "A1", v.clone());
+        vs.add("cell", "B5", v.clone());
+        // Both refs collapse into one Validation entry.
+        assert_eq!(vs.validations.len(), 1);
+        assert_eq!(
+            vs.validations[0].refs,
+            vec!["A1".to_string(), "B5".to_string()]
+        );
+    }
+
+    #[test]
+    fn validations_get_returns_matching() {
+        let mut vs = Validations::new();
+        vs.add("cell", "A1", Validator::new("list", false, "a", ""));
+        vs.add("cell", "B5", Validator::new("list", false, "b", ""));
+        assert!(vs.get(0, 0).is_some());
+        assert!(vs.get(4, 1).is_some());
+        assert!(vs.get(10, 10).is_none());
+    }
+
+    #[test]
+    fn validations_validate_populates_error_then_clears() {
+        let mut vs = Validations::new();
+        vs.add("cell", "A1", Validator::new("list", false, "a,b", ""));
+        // First write: invalid value.
+        let ok = vs.validate(0, 0, "z");
+        assert!(!ok, "validate() should return false on invalid input");
+        assert!(
+            vs.get_error(0, 0).is_some(),
+            "invalid input should set an error"
+        );
+        // Now a valid value clears it.
+        let ok2 = vs.validate(0, 0, "a");
+        assert!(ok2, "validate() should return true on valid input");
+        assert!(
+            vs.get_error(0, 0).is_none(),
+            "valid input should clear the error"
+        );
+    }
+
+    #[test]
+    fn validations_remove_strips_overlapping_refs() {
+        let mut vs = Validations::new();
+        let v = Validator::new("list", false, "a,b", "");
+        vs.add("cell", "A1:B3", v.clone());
+        vs.add("cell", "C1", v.clone());
+        // After remove A1:B2, only B3 + C1 remain in the first validation.
+        let cr = CellRange::from_str("A1:B2").unwrap();
+        vs.remove(&cr);
+        assert!(
+            vs.get(0, 0).is_none(),
+            "A1 is in A1:B2 and should be cleared"
+        );
+        assert!(
+            vs.get(1, 1).is_none(),
+            "B2 is in A1:B2 and should be cleared"
+        );
+        assert!(vs.get(2, 1).is_some(), "B3 is still covered by A1:B3");
+        assert!(vs.get(0, 2).is_some(), "C1 is still covered");
+    }
+
+    #[test]
+    fn validations_get_data_drops_empty_refs() {
+        let mut vs = Validations::new();
+        let v = Validator::new("list", false, "a,b", "");
+        vs.add("cell", "A1", v.clone());
+        // Remove the only ref — the validation becomes empty.
+        let cr = CellRange::from_str("A1").unwrap();
+        vs.remove(&cr);
+        // get_data() filters empty-ref validations so JSON doesn't carry dead entries.
+        assert!(vs.get_data().is_empty());
+    }
+
+    #[test]
+    fn validations_set_data_round_trip() {
+        let mut vs = Validations::new();
+        vs.add("cell", "A1", Validator::new("list", false, "a,b", ""));
+        vs.add(
+            "cell",
+            "C3:E5",
+            Validator::new("number", false, "1,10", "be"),
+        );
+        let serialized = vs.get_data();
+        let mut vs2 = Validations::new();
+        vs2.set_data(serialized);
+        // Order is preserved.
+        assert_eq!(vs2.validations.len(), 2);
+        assert!(vs2.get(0, 0).is_some());
+        assert!(vs2.get(4, 4).is_some());
+    }
+
+    #[test]
+    fn validations_validate_returns_bool_meaning() {
+        // Post-fix: validate() now returns true iff the value is valid (errors cleared)
+        // or there is no validator; false iff the value is invalid.
+        let mut vs = Validations::new();
+        vs.add("cell", "A1", Validator::new("list", false, "a,b", ""));
+        assert!(!vs.validate(0, 0, "z"), "invalid input → false");
+        assert!(vs.validate(0, 0, "a"), "valid input → true");
+        assert!(vs.validate(0, 0, ""), "empty input on optional rule → true");
+    }
+}

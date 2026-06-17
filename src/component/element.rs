@@ -319,7 +319,9 @@ impl Element {
     pub fn set_top(&mut self, top: f64) {
         if let Some(el) = self.el.take() {
             if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
-                el.style().set_property("top", &format!("{}px", top)).unwrap();
+                el.style()
+                    .set_property("top", &format!("{}px", top))
+                    .unwrap();
             }
             self.el = Some(el);
         }
@@ -329,7 +331,9 @@ impl Element {
     pub fn set_left(&mut self, left: f64) {
         if let Some(el) = self.el.take() {
             if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
-                el.style().set_property("left", &format!("{}px", left)).unwrap();
+                el.style()
+                    .set_property("left", &format!("{}px", left))
+                    .unwrap();
             }
             self.el = Some(el);
         }
@@ -339,7 +343,9 @@ impl Element {
     pub fn set_width(&mut self, width: f64) {
         if let Some(el) = self.el.take() {
             if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
-                el.style().set_property("width", &format!("{}px", width)).unwrap();
+                el.style()
+                    .set_property("width", &format!("{}px", width))
+                    .unwrap();
             }
             self.el = Some(el);
         }
@@ -349,7 +355,9 @@ impl Element {
     pub fn set_height(&mut self, height: f64) {
         if let Some(el) = self.el.take() {
             if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
-                el.style().set_property("height", &format!("{}px", height)).unwrap();
+                el.style()
+                    .set_property("height", &format!("{}px", height))
+                    .unwrap();
             }
             self.el = Some(el);
         }
@@ -369,7 +377,9 @@ impl Element {
     pub fn set_z_index(&mut self, index: i32) {
         if let Some(el) = self.el.take() {
             if let Some(el) = wasm_bindgen::JsCast::dyn_ref::<web_sys::HtmlElement>(&el) {
-                el.style().set_property("z-index", &index.to_string()).unwrap();
+                el.style()
+                    .set_property("z-index", &index.to_string())
+                    .unwrap();
             }
             self.el = Some(el);
         }
@@ -426,9 +436,9 @@ pub fn h(tag: &str, class_name: Option<&str>) -> Element {
     match class_name {
         Some(class_name) => {
             el.set_class_name(class_name);
-        },
+        }
         None => {}
     }
-    
+
     el
 }

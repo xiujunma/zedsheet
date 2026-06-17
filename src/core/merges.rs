@@ -9,9 +9,7 @@ pub struct Merges {
 
 impl Default for Merges {
     fn default() -> Self {
-        Merges {
-            ranges: Vec::new(),
-        }
+        Merges { ranges: Vec::new() }
     }
 }
 
@@ -49,7 +47,12 @@ impl Merges {
 
     pub fn filter_intersects(&self, range: &CellRange) -> Self {
         Merges {
-            ranges: self.ranges.iter().filter(|r| r.intersects(range)).cloned().collect(),
+            ranges: self
+                .ranges
+                .iter()
+                .filter(|r| r.intersects(range))
+                .cloned()
+                .collect(),
         }
     }
 
@@ -65,7 +68,13 @@ impl Merges {
 
     // type: "row" | "column"
     // n: positive for add, negative for delete
-    pub fn shift(&mut self, type_: &str, index: usize, n: isize, cb: impl Fn(usize, usize, isize, isize)) {
+    pub fn shift(
+        &mut self,
+        type_: &str,
+        index: usize,
+        n: isize,
+        cb: impl Fn(usize, usize, isize, isize),
+    ) {
         for range in &mut self.ranges {
             let sri = range.sri;
             let sci = range.sci;

@@ -17,11 +17,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{ClipboardEvent, Element as WebElement, HtmlElement};
 
+use super::{EditingCell, SharedRenderer, SyncFn};
 use crate::component::element::Element;
 use crate::core::clipboard_io::{
     grid_from_rows, nonce_in_html, parse_tsv, to_html, to_tsv, ParsedGrid, RawCell,
 };
-use super::{EditingCell, SharedRenderer, SyncFn};
 
 /// Install the clipboard listeners and make the canvas focusable.
 pub(crate) fn install(
@@ -30,7 +30,9 @@ pub(crate) fn install(
     editing: &EditingCell,
     sync: &SyncFn,
 ) {
-    let Some(canvas) = canvas_el.el.clone() else { return };
+    let Some(canvas) = canvas_el.el.clone() else {
+        return;
+    };
 
     // Make the canvas focusable (without a visible focus ring) so it can be the
     // target of native clipboard events.
@@ -74,12 +76,18 @@ fn install_copy(
         if !grid_is_focused(&canvas, &editing) {
             return; // let the browser handle native copy (editor, host page, …)
         }
-        let Ok(ce) = event.dyn_into::<ClipboardEvent>() else { return };
-        let Some(dt) = ce.clipboard_data() else { return };
+        let Ok(ce) = event.dyn_into::<ClipboardEvent>() else {
+            return;
+        };
+        let Some(dt) = ce.clipboard_data() else {
+            return;
+        };
 
         let payload = {
             let mut r = renderer.borrow_mut();
-            let Some(range) = r.contiguous_selection() else { return };
+            let Some(range) = r.contiguous_selection() else {
+                return;
+            };
             let n = nonce.get().wrapping_add(1);
             nonce.set(n);
             if is_cut {
@@ -93,8 +101,10 @@ fn install_copy(
         let _ = dt.set_data("text/html", &payload.1);
         ce.prevent_default();
     });
-    let _ = document()
-        .add_event_listener_with_callback(if is_cut { "cut" } else { "copy" }, cb.as_ref().unchecked_ref());
+    let _ = document().add_event_listener_with_callback(
+        if is_cut { "cut" } else { "copy" },
+        cb.as_ref().unchecked_ref(),
+    );
     cb.forget();
 }
 
@@ -115,8 +125,12 @@ fn install_paste(
         if !grid_is_focused(&canvas, &editing) {
             return;
         }
-        let Ok(ce) = event.dyn_into::<ClipboardEvent>() else { return };
-        let Some(dt) = ce.clipboard_data() else { return };
+        let Ok(ce) = event.dyn_into::<ClipboardEvent>() else {
+            return;
+        };
+        let Some(dt) = ce.clipboard_data() else {
+            return;
+        };
         let html = dt.get_data("text/html").unwrap_or_default();
         let plain = dt.get_data("text/plain").unwrap_or_default();
 
@@ -183,7 +197,9 @@ fn parse_html_table(html: &str) -> Option<ParsedGrid> {
     // back to plain-text TSV.
     let table = div.query_selector("table").ok().flatten()?;
     let trs = table
-        .query_selector_all(":scope > tr, :scope > thead > tr, :scope > tbody > tr, :scope > tfoot > tr")
+        .query_selector_all(
+            ":scope > tr, :scope > thead > tr, :scope > tbody > tr, :scope > tfoot > tr",
+        )
         .ok()?;
     if trs.length() == 0 {
         return None;
@@ -191,17 +207,20 @@ fn parse_html_table(html: &str) -> Option<ParsedGrid> {
     let mut rows: Vec<Vec<RawCell>> = Vec::new();
     for i in 0..trs.length() {
         let Some(tr_node) = trs.item(i) else { continue };
-        let Ok(tr) = tr_node.dyn_into::<WebElement>() else { continue };
-        let Ok(cells) = tr.query_selector_all(":scope > td, :scope > th") else { continue };
+        let Ok(tr) = tr_node.dyn_into::<WebElement>() else {
+            continue;
+        };
+        let Ok(cells) = tr.query_selector_all(":scope > td, :scope > th") else {
+            continue;
+        };
         let mut row = Vec::with_capacity(cells.length() as usize);
         for j in 0..cells.length() {
-            let Some(cell_node) = cells.item(j) else { continue };
+            let Some(cell_node) = cells.item(j) else {
+                continue;
+            };
             let text = cell_node.text_content().unwrap_or_default();
             let (rs, cs) = match cell_node.dyn_into::<WebElement>() {
-                Ok(cell) => (
-                    span_attr(&cell, "rowspan"),
-                    span_attr(&cell, "colspan"),
-                ),
+                Ok(cell) => (span_attr(&cell, "rowspan"), span_attr(&cell, "colspan")),
                 Err(_) => (1, 1),
             };
             row.push(RawCell::new(text, rs, cs));

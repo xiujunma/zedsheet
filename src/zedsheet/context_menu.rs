@@ -1,16 +1,21 @@
+#[allow(unused_imports)]
+use super::*;
+use crate::component::element::Element;
+use crate::config::CSS_PREFIX;
+use crate::renderer::table_renderer::PasteMode;
 use gloo::utils::window;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::MouseEvent;
-use crate::component::element::Element;
-use crate::config::CSS_PREFIX;
-use crate::renderer::table_renderer::PasteMode;
-#[allow(unused_imports)]
-use super::*;
 
 pub(crate) fn context_menu_html() -> String {
     let item = |cmd: &str, label: &str| {
-        format!("<div class=\"{p}-item\" data-cmenu=\"{cmd}\">{label}</div>", p = CSS_PREFIX, cmd = cmd, label = label)
+        format!(
+            "<div class=\"{p}-item\" data-cmenu=\"{cmd}\">{label}</div>",
+            p = CSS_PREFIX,
+            cmd = cmd,
+            label = label
+        )
     };
     let divider = format!("<div class=\"{p}-item divider\"></div>", p = CSS_PREFIX);
     [
@@ -129,9 +134,10 @@ pub(crate) fn wire_context_menu(
             // (issue #35). The query is by data-cmenu so the row's
             // display is toggled directly.
             let active_name = renderer.borrow().data.name.clone();
-            let any_pivot = sheets.borrow().iter().any(|d| {
-                d.pivots.iter().any(|p| p.output_sheet == active_name)
-            });
+            let any_pivot = sheets
+                .borrow()
+                .iter()
+                .any(|d| d.pivots.iter().any(|p| p.output_sheet == active_name));
             if let Ok(Some(item)) = menu.query_selector("[data-cmenu='refresh-pivot']") {
                 let _ = item
                     .unchecked_ref::<web_sys::HtmlElement>()
@@ -152,10 +158,15 @@ pub(crate) fn wire_context_menu(
         let mut menu_el: Element = menu_node.clone().into();
         menu_el.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
-            let Ok(el) = target.dyn_into::<web_sys::Element>() else { return };
-            let cmd = el
-                .get_attribute("data-cmenu")
-                .or_else(|| el.closest("[data-cmenu]").ok().flatten().and_then(|e| e.get_attribute("data-cmenu")));
+            let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+                return;
+            };
+            let cmd = el.get_attribute("data-cmenu").or_else(|| {
+                el.closest("[data-cmenu]")
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.get_attribute("data-cmenu"))
+            });
             let Some(cmd) = cmd else { return };
 
             // Editing a note needs a prompt outside the renderer borrow.
@@ -165,10 +176,17 @@ pub(crate) fn wire_context_menu(
                     window().prompt_with_message_and_default("Cell note:", &current)
                 {
                     let mut r = renderer.borrow_mut();
-                    r.set_selection_note(if text.trim().is_empty() { None } else { Some(text) });
+                    r.set_selection_note(if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    });
                     r.render();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -180,10 +198,17 @@ pub(crate) fn wire_context_menu(
                 {
                     let mut r = renderer.borrow_mut();
                     // set_selection_link normalizes the URL; blank input clears it.
-                    r.set_selection_link(if text.trim().is_empty() { None } else { Some(text) });
+                    r.set_selection_link(if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    });
                     r.render();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -192,7 +217,10 @@ pub(crate) fn wire_context_menu(
                 if let Some(open) = chart_open.borrow().as_ref() {
                     open();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -201,7 +229,10 @@ pub(crate) fn wire_context_menu(
                 if let Some(open) = pivot_open.borrow().as_ref() {
                     open();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -212,7 +243,10 @@ pub(crate) fn wire_context_menu(
                 if let Some(open) = slicer_open.borrow().as_ref() {
                     open();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -226,7 +260,10 @@ pub(crate) fn wire_context_menu(
                 if refreshed {
                     sync();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -236,7 +273,10 @@ pub(crate) fn wire_context_menu(
                 if let Some(open) = cf_open.borrow().as_ref() {
                     open();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -246,7 +286,10 @@ pub(crate) fn wire_context_menu(
                 if let Some(open) = dv_open.borrow().as_ref() {
                     open();
                 }
-                let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             }
 
@@ -256,8 +299,16 @@ pub(crate) fn wire_context_menu(
                 // read-only on the data, so it stays available (issue #24).
                 let read_only = r.data.is_read_only();
                 match cmd.as_str() {
-                    "copy" => { if !r.copy_selection() { noncontiguous_copy_toast(); } }
-                    "cut" if !read_only => { if !r.cut_selection() { noncontiguous_copy_toast(); } }
+                    "copy" => {
+                        if !r.copy_selection() {
+                            noncontiguous_copy_toast();
+                        }
+                    }
+                    "cut" if !read_only => {
+                        if !r.cut_selection() {
+                            noncontiguous_copy_toast();
+                        }
+                    }
                     "paste" if !read_only => r.paste(),
                     "paste-values" if !read_only => r.paste_special(PasteMode::Values),
                     "paste-formulas" if !read_only => r.paste_special(PasteMode::Formulas),
@@ -315,7 +366,10 @@ pub(crate) fn wire_context_menu(
             }
             // Refresh the formula bar / undo state and persist the edit (#20).
             sync();
-            let _ = menu_for_click.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+            let _ = menu_for_click
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("display", "none");
         });
         // Hide when clicking outside the menu.
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
@@ -326,7 +380,10 @@ pub(crate) fn wire_context_menu(
                     }
                 }
             }
-            let _ = menu.unchecked_ref::<web_sys::HtmlElement>().style().set_property("display", "none");
+            let _ = menu
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style()
+                .set_property("display", "none");
         });
         window()
             .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())

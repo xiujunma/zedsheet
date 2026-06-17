@@ -13,8 +13,8 @@
 //! `zedsheet::system_clipboard`.
 
 pub mod model;
-pub mod serialize;
 pub mod parse;
+pub mod serialize;
 
 pub use model::ParsedGrid;
 pub use parse::{grid_from_rows, nonce_in_html, parse_tsv, RawCell};
