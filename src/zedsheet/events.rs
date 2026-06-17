@@ -495,6 +495,42 @@ pub(crate) fn wire_events(
                 return;
             }
 
+            // Typing a printable key starts edit mode for the active cell
+            // (Excel / Google Sheets convention). The editor's textarea is
+            // focused + its content selected inside `start_edit`, so the
+            // browser's native key handling then inserts the typed
+            // character, replacing the cell content.
+            if is_typing_to_edit_key(&key, ke.ctrl_key(), ke.meta_key(), ke.alt_key()) {
+                // Don't steal focus from another input-like element (find
+                // & replace textarea, data-validation select, etc.).
+                let focus_steal_ok = document()
+                    .active_element()
+                    .map(|el| {
+                        let tag = el.tag_name();
+                        !tag.eq_ignore_ascii_case("input")
+                            && !tag.eq_ignore_ascii_case("textarea")
+                            && !tag.eq_ignore_ascii_case("select")
+                    })
+                    .unwrap_or(true);
+                if focus_steal_ok {
+                    let (ri, ci) = {
+                        let r = renderer.borrow();
+                        let s = r.get_selector();
+                        (s.ri, s.ci)
+                    };
+                    let (ri, ci) = renderer.borrow().merge_origin(ri, ci);
+                    start_edit(
+                        &renderer,
+                        &textarea,
+                        editor_error.as_ref(),
+                        &editing,
+                        ri,
+                        ci,
+                    );
+                }
+                return;
+            }
+
             // Delete/Backspace clears the selected cells.
             if key == "Delete" || key == "Backspace" {
                 {
@@ -709,4 +745,97 @@ fn perform_redo(
     active: &ActiveSheet,
 ) {
     renderer.redo(sheets, active);
+}
+
+/// True when a window-level keydown should start edit mode for the
+/// currently selected cell — i.e. the user typed a printable character
+/// without a Ctrl/Meta/Alt modifier. Length-1 keys cover letters,
+/// digits, space, and punctuation; multi-char names like `"Enter"`,
+/// `"Tab"`, `"Backspace"`, `"F2"`, `"ArrowDown"`, `"Process"`, and
+/// `"Dead"` are excluded.
+fn is_typing_to_edit_key(key: &str, ctrl: bool, meta: bool, alt: bool) -> bool {
+    if ctrl || meta || alt {
+        return false;
+    }
+    key.chars().count() == 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_typing_to_edit_key;
+
+    #[test]
+    fn letter_triggers_edit() {
+        assert!(is_typing_to_edit_key("a", false, false, false));
+        assert!(is_typing_to_edit_key("Z", false, false, false));
+    }
+
+    #[test]
+    fn digit_triggers_edit() {
+        assert!(is_typing_to_edit_key("0", false, false, false));
+        assert!(is_typing_to_edit_key("9", false, false, false));
+    }
+
+    #[test]
+    fn space_and_punctuation_trigger_edit() {
+        assert!(is_typing_to_edit_key(" ", false, false, false));
+        assert!(is_typing_to_edit_key("=", false, false, false));
+        assert!(is_typing_to_edit_key(",", false, false, false));
+        assert!(is_typing_to_edit_key("/", false, false, false));
+    }
+
+    #[test]
+    fn navigation_keys_do_not_trigger_edit() {
+        assert!(!is_typing_to_edit_key("Enter", false, false, false));
+        assert!(!is_typing_to_edit_key("Tab", false, false, false));
+        assert!(!is_typing_to_edit_key("Backspace", false, false, false));
+        assert!(!is_typing_to_edit_key("Escape", false, false, false));
+        assert!(!is_typing_to_edit_key("Delete", false, false, false));
+    }
+
+    #[test]
+    fn arrow_keys_do_not_trigger_edit() {
+        assert!(!is_typing_to_edit_key("ArrowUp", false, false, false));
+        assert!(!is_typing_to_edit_key("ArrowDown", false, false, false));
+        assert!(!is_typing_to_edit_key("ArrowLeft", false, false, false));
+        assert!(!is_typing_to_edit_key("ArrowRight", false, false, false));
+    }
+
+    #[test]
+    fn function_keys_do_not_trigger_edit() {
+        assert!(!is_typing_to_edit_key("F2", false, false, false));
+        assert!(!is_typing_to_edit_key("F1", false, false, false));
+        assert!(!is_typing_to_edit_key("PageUp", false, false, false));
+        assert!(!is_typing_to_edit_key("PageDown", false, false, false));
+    }
+
+    #[test]
+    fn ime_composition_keys_do_not_trigger_edit() {
+        assert!(!is_typing_to_edit_key("Process", false, false, false));
+        assert!(!is_typing_to_edit_key("Dead", false, false, false));
+        assert!(!is_typing_to_edit_key("Unidentified", false, false, false));
+    }
+
+    #[test]
+    fn ctrl_modifier_disables_edit() {
+        assert!(!is_typing_to_edit_key("a", true, false, false));
+        assert!(!is_typing_to_edit_key("v", true, false, false));
+        assert!(!is_typing_to_edit_key("z", true, false, false));
+    }
+
+    #[test]
+    fn meta_modifier_disables_edit() {
+        assert!(!is_typing_to_edit_key("a", false, true, false));
+        assert!(!is_typing_to_edit_key("v", false, true, false));
+    }
+
+    #[test]
+    fn alt_modifier_disables_edit() {
+        assert!(!is_typing_to_edit_key("a", false, false, true));
+    }
+
+    #[test]
+    fn empty_key_does_not_trigger_edit() {
+        assert!(!is_typing_to_edit_key("", false, false, false));
+    }
 }
