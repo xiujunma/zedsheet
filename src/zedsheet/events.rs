@@ -23,9 +23,9 @@ pub(crate) fn wire_events(
     filter_menu_visible: Rc<RefCell<bool>>,
     sync: &SyncFn,
     delete_open: OpenHandle,
+    drag: Rc<RefCell<Option<DragState>>>,
 ) {
     let dragging = Rc::new(RefCell::new(false));
-    let drag: Rc<RefCell<Option<DragState>>> = Rc::new(RefCell::new(None));
 
     // A floating popup that shows a cell's note on hover.
     let note_popup: web_sys::Element = {
@@ -92,18 +92,34 @@ pub(crate) fn wire_events(
                     start_x: x,
                     start_y: y,
                     start_size,
+                    start_panel_x: 0.0,
+                    start_panel_y: 0.0,
+                    start_panel_w: 0.0,
+                    start_panel_h: 0.0,
+                    end_panel_x: 0.0,
+                    end_panel_y: 0.0,
+                    end_panel_w: 0.0,
+                    end_panel_h: 0.0,
                 });
                 return;
             }
 
             // Scrollbar track → start a scroll drag and jump immediately.
             let sb = renderer.borrow().scrollbar_target(x, y);
-            if let Some(kind) = sb {
+            if let Some(kind) = sb.clone() {
                 *drag.borrow_mut() = Some(DragState {
-                    kind,
+                    kind: kind.clone(),
                     start_x: x,
                     start_y: y,
                     start_size: 0f64,
+                    start_panel_x: 0.0,
+                    start_panel_y: 0.0,
+                    start_panel_w: 0.0,
+                    start_panel_h: 0.0,
+                    end_panel_x: 0.0,
+                    end_panel_y: 0.0,
+                    end_panel_w: 0.0,
+                    end_panel_h: 0.0,
                 });
                 apply_scroll_drag(&renderer, kind, x, y);
                 return;
@@ -117,6 +133,14 @@ pub(crate) fn wire_events(
                     start_x: x,
                     start_y: y,
                     start_size: 0f64,
+                    start_panel_x: 0.0,
+                    start_panel_y: 0.0,
+                    start_panel_w: 0.0,
+                    start_panel_h: 0.0,
+                    end_panel_x: 0.0,
+                    end_panel_y: 0.0,
+                    end_panel_w: 0.0,
+                    end_panel_h: 0.0,
                 });
                 return;
             }
@@ -268,7 +292,7 @@ pub(crate) fn wire_events(
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
 
             // Active header-resize / scrollbar drag.
-            if let Some(ds) = *drag.borrow() {
+            if let Some(ds) = (*drag.borrow()).clone() {
                 hide_tooltip(&note_popup);
                 let mut r = renderer.borrow_mut();
                 match ds.kind {
@@ -290,6 +314,17 @@ pub(crate) fn wire_events(
                             r.select_to(ri, ci);
                             r.render();
                         }
+                    }
+                    DragKind::SlicerDrag(_) | DragKind::SlicerResize(_) => {
+                        // The slicer panel mousedown lives on `sheet_el`,
+                        // not the canvas, so the pointer coordinates here
+                        // are canvas-relative — they don't reflect the
+                        // panel's screen position. The mousemove handler
+                        // for slicer drags is installed separately on
+                        // `sheet_el` and uses the same shared `drag`
+                        // state; this arm is here only to make the
+                        // match exhaustive and avoid a stale-drag state
+                        // from a sibling event. No-op.
                     }
                 }
                 return;
@@ -502,14 +537,10 @@ pub(crate) fn wire_events(
                         // dialog.
                         "-" | "Subtract" | "NumpadSubtract" => {
                             let sel = r.selection_bounds();
-                            let is_full_row =
-                                sel.1 == 0
-                                    && sel.3 as usize
-                                        == r.data.col_count().saturating_sub(1);
-                            let is_full_col =
-                                sel.0 == 0
-                                    && sel.2 as usize
-                                        == r.data.row_count().saturating_sub(1);
+                            let is_full_row = sel.1 == 0
+                                && sel.3 as usize == r.data.col_count().saturating_sub(1);
+                            let is_full_col = sel.0 == 0
+                                && sel.2 as usize == r.data.row_count().saturating_sub(1);
                             if is_full_row {
                                 r.delete_rows_at_selection();
                             } else if is_full_col {
@@ -712,10 +743,24 @@ pub(crate) fn wire_events(
         let dragging = dragging.clone();
         let drag = drag.clone();
         let renderer = renderer.clone();
+        let sheets = sheets.clone();
+        let active = active.clone();
         let sync = sync.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
             // A fill-handle drag applies the fill on release.
-            let was_fill = matches!(*drag.borrow(), Some(ds) if ds.kind == DragKind::Fill);
+            let was_fill = matches!(&*drag.borrow(), Some(ds) if ds.kind == DragKind::Fill);
+            // A slicer panel drag/resize commits the inline `style` back to
+            // the data model so it persists and survives undo (Phase 1.1,
+            // issue #61 follow-on). The mousemove handler already wrote
+            // the live final position into the panel's inline `style`;
+            // we read it back here.
+            let slicer_drop: Option<String> = match &*drag.borrow() {
+                Some(ds) => match &ds.kind {
+                    DragKind::SlicerDrag(id) | DragKind::SlicerResize(id) => Some(id.clone()),
+                    _ => None,
+                },
+                None => None,
+            };
             // `dragging` is only set by a plain cell-selection gesture (resize/
             // scrollbar/fill drags return early at mousedown), so this is the
             // moment a selection finalizes — where an armed Format Painter
@@ -735,6 +780,36 @@ pub(crate) fn wire_events(
                     r.render();
                 }
                 super::util::set_canvas_cursor(None);
+                sync();
+            } else if let Some(id) = slicer_drop {
+                // Commit the final panel geometry to the data model so
+                // it persists + survives undo (issue #62). Read the
+                // `end_panel_*` fields populated by the slicer
+                // mousemove handler.
+                let final_geom = (*drag.borrow())
+                    .clone()
+                    .map(|d| (d.end_panel_x, d.end_panel_y, d.end_panel_w, d.end_panel_h));
+                if let Some((x, y, w, h)) = final_geom {
+                    let ai = *active.borrow();
+                    let mut wrote = false;
+                    {
+                        let mut s = sheets.borrow_mut();
+                        if ai < s.len() {
+                            if let Some(slicer) = s[ai].slicers.iter_mut().find(|sl| sl.id == id) {
+                                slicer.x = x;
+                                slicer.y = y;
+                                slicer.width = w;
+                                slicer.height = h;
+                                wrote = true;
+                            }
+                        }
+                    }
+                    if wrote {
+                        // Snapshot AFTER the geometry write so undo
+                        // restores the pre-drag position.
+                        renderer.borrow_mut().snapshot();
+                    }
+                }
                 sync();
             }
             *dragging.borrow_mut() = false;

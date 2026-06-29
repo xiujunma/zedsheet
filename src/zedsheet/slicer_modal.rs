@@ -21,6 +21,7 @@ use web_sys::{HtmlElement, HtmlInputElement, HtmlSelectElement};
 use super::*;
 use crate::component::element::Element;
 use crate::core::pivot::Slicer;
+use web_sys::MouseEvent;
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -36,6 +37,13 @@ const PANEL_ATTR: &str = "data-slicer-panel";
 const CHIP_ATTR: &str = "data-slicer-chip";
 const CLEAR_ATTR: &str = "data-slicer-clear";
 const CLOSE_ATTR: &str = "data-slicer-close";
+/// Drag-to-move / resize handle (Phase 1.1). Sits in the panel's
+/// bottom-right corner; mousedown on it starts a resize.
+const GRIP_ATTR: &str = "data-slicer-grip";
+/// Slicer index in `DataProxy.slicers`; set on every panel so the
+/// drag/resize handlers can look up the live geometry without
+/// re-scanning by id on every mousemove.
+const INDEX_ATTR: &str = "data-slicer-index";
 
 pub(crate) fn slicer_modal_html() -> String {
     let row = "display:flex;align-items:center;gap:8px;margin-bottom:8px;";
@@ -192,6 +200,7 @@ pub(crate) fn wire_slicer_modal(
     active: &ActiveSheet,
     sheet_el: web_sys::Element,
     sync: SyncFn,
+    drag: Rc<RefCell<Option<DragState>>>,
 ) {
     // Clone the shared handles into owned values for the modal's
     // `move` closure. The trailing `wire_slicer_panel_events` call
@@ -318,12 +327,30 @@ pub(crate) fn wire_slicer_modal(
     // from the original function args (the modal's click closure
     // already moved the `_local` versions above).
     wire_slicer_panel_events(
-        sheet_el,
+        sheet_el.clone(),
         renderer.clone(),
         sheets.clone(),
         active.clone(),
         sync.clone(),
     );
+    // Drag-to-move + resize (Phase 1.1, issue #61 follow-on). Reads
+    // `sheet_el` again because the click wiring above moved it; the
+    // drag handler takes a fresh clone and the click handler keeps
+    // its own.
+    wire_slicer_panel_drag(
+        sheet_el.clone(),
+        renderer.clone(),
+        sheets.clone(),
+        active.clone(),
+        drag.clone(),
+    );
+    // Mousemove on the sheet container (not the canvas — panels are
+    // siblings of the canvas, so the canvas mousemove doesn't fire
+    // when the cursor is over a panel). Reads `drag` on every tick
+    // and, for SlicerDrag/SlicerResize, updates the inline `style`
+    // for fast feedback. The window mouseup arm in `events.rs`
+    // commits the final geometry to the data model.
+    wire_slicer_panel_mousemove(sheet_el, drag);
 }
 
 fn read_num(modal: &web_sys::Element, sel: &str, default: f64) -> f64 {
@@ -437,14 +464,15 @@ pub(crate) fn render_slicer_panels(
         }
         let title = format!("Slicer: {}", field_label);
         let panel_html = format!(
-            "<div {}=\"{}\" \
-              style=\"position:absolute;left:{}px;top:{}px;width:{}px;\
+            "<div {}=\"{}\" {}=\"{}\" \
+              style=\"position:absolute;left:{}px;top:{}px;width:{}px;height:{}px;\
               background:#fff;border:1px solid #888;border-radius:4px;\
               box-shadow:rgba(0,0,0,0.18) 0px 2px 6px;\
               font-size:12px;z-index:150;\">\
               <div style=\"display:flex;align-items:center;\
                 padding:4px 8px;background:#f0f3f9;\
-                border-bottom:1px solid #d0d4dd;font-weight:600;\">\
+                border-bottom:1px solid #d0d4dd;font-weight:600;\
+                cursor:move;\">\
                 <span style=\"flex:1;\">{}</span>\
                 <span {}=\"{}\" \
                   style=\"cursor:pointer;color:#666;\
@@ -455,21 +483,30 @@ pub(crate) fn render_slicer_panels(
                 <span {}=\"{}\" \
                   style=\"cursor:pointer;color:#999;font-weight:bold;\">✕</span>\
               </div>\
-              <div style=\"max-height:{}px;overflow-y:auto;padding:4px 6px;\">{}</div>\
+              <div style=\"max-height:calc(100% - 30px);overflow-y:auto;\
+                padding:4px 6px;\">{}</div>\
+              <span {}=\"{}\" \
+                style=\"position:absolute;right:1px;bottom:1px;\
+                width:12px;height:12px;cursor:nwse-resize;\
+                color:#bbb;font-size:14px;line-height:12px;\
+                text-align:center;user-select:none;\">⋮</span>\
             </div>",
             PANEL_ATTR,
             slicer.id,
+            INDEX_ATTR,
+            i,
             slicer.x,
             slicer.y,
             slicer.width,
+            slicer.height,
             esc(&title),
             CLEAR_ATTR,
             i,
             CLOSE_ATTR,
             i,
-            // Chip list inner area: 180 - header(~30) = ~150.
-            150.0_f64.max(slicer.height - 30.0),
             chips_html,
+            GRIP_ATTR,
+            i,
         );
         // Append the panel as a child of `sheet_el` without disturbing
         // its existing children (canvas, editor, contextmenu, prior
@@ -595,6 +632,239 @@ fn wire_slicer_panel_events(
         .add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())
         .unwrap();
     cb.forget();
+}
+
+/// Install the drag-to-move and resize handlers on every slicer panel
+/// (Phase 1.1). The single delegated `mousedown` on the sheet
+/// container classifies the click by walking up from the target to
+/// one of our attributes:
+///
+/// - `[data-slicer-grip]` → resize (commit geometry on mouseup)
+/// - `[data-slicer-chip]` / `[data-slicer-clear]` / `[data-slicer-close]`
+///   → ignore; the click handler already handles those
+/// - any other spot inside `[data-slicer-panel]` → move
+///
+/// Live geometry is read from the data model once on mousedown; the
+/// mousemove updates the inline `style` for fast feedback, and the
+/// window-mouseup handler commits the final x/y/w/h back to the data
+/// model + snapshots for undo.
+fn wire_slicer_panel_drag(
+    sheet_el: web_sys::Element,
+    _renderer: SharedRenderer,
+    sheets: Sheets,
+    active: ActiveSheet,
+    drag: Rc<RefCell<Option<DragState>>>,
+) {
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let Some(target) = event.target() else { return };
+        let Ok(elx) = target.dyn_into::<web_sys::Element>() else {
+            return;
+        };
+
+        // Was the click anywhere on a panel? If not, bail — this is a
+        // canvas / chrome click, not ours to handle.
+        let Some(panel) = elx.closest(&format!("[{}]", PANEL_ATTR)).ok().flatten() else {
+            return;
+        };
+        // Interactive children (chips, Clear, Close) handle their own
+        // click; let the click event bubble to the delegated click
+        // handler without starting a drag.
+        if elx
+            .closest(&format!("[{}]", CHIP_ATTR))
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+        if elx
+            .closest(&format!("[{}]", CLEAR_ATTR))
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+        if elx
+            .closest(&format!("[{}]", CLOSE_ATTR))
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+
+        // Look up the slicer's index in the data model. The panel
+        // carries it as `data-slicer-index="i"`.
+        let Some(idx) = panel
+            .get_attribute(INDEX_ATTR)
+            .and_then(|v| v.parse::<usize>().ok())
+        else {
+            return;
+        };
+
+        // Snapshot the panel's current geometry. The mousemove handler
+        // reads this snapshot on every tick instead of re-reading the
+        // data model.
+        let (start_x, start_y, start_w, start_h, slicer_id) = {
+            let s = sheets.borrow();
+            let ai = *active.borrow();
+            if ai >= s.len() || idx >= s[ai].slicers.len() {
+                return;
+            }
+            let slicer = &s[ai].slicers[idx];
+            (
+                slicer.x,
+                slicer.y,
+                slicer.width,
+                slicer.height,
+                slicer.id.clone(),
+            )
+        };
+
+        // Pointer position relative to the canvas. The mousemove on
+        // canvas uses `offset_x/y`; for the panel drag we need the
+        // same coordinate space so deltas line up. `dyn_ref` keeps
+        // `event` alive for the prevent_default / stop_propagation
+        // calls below.
+        let Some(me) = event.dyn_ref::<MouseEvent>() else {
+            return;
+        };
+        let x = me.offset_x() as f64;
+        let y = me.offset_y() as f64;
+
+        // Grip → resize; otherwise (header strip, panel padding) →
+        // move.
+        let is_resize = elx
+            .closest(&format!("[{}]", GRIP_ATTR))
+            .ok()
+            .flatten()
+            .is_some();
+        let kind = if is_resize {
+            DragKind::SlicerResize(slicer_id)
+        } else {
+            DragKind::SlicerDrag(slicer_id)
+        };
+
+        // Stash on the shared drag cell so the existing window
+        // mousemove / window mouseup arms in `events.rs` dispatch on
+        // the kind alongside column/row / scrollbar / fill drags.
+        *drag.borrow_mut() = Some(DragState {
+            kind,
+            start_x: x,
+            start_y: y,
+            start_size: 0.0,
+            start_panel_x: start_x,
+            start_panel_y: start_y,
+            start_panel_w: start_w,
+            start_panel_h: start_h,
+            end_panel_x: start_x,
+            end_panel_y: start_y,
+            end_panel_w: start_w,
+            end_panel_h: start_h,
+        });
+        // Don't let the click bubble; otherwise the click handler
+        // would interpret the mousedown target as a click target
+        // and potentially trigger a chip toggle by accident.
+        event.prevent_default();
+        event.stop_propagation();
+    });
+    sheet_el
+        .add_event_listener_with_callback("mousedown", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+}
+
+/// Mousemove on the sheet container — updates the panel's inline
+/// `style.left/top/width/height` for fast feedback during a drag or
+/// resize. Doesn't touch the data model; the mouseup arm in
+/// `events.rs` does that.
+fn wire_slicer_panel_mousemove(sheet_el: web_sys::Element, drag: Rc<RefCell<Option<DragState>>>) {
+    let sheet_el_for_closure = sheet_el.clone();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let ds = match drag.borrow().clone() {
+            Some(ds) => ds,
+            None => return,
+        };
+        let me: MouseEvent = match event.dyn_into() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let x = me.offset_x() as f64;
+        let y = me.offset_y() as f64;
+        // Find the panel by slicer id. `sheet_el` only holds our own
+        // slicer panels (and the canvas, editor, contextmenu), so a
+        // single attribute selector is cheap enough to run on every
+        // mousemove tick.
+        let id = match &ds.kind {
+            DragKind::SlicerDrag(id) | DragKind::SlicerResize(id) => id.clone(),
+            _ => return,
+        };
+        let selector = format!("[{}=\"{}\"]", PANEL_ATTR, esc_for_selector(&id));
+        let panel = match sheet_el_for_closure
+            .query_selector(&selector)
+            .ok()
+            .flatten()
+        {
+            Some(p) => p,
+            None => return,
+        };
+        let Ok(panel_he) = panel.dyn_into::<web_sys::HtmlElement>() else {
+            return;
+        };
+        let style = panel_he.style();
+        match &ds.kind {
+            DragKind::SlicerDrag(_) => {
+                let (nx, ny) = slicer_drag_position(
+                    ds.start_panel_x,
+                    ds.start_panel_y,
+                    ds.start_x,
+                    ds.start_y,
+                    x,
+                    y,
+                );
+                let _ = style.set_property("left", &format!("{}px", nx));
+                let _ = style.set_property("top", &format!("{}px", ny));
+                // Stash the final geometry so the mouseup handler can
+                // commit it to the data model without re-reading the DOM.
+                drag.borrow_mut().as_mut().map(|d| {
+                    d.end_panel_x = nx;
+                    d.end_panel_y = ny;
+                });
+            }
+            DragKind::SlicerResize(_) => {
+                let (nw, nh) = slicer_resize_size(
+                    ds.start_panel_w,
+                    ds.start_panel_h,
+                    ds.start_x,
+                    ds.start_y,
+                    x,
+                    y,
+                    MIN_SLICER_PANEL_W,
+                    MIN_SLICER_PANEL_H,
+                );
+                let _ = style.set_property("width", &format!("{}px", nw));
+                let _ = style.set_property("height", &format!("{}px", nh));
+                drag.borrow_mut().as_mut().map(|d| {
+                    d.end_panel_w = nw;
+                    d.end_panel_h = nh;
+                });
+            }
+            _ => {}
+        }
+    });
+    sheet_el
+        .add_event_listener_with_callback("mousemove", cb.as_ref().unchecked_ref())
+        .unwrap();
+    cb.forget();
+}
+
+/// Escape backslash and double-quote for use inside an attribute
+/// selector. Stable ids are `slicer_{n}` (no special chars), but the
+/// helper keeps the lookup robust if a future caller passes
+/// arbitrary text.
+fn esc_for_selector(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 // -----------------------------------------------------------------------

@@ -66,12 +66,27 @@ pub(crate) enum DdKind {
 }
 
 /// An in-progress header-resize or scrollbar drag.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct DragState {
     pub(crate) kind: DragKind,
     pub(crate) start_x: f64,
     pub(crate) start_y: f64,
     pub(crate) start_size: f64,
+    /// Slicer panel geometry at drag start (Phase 1.1, issue #61
+    /// follow-on). Populated only for `DragKind::SlicerDrag` and
+    /// `DragKind::SlicerResize`; zero elsewhere. Mousemove reads this
+    /// snapshot instead of the live data model on every tick.
+    pub(crate) start_panel_x: f64,
+    pub(crate) start_panel_y: f64,
+    pub(crate) start_panel_w: f64,
+    pub(crate) start_panel_h: f64,
+    /// Final panel geometry, updated by the slicer mousemove handler
+    /// on every tick (Phase 1.1). Read by the window mouseup handler
+    /// to commit to the data model without re-reading the DOM.
+    pub(crate) end_panel_x: f64,
+    pub(crate) end_panel_y: f64,
+    pub(crate) end_panel_w: f64,
+    pub(crate) end_panel_h: f64,
 }
 
 pub(crate) type SharedRenderer = Rc<RefCell<TableRenderer>>;
@@ -420,6 +435,12 @@ impl ZedSheet {
 
         let editing: EditingCell = Rc::new(RefCell::new(None));
 
+        // Shared in-progress drag state. Created here so the canvas
+        // event handlers (column/row resize, scrollbar, fill handle)
+        // and the slicer panel drag/resize handlers can both stash
+        // and read it — mousemove + mouseup dispatch on the kind.
+        let drag: Rc<RefCell<Option<DragState>>> = Rc::new(RefCell::new(None));
+
         // Toast for top-of-screen validation errors from the formula bar
         // (and any other commit path that can't keep the editor open).
         let mut toast_el = h("div", Some("zs-dv-toast"));
@@ -655,6 +676,7 @@ impl ZedSheet {
             filter_menu_visible.clone(),
             &sync,
             delete_open.clone(),
+            drag.clone(),
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
             wire_context_menu(
@@ -910,6 +932,7 @@ impl ZedSheet {
                 &active,
                 sheet_el_for_slicer.clone(),
                 sync.clone(),
+                drag.clone(),
             );
             // Render any slicers that survived a `load_data` round-trip
             // (their HTML doesn't exist in the static template — it's

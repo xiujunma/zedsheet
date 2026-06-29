@@ -140,7 +140,7 @@ fn transpose_clipboard(cb: &ClipboardData) -> ClipboardData {
 }
 
 /// An in-progress pointer drag on the headers or scrollbars.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum DragKind {
     ColResize(usize),
     RowResize(usize),
@@ -148,6 +148,13 @@ pub enum DragKind {
     HScroll,
     /// Dragging the selection's bottom-right fill handle.
     Fill,
+    /// Moving a slicer panel (Phase 1.1, issue #61 follow-on).
+    /// Carries the slicer's stable id; the drag-start panel geometry
+    /// lives on `DragState.start_panel_*` so mousemove doesn't have to
+    /// re-read the data model on every tick.
+    SlicerDrag(String),
+    /// Resizing a slicer panel via its bottom-right grip.
+    SlicerResize(String),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -1539,7 +1546,7 @@ impl TableRenderer {
     /// Captures a workbook snapshot (issue #62): the active sheet + its
     /// index. Cross-sheet mutators (add_pivot, add_sheet, etc.) call
     /// [`snapshot_workbook`] instead, which clones the full registry.
-    fn snapshot(&mut self) {
+    pub(crate) fn snapshot(&mut self) {
         const MAX_UNDO: usize = 100;
         self.undo_stack.push(WorkbookSnapshot {
             active: 0, // Overwritten by callers that know the real index;
@@ -2874,7 +2881,10 @@ impl TableRenderer {
             let italic = if style.italic { "italic " } else { "" };
             let font = format!(
                 "{}{}{}px {}",
-                bold, italic, font_size + 2.0, style.font_family
+                bold,
+                italic,
+                font_size + 2.0,
+                style.font_family
             );
             canvas.ctx.set_font(&font);
             let tw = canvas.measure_text_width(&display);
