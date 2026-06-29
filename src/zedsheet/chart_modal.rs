@@ -56,6 +56,11 @@ pub(crate) fn chart_modal_html() -> String {
                     <input class="zs-chart-range" style="flex:1;padding:3px;" placeholder="A1:B4"/>
                 </div>
                 <div style="{row}">
+                    <label style="{label}">Secondary range</label>
+                    <input class="zs-chart-secondary" style="flex:1;padding:3px;" placeholder="(optional) D1:D4"/>
+                    <span style="color:#999;font-size:11px;">plots on a right-side axis</span>
+                </div>
+                <div style="{row}">
                     <label style="{label}">Title</label>
                     <input class="zs-chart-title" style="flex:1;padding:3px;" placeholder="(optional)"/>
                 </div>
@@ -201,6 +206,14 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                     _ => Some(crate::core::trendline::Trendline::None),
                 })
                 .unwrap_or(crate::core::trendline::Trendline::None);
+            let secondary_range_str = val(".zs-chart-secondary");
+            // Empty secondary range → None so the renderer falls
+            // through to the single-axis path.
+            let secondary_range = if secondary_range_str.trim().is_empty() {
+                None
+            } else {
+                Some(secondary_range_str)
+            };
             let chart = Chart {
                 kind,
                 range: val(".zs-chart-range"),
@@ -209,7 +222,7 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 width: 360.0,
                 height: 220.0,
                 trendline,
-                secondary_range: None,
+                secondary_range,
             };
             // Reject inputs that could never draw, so the dialog gives
             // immediate feedback.
