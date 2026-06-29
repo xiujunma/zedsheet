@@ -38,6 +38,15 @@ pub(crate) fn chart_modal_html() -> String {
                     </select>
                 </div>
                 <div style="{row}">
+                    <label style="{label}">Trendline</label>
+                    <select class="zs-chart-trendline" style="flex:1;padding:3px;">
+                        <option value="none">None</option>
+                        <option value="linear">Linear</option>
+                        <option value="exponential">Exponential</option>
+                        <option value="polynomial">Polynomial (degree 2)</option>
+                    </select>
+                </div>
+                <div style="{row}">
                     <label style="{label}">Data range</label>
                     <input class="zs-chart-range" style="flex:1;padding:3px;" placeholder="A1:B4"/>
                 </div>
@@ -174,6 +183,19 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 .and_then(|e| e.dyn_into::<HtmlSelectElement>().ok())
                 .map(|s| s.value())
                 .unwrap_or_else(|| "bar".to_string());
+            let trendline = modal_node
+                .query_selector(".zs-chart-trendline")
+                .ok()
+                .flatten()
+                .and_then(|e| e.dyn_into::<HtmlSelectElement>().ok())
+                .map(|s| s.value())
+                .and_then(|v| match v.as_str() {
+                    "linear" => Some(crate::core::trendline::Trendline::Linear),
+                    "exponential" => Some(crate::core::trendline::Trendline::Exponential),
+                    "polynomial" => Some(crate::core::trendline::Trendline::Polynomial),
+                    _ => Some(crate::core::trendline::Trendline::None),
+                })
+                .unwrap_or(crate::core::trendline::Trendline::None);
             let chart = Chart {
                 kind,
                 range: val(".zs-chart-range"),
@@ -181,6 +203,7 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 anchor: val(".zs-chart-anchor"),
                 width: 360.0,
                 height: 220.0,
+                trendline,
             };
             // Reject inputs that could never draw, so the dialog gives
             // immediate feedback.

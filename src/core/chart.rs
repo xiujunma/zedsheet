@@ -6,6 +6,7 @@
 
 use crate::core::cell_range::CellRange;
 use crate::core::data_proxy::DataProxy;
+use crate::core::trendline::Trendline;
 use serde::{Deserialize, Serialize};
 
 fn default_chart_w() -> f64 {
@@ -30,6 +31,11 @@ pub struct Chart {
     pub width: f64,
     #[serde(default = "default_chart_h")]
     pub height: f64,
+    /// Optional trendline overlaid on the chart's series (Phase 1.2).
+    /// `#[serde(default)]` keeps old workbooks (which lack the key)
+    /// loading with `Trendline::None`.
+    #[serde(default)]
+    pub trendline: Trendline,
 }
 
 /// Chart-ready table: one label per category, one or more named series.
@@ -216,6 +222,7 @@ mod tests {
             anchor: "F2".into(),
             width: 360.0,
             height: 220.0,
+            trendline: Trendline::Linear,
         };
         let json = serde_json::to_value(&c).unwrap();
         let back: Chart = serde_json::from_value(json).unwrap();

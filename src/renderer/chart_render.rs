@@ -4,6 +4,10 @@
 //! the existing `Canvas` wrapper — no DOM.
 
 use crate::core::chart::{extract_chart_data, nice_ceil, ChartData};
+use crate::core::trendline::{
+    exponential_eval, exponential_regression, linear_eval, linear_regression, quadratic_eval,
+    quadratic_regression, Trendline,
+};
 use crate::renderer::alphabets::exp2xy;
 use crate::renderer::canvas::Canvas;
 use crate::renderer::table_renderer::TableRenderer;
@@ -52,9 +56,9 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
 
         match extract_chart_data(&renderer.data, &chart.range) {
             Some(data) if !data.labels.is_empty() => match chart.kind.as_str() {
-                "line" => draw_axes_chart(canvas, px, py, pw, ph, &data, false),
+                "line" => draw_axes_chart(canvas, px, py, pw, ph, &data, false, chart.trendline),
                 "pie" => draw_pie(canvas, px, py, pw, ph, &data),
-                _ => draw_axes_chart(canvas, px, py, pw, ph, &data, true),
+                _ => draw_axes_chart(canvas, px, py, pw, ph, &data, true, chart.trendline),
             },
             _ => {
                 canvas.set_font("11px Arial");
@@ -68,7 +72,9 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
 }
 
 /// Shared bar/line body: y axis with nice bounds + gridlines, x labels,
-/// a legend when there are multiple series.
+/// a legend when there are multiple series. When `trendline` is set,
+/// one fitted curve is drawn over each series after the bars/lines
+/// themselves (Phase 1.2).
 fn draw_axes_chart(
     canvas: &Canvas,
     px: f64,
@@ -77,6 +83,7 @@ fn draw_axes_chart(
     ph: f64,
     data: &ChartData,
     bars: bool,
+    trendline: Trendline,
 ) {
     let all: Vec<f64> = data
         .series
@@ -164,6 +171,50 @@ fn draw_axes_chart(
         }
     }
 
+    // Trendline (Phase 1.2): one fitted curve over each series,
+    // drawn after the series so it sits on top. Fitted values are
+    // clamped to the visible y-range so the curve never leaves the
+    // plot box; lines outside the box are not extrapolated.
+    if trendline.is_visible() {
+        let n_points = data.labels.len();
+        if n_points >= 2 {
+            for (si, (_, values)) in data.series.iter().enumerate() {
+                let fitted: Option<Vec<f64>> = match trendline {
+                    Trendline::Linear => linear_regression(values)
+                        .map(|fit| (0..n_points).map(|i| linear_eval(fit, i)).collect()),
+                    Trendline::Exponential => exponential_regression(values)
+                        .map(|fit| (0..n_points).map(|i| exponential_eval(fit, i)).collect()),
+                    Trendline::Polynomial => quadratic_regression(values)
+                        .map(|fit| (0..n_points).map(|i| quadratic_eval(fit, i)).collect()),
+                    Trendline::None => None,
+                };
+                if let Some(ys) = fitted {
+                    // Trendline colour: dark variant of the series'
+                    // PALETTE slot, falling back to near-black for the
+                    // 8th slot.
+                    let base = PALETTE[si % PALETTE.len()];
+                    let dark = darken(base);
+                    canvas.set_stroke_style(&dark);
+                    canvas.set_line_width(1.5);
+                    canvas.begin_path();
+                    for (i, y_val) in ys.iter().enumerate() {
+                        // Clamp to the visible y-range so the line
+                        // doesn't escape the plot box.
+                        let clamped = y_val.clamp(ymin, ymax);
+                        let cx = px + group_w * (i as f64 + 0.5);
+                        let cy = y_of(clamped);
+                        if i == 0 {
+                            canvas.move_to(cx, cy);
+                        } else {
+                            canvas.line_to(cx, cy);
+                        }
+                    }
+                    canvas.stroke();
+                }
+            }
+        }
+    }
+
     // Legend (only when it disambiguates).
     if data.series.len() > 1 {
         canvas.set_font("10px Arial");
@@ -177,6 +228,50 @@ fn draw_axes_chart(
             canvas.fill_text(name, lx + 11.0, ly, None);
             lx += 11.0 + canvas.measure_text_width(name) + 12.0;
         }
+    }
+}
+
+/// Darken a hex colour string (\"#rrggbb\") by halving each channel
+/// (with a floor to keep the result legible). Used to give the
+/// trendline a darker shade than its series. Pure helper, host-tested.
+fn darken(hex: &str) -> String {
+    let s = hex.strip_prefix('#').unwrap_or(hex);
+    if s.len() != 6 {
+        return "#333333".to_string();
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok();
+    let g = u8::from_str_radix(&s[2..4], 16).ok();
+    let b = u8::from_str_radix(&s[4..6], 16).ok();
+    match (r, g, b) {
+        (Some(r), Some(g), Some(b)) => {
+            let r = (r / 2 + 32).min(255);
+            let g = (g / 2 + 32).min(255);
+            let b = (b / 2 + 32).min(255);
+            format!("#{:02x}{:02x}{:02x}", r, g, b)
+        }
+        _ => "#333333".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn darken_halves_each_channel() {
+        // Halve 0x10 → 0x08, floor to 0x08 + 32 = 0x28.
+        assert_eq!(darken("#101010"), "#282828");
+        // 0xff / 2 + 32 = 0x7f + 0x20 = 0x9f.
+        assert_eq!(darken("#ffffff"), "#9f9f9f");
+        // 0x80 / 2 + 32 = 0x40 + 0x20 = 0x60.
+        assert_eq!(darken("#808080"), "#606060");
+    }
+
+    #[test]
+    fn darken_falls_back_to_default_on_invalid_input() {
+        assert_eq!(darken("not-a-color"), "#333333");
+        assert_eq!(darken(""), "#333333");
+        assert_eq!(darken("#abc"), "#333333"); // wrong length
     }
 }
 
