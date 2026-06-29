@@ -26,9 +26,9 @@
 | | **P1** | Array literals `{1,2,3;4,5,6}` and `A1:B3` shape in formula context | Bare-range spill exists; constant arrays do not. Blocks `MMULT` matrix work. |
 | | **P1** | Modern dynamic-array helpers: `LET`, `LAMBDA`, `MAP`, `REDUCE`, `BYROW`, `BYCOL`, `MAKEARRAY` | Excel 365 / Sheets primitives; compose naturally with `FILTER`/`SORT`. |
 | | ~~**P2**~~ ✅ | Statistical extensions: `STDEV.S` / `STDEV.P` aliases, `PERCENTILE.INC`, `QUARTILE.INC`, `RANK.EQ`, `COVARIANCE.P`, `CORREL` | Fixed 2026-06-29: added STDEV.S, STDEV.P, VAR.P, VAR.S, PERCENTILE.INC, QUARTILE.INC, RANK.EQ, COVARIANCE.P, CORREL. Added population_variance, percentile_inc, quartile_inc, rank_eq, covariance_p, correlation helpers. |
-| | **P2** | `INFO`, `TYPE`, `N`, `T`, `CELL` | Info utilities — `CELL` is the most-asked-for (returns filename, sheet, address). |
+| | ~~**P2**~~ ✅ | `INFO`, `TYPE`, `N`, `T`, `CELL` | Fixed 2026-06-29: TYPE, N, T added to apply_info_function. CELL supports "address", "col", "row", "filename", "contents", "type", "width" — uses calling cell position when no reference arg given. 7 new tests. |
 | | **P2** | `WEBSERVICE` / `IMPORTXML` style data imports | Optional; some users want stock prices, but in a wasm sandbox this is awkward. |
-| | **P2** | `HYPERLINK` formula function (the cell-level link UI is done; the formula form is not) | The hyperlink cell feature (issue #23) is in, but `=HYPERLINK(url, label)` in a formula is not. |
+| | ~~**P2**~~ ✅ | `HYPERLINK` formula function | Fixed 2026-06-29: =HYPERLINK(url, [label]) added to apply_special_function. Returns label text (or URL if no label). Added test. |
 
 ## 2. Cell & data model
 

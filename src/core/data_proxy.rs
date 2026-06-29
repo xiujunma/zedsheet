@@ -1044,6 +1044,10 @@ impl DataProxy {
                         .map(|a| a.to_scalar());
                 }
                 let args = self.parse_args(t, pos, vis);
+                // CELL needs self to access the sheet name and position.
+                if name.eq_ignore_ascii_case("CELL") {
+                    return self.eval_cell_fn(&args);
+                }
                 // Functions that must observe a *failed* or typed argument
                 // (IFERROR, IFNA, IS*) are resolved here, where the per-argument
                 // results — including evaluation errors — are still visible
@@ -1576,6 +1580,70 @@ impl DataProxy {
                 Ok(Arg::Scalar(Value::Number(v)))
             }
             _ => Err(EvalErr::Value),
+        }
+    }
+
+    /// CELL(info_type, [reference]) — returns information about a cell or the
+    /// sheet (issue #14). Supports "address", "col", "row", "filename" (sheet
+    /// name), and "contents".
+    fn eval_cell_fn(&self, args: &[Result<Arg, EvalErr>]) -> Result<Value, EvalErr> {
+        let info_type = match args.first() {
+            Some(Ok(a)) => a.to_scalar().as_text().to_lowercase(),
+            Some(Err(e)) => return Err(*e),
+            None => return Err(EvalErr::Value),
+        };
+        // Determine the target cell: use the reference arg, or the calling cell.
+        let (ri, ci) = if args.len() >= 2 {
+            match self.span_ref_from_arg(&args[1]) {
+                Some((r, c, _, _)) => (r, c),
+                None => {
+                    return Err(EvalErr::Ref);
+                }
+            }
+        } else {
+            self.eval_cell.get()
+        };
+        match info_type.as_str() {
+            "address" => {
+                let abs = 0; // relative by default
+                Ok(Value::Text(crate::renderer::alphabets::xy2expr(ci, ri)))
+            }
+            "col" => Ok(Value::Number((ci + 1) as f64)),
+            "row" => Ok(Value::Number((ri + 1) as f64)),
+            "filename" => Ok(Value::Text(self.name.clone())),
+            "contents" => {
+                let v = self.cell_display_value(ri, ci);
+                Ok(Value::Text(v))
+            }
+            "type" => {
+                let t = self.get_cell_text(ri, ci);
+                if t.is_empty() {
+                    Ok(Value::Text("b".into())) // blank
+                } else if t.starts_with('=') {
+                    Ok(Value::Text("l".into())) // label (formula)
+                } else {
+                    Ok(Value::Text("v".into())) // value
+                }
+            }
+            "format" => Ok(Value::Text(String::new())), // not implemented
+            "width" => Ok(Value::Number(
+                (self.get_col_width(ci) / self.zoom()).round() as f64,
+            )),
+            _ => Err(EvalErr::Value),
+        }
+    }
+
+    /// Like `span_ref` but for an `Arg` result instead of raw tokens.
+    fn span_ref_from_arg(&self, arg: &Result<Arg, EvalErr>) -> Option<(usize, usize, usize, usize)> {
+        match arg {
+            Ok(Arg::Scalar(Value::Text(s))) => {
+                if let Ok(cr) = crate::core::cell_range::CellRange::from_str(&s) {
+                    Some((cr.sri, cr.sci, cr.eri, cr.eci))
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -3938,8 +4006,48 @@ fn apply_info_function(
         "ISNUMBER" => bool_v(matches!(scalar0(), Some(Value::Number(_)))),
         "ISTEXT" => bool_v(matches!(scalar0(), Some(Value::Text(_)))),
         "ISBLANK" => bool_v(matches!(scalar0(), Some(Value::Blank))),
+        "TYPE" => {
+            let t = match scalar0() {
+                Some(Value::Number(_)) => 1.0,
+                Some(Value::Text(_)) => 2.0,
+                Some(Value::Blank) => 1.0,   // blank cells type as number (0)
+                Some(Value::Error(_)) => 16.0,
+                Some(Value::Array(_)) => 64.0,
+                None if err0.is_some() => 16.0,
+                None => 1.0,
+            };
+            Ok(Value::Number(t))
+        }
+        "N" => {
+            match scalar0() {
+                Some(Value::Number(n)) => Ok(Value::Number(n)),
+                Some(Value::Text(t)) => {
+                    // N of text is 0 unless it's a date string
+                    Ok(Value::Number(0.0))
+                }
+                Some(Value::Blank) => Ok(Value::Number(0.0)),
+                Some(Value::Error(e)) => Err(e),
+                Some(Value::Array(_)) => {
+                    // N(array) returns N of first element
+                    Ok(Value::Number(0.0))
+                }
+                None if err0.is_some() => Err(err0.unwrap()),
+                None => Ok(Value::Number(0.0)),
+            }
+        }
+        "T" => {
+            match scalar0() {
+                Some(Value::Text(t)) => Ok(Value::Text(t)),
+                _ => Ok(Value::Text(String::new())),
+            }
+        }
         _ => return None,
     };
+
+    // Guard: NaN/∞ from number ops becomes #NUM!.
+    if matches!(name.to_uppercase().as_str(), "N") && matches!(&v, Ok(Value::Number(n)) if !n.is_finite()) {
+        return Some(Err(EvalErr::Num));
+    }
     Some(v)
 }
 
@@ -4261,6 +4369,16 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
                 .filter(|v| matches!(v, Value::Blank))
                 .count() as f64,
         ),
+
+        // HYPERLINK(url, [label]): returns the label text (or the URL if no
+        // label). The cell-level link is stored via set_cell_link; the formula
+        // display shows the label making the cell effectively clickable when
+        // the link property is set independently.
+        "HYPERLINK" => {
+            let url = text(0);
+            let label = if args.len() > 1 { text(1) } else { url.clone() };
+            Value::Text(label)
+        }
 
         // IF / IFS / CHOOSE are short-circuit and handled upstream in
         // eval_expr's Token::Function arm (see eval_lazy, issue #38), so they
@@ -7859,6 +7977,72 @@ mod tests {
         );
         let n: f64 = v.parse().unwrap();
         assert!(n > 1.0 && n < 3.0, "STDEV.P = {}", n);
+    }
+
+    #[test]
+    fn type_function() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "42");
+        d.set_cell_text(0, 1, "hello");
+        d.set_cell_text(1, 0, "=TYPE(A1)");
+        d.set_cell_text(1, 1, "=TYPE(B1)");
+        assert_eq!(d.cell_display_value(1, 0), "1"); // number
+        assert_eq!(d.cell_display_value(1, 1), "2"); // text
+    }
+
+    #[test]
+    fn n_function_converts_to_number() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "hello");
+        d.set_cell_text(0, 1, "42");
+        d.set_cell_text(1, 0, "=N(A1)");
+        d.set_cell_text(1, 1, "=N(B1)");
+        assert_eq!(d.cell_display_value(1, 0), "0");  // text → 0
+        assert_eq!(d.cell_display_value(1, 1), "42"); // numeric text → 42
+    }
+
+    #[test]
+    fn t_function_returns_text() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "hello");
+        d.set_cell_text(0, 1, "42");
+        d.set_cell_text(1, 0, "=T(A1)");
+        d.set_cell_text(1, 1, "=T(B1)");
+        assert_eq!(d.cell_display_value(1, 0), "hello");
+        assert_eq!(d.cell_display_value(1, 1), ""); // number → empty
+    }
+
+    #[test]
+    fn cell_function_address() {
+        let mut d = DataProxy::new("MySheet");
+        // CELL("address") without a reference defaults to the calling cell.
+        d.set_cell_text(0, 0, "=CELL(\"address\")");
+        assert_eq!(d.cell_display_value(0, 0), "A1");
+    }
+
+    #[test]
+    fn cell_function_row_col() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(5, 3, "=CELL(\"row\")");
+        d.set_cell_text(5, 4, "=CELL(\"col\")");
+        assert_eq!(d.cell_display_value(5, 3), "6"); // row 5 = 1-based row 6
+        assert_eq!(d.cell_display_value(5, 4), "5"); // col 3 = 1-based col 5
+    }
+
+    #[test]
+    fn cell_function_filename() {
+        let mut d = DataProxy::new("Report");
+        d.set_cell_text(0, 0, "=CELL(\"filename\")");
+        assert_eq!(d.cell_display_value(0, 0), "Report");
+    }
+
+    #[test]
+    fn hyperlink_returns_label() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=HYPERLINK(\"https://example.com\", \"Click\")");
+        d.set_cell_text(0, 1, "=HYPERLINK(\"https://example.com\")");
+        assert_eq!(d.cell_display_value(0, 0), "Click");
+        assert_eq!(d.cell_display_value(0, 1), "https://example.com");
     }
 
     #[test]
