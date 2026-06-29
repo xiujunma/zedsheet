@@ -1073,6 +1073,21 @@ impl DataProxy {
                     let spans = self.arg_spans(t, pos);
                     return self.eval_let(t, &spans, vis);
                 }
+                // LAMBDA (Phase 3.3): capture params + body tokens and
+                // return a `Value::Lambda`. The body doesn't evaluate
+                // here — MAP (or REDUCE, BYROW, …) invokes it.
+                if upper == "LAMBDA" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_lambda(t, spans);
+                }
+                // MAP (Phase 3.3): apply a LAMBDA element-wise to an
+                // array. Spans-based dispatch because the lambda
+                // arg must NOT be eagerly evaluated (it isn't a
+                // primitive Value).
+                if upper == "MAP" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_map(t, &spans, vis);
+                }
                 // Position / reference functions (issue #37) need the calling
                 // cell or their argument's coordinates, not its value — they
                 // read the raw arg spans. SUBTOTAL (issue #30) joins them
@@ -1158,10 +1173,11 @@ impl DataProxy {
                 *pos += 1;
                 // Phase 3.2: a LET binding takes precedence over a
                 // sheet-scoped named range, but only while its frame
-                // is on top. (Inner LET may shadow an outer name; we
-                // don't promote the outer binding back into scope
-                // once the inner frame pops.)
-                if let Some(frame) = self.let_bindings.borrow().last() {
+                // Walk top → bottom so an inner LET/LAMBDA can
+                // shadow an outer name while a LAMBDA body still
+                // sees LET bindings from the enclosing scope that
+                // aren't shadowed by its own params.
+                for frame in self.let_bindings.borrow().iter().rev() {
                     if let Some(v) = frame.get(&n) {
                         return Ok(v.clone());
                     }
@@ -1401,11 +1417,11 @@ impl DataProxy {
         let mut depth = 0usize;
         loop {
             match t.get(*pos) {
-                Some(Token::LeftParen) => {
+                Some(Token::LeftParen) | Some(Token::LeftBrace) => {
                     depth += 1;
                     *pos += 1;
                 }
-                Some(Token::RightParen) if depth > 0 => {
+                Some(Token::RightParen) | Some(Token::RightBrace) if depth > 0 => {
                     depth -= 1;
                     *pos += 1;
                 }
@@ -1566,6 +1582,114 @@ impl DataProxy {
         let result = self.eval_span(t, body_span, vis);
         self.let_bindings.borrow_mut().pop();
         result
+    }
+
+    /// LAMBDA(p1, p2, …, body) (Phase 3.3). Capture the parameter
+    /// names + the body token stream and return a `Value::Lambda`.
+    /// Body tokens are sliced out of `t` and stored by value, so
+    /// the lambda can outlive the surrounding parser span.
+    ///
+    /// Arg shape: 1+ parameter names followed by one body span.
+    /// Empty parameter list is allowed (`=LAMBDA(body)`) for
+    /// constant expressions — calling it just evaluates `body`.
+    fn eval_lambda(&self, t: &[Token], spans: Vec<(usize, usize)>) -> Result<Value, EvalErr> {
+        if spans.len() < 2 {
+            return Err(EvalErr::Value);
+        }
+        let body_span = spans[spans.len() - 1];
+        let mut params: Vec<String> = Vec::with_capacity(spans.len() - 1);
+        for span in &spans[..spans.len() - 1] {
+            if span.0 == span.1 {
+                return Err(EvalErr::Value);
+            }
+            let name_tok = t.get(span.0).ok_or(EvalErr::Value)?;
+            let Token::Name(name) = name_tok else {
+                return Err(EvalErr::Value);
+            };
+            params.push(name.clone());
+        }
+        let body_tokens = t[body_span.0..body_span.1].to_vec();
+        Ok(Value::Lambda {
+            params,
+            body_tokens,
+        })
+    }
+
+    /// Invoke a `Value::Lambda` with a list of argument values. Pushes
+    /// a temporary LET frame so the lambda's parameter names resolve
+    /// to the supplied arguments, evaluates the body, then pops the
+    /// frame. Used by MAP (Phase 3.3); REDUCE / BYROW / BYCOL will
+    /// reuse this in their follow-ups.
+    fn call_lambda(
+        &self,
+        lambda: &Value,
+        args: Vec<Value>,
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        let (params, body_tokens) = match lambda {
+            Value::Lambda {
+                params,
+                body_tokens,
+            } => (params, body_tokens),
+            _ => return Err(EvalErr::Value),
+        };
+        if args.len() != params.len() {
+            return Err(EvalErr::Value);
+        }
+        let mut frame: HashMap<String, Value> = HashMap::new();
+        for (p, v) in params.iter().zip(args.into_iter()) {
+            frame.insert(p.clone(), v);
+        }
+        self.let_bindings.borrow_mut().push(frame);
+        let mut p = 0usize;
+        let result = self.parse_cmp(&body_tokens, &mut p, vis);
+        self.let_bindings.borrow_mut().pop();
+        result
+    }
+
+    /// MAP(array, lambda) (Phase 3.3). Apply the lambda to every
+    /// element of `array`. The lambda must take exactly one
+    /// argument; the result is a same-shape array with each cell
+    /// replaced by `lambda(element)`.
+    fn eval_map(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        if spans.len() != 2 {
+            return Err(EvalErr::Value);
+        }
+        let array = self.eval_span(t, spans[0], vis)?;
+        let lambda = self.eval_span(t, spans[1], vis)?;
+        let Value::Lambda { params, .. } = &lambda else {
+            return Err(EvalErr::Value);
+        };
+        if params.len() != 1 {
+            return Err(EvalErr::Value);
+        }
+        match array {
+            Value::Array(rows) => {
+                let mut out: Vec<Vec<Value>> = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut new_row: Vec<Value> = Vec::with_capacity(row.len());
+                    for cell in row {
+                        let v = self.call_lambda(&lambda, vec![cell], vis)?;
+                        new_row.push(v);
+                    }
+                    out.push(new_row);
+                }
+                Ok(Value::Array(out))
+            }
+            Value::Blank => Ok(Value::Array(Vec::new())),
+            // Scalar argument: MAP applies the lambda once and
+            // returns a 1×1 array. Matches Excel's behaviour for
+            // =MAP(5, LAMBDA(x, x*2)) → {10}.
+            other => {
+                let v = self.call_lambda(&lambda, vec![other], vis)?;
+                Ok(Value::Array(vec![vec![v]]))
+            }
+        }
     }
 
     /// Position / reference functions: ROW, COLUMN, ADDRESS, OFFSET, INDIRECT
@@ -3682,6 +3806,7 @@ fn value_display(v: &Value) -> String {
         // `=A1:A3/0` shows `#DIV/0!` in every spilled cell (issue #56).
         Value::Error(e) => e.code().to_string(),
         Value::Array(_) => value_display(&v.top_left()),
+        Value::Lambda { .. } => "[LAMBDA]".to_string(),
     }
 }
 
@@ -3773,6 +3898,15 @@ pub(crate) enum Value {
     /// SEQUENCE/… (issue #33). At a formula's top level it spills into
     /// neighboring cells; in scalar context it collapses to its top-left.
     Array(Vec<Vec<Value>>),
+    /// A LAMBDA value (Phase 3.3). Captures the parameter names and
+    /// the body token stream; evaluating the body defers until the
+    /// lambda is invoked (typically through MAP/REDUCE/BYROW).
+    /// Stored as plain owned tokens so a Lambda can outlive the
+    /// surrounding parser span.
+    Lambda {
+        params: Vec<String>,
+        body_tokens: Vec<Token>,
+    },
 }
 
 impl Value {
@@ -3802,6 +3936,7 @@ impl Value {
             Value::Blank => 0.0,
             Value::Error(_) => 0.0,
             Value::Array(_) => self.top_left().as_number(),
+            Value::Lambda { .. } => 0.0,
         }
     }
 
@@ -3814,6 +3949,7 @@ impl Value {
             // Error values render as their Excel code (issue #56).
             Value::Error(e) => e.code().to_string(),
             Value::Array(_) => self.top_left().as_text(),
+            Value::Lambda { .. } => "[LAMBDA]".to_string(),
         }
     }
 
@@ -3906,6 +4042,10 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (_, Value::Error(_)) => Some(Ordering::Less),
         // Unreachable: arrays were collapsed to scalars above.
         (Value::Array(_), _) | (_, Value::Array(_)) => None,
+        // Lambda values are not directly comparable — treat them
+        // as greater than every non-error value to keep the
+        // compare_values total order sound.
+        (Value::Lambda { .. }, _) | (_, Value::Lambda { .. }) => Some(Ordering::Greater),
     }
 }
 
@@ -4175,6 +4315,11 @@ fn apply_info_function(
                 Some(Value::Blank) => 1.0, // blank cells type as number (0)
                 Some(Value::Error(_)) => 16.0,
                 Some(Value::Array(_)) => 64.0,
+                // Lambda is treated as a "function" — Excel uses 64 for
+                // arrays; we reuse that code so a future official
+                // type-128 branch can replace it without breaking
+                // existing workbooks.
+                Some(Value::Lambda { .. }) => 64.0,
                 None if err0.is_some() => 16.0,
                 None => 1.0,
             };
@@ -4193,6 +4338,7 @@ fn apply_info_function(
                     // N(array) returns N of first element
                     Ok(Value::Number(0.0))
                 }
+                Some(Value::Lambda { .. }) => Ok(Value::Number(0.0)),
                 None if err0.is_some() => Err(err0.unwrap()),
                 None => Ok(Value::Number(0.0)),
             }
@@ -8389,5 +8535,86 @@ mod tests {
     fn let_undefined_name_in_body_is_name_error() {
         // LET(x, 5, y*2) → #NAME? (y is not bound).
         assert_eq!(eval("=LET(x,5,y*2)", &[]), "#NAME?");
+    }
+
+    // --- Phase 3.3: LAMBDA + MAP ---
+
+    #[test]
+    fn lambda_defines_a_value() {
+        // LAMBDA on its own produces a value (not a #VALUE!) — the
+        // display collapses to "[LAMBDA]".
+        assert_eq!(eval("=LAMBDA(x,x*2)", &[]), "[LAMBDA]");
+    }
+
+    #[test]
+    fn map_applies_lambda_to_each_element() {
+        // MAP({1,2,3}, LAMBDA(x, x*2)) → {2,4,6}.
+        assert_eq!(eval("=MAP({1,2,3},LAMBDA(x,x*2))", &[]), "2");
+    }
+
+    #[test]
+    fn map_with_multi_arg_lambda_returns_value_error() {
+        // The lambda must take exactly one argument for MAP; the
+        // inner body is short-circuited and the call returns
+        // #VALUE! before invoking the body.
+        assert_eq!(eval("=MAP({1,2,3},LAMBDA(x,y,x+y))", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn map_with_non_lambda_second_arg_is_value_error() {
+        // The second arg must be a LAMBDA — passing a number
+        // can't be called.
+        assert_eq!(eval("=MAP({1,2,3},5)", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn map_wrong_arg_count_is_value_error() {
+        assert_eq!(eval("=MAP({1,2,3})", &[]), "#VALUE!");
+        assert_eq!(eval("=MAP(LAMBDA(x,x))", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn lambda_with_let_captures_binding() {
+        // LET-then-MAP: the let-binding flows into the lambda's
+        // body, the lambda's parameter (`x`) is independent.
+        // =LET(scale, 10, MAP({1,2,3}, LAMBDA(x, x*scale))) →
+        // {10, 20, 30}.
+        assert_eq!(
+            eval("=LET(scale,10,MAP({1,2,3},LAMBDA(x,x*scale)))", &[]),
+            "10"
+        );
+    }
+
+    #[test]
+    fn lambda_param_shadows_let_binding_inside_body() {
+        // =LET(x, 99, MAP({1,2}, LAMBDA(x, x+1))) → {2, 3}.
+        // The lambda's parameter `x` shadows the LET binding
+        // inside the lambda's body; outside the lambda, the
+        // outer x still exists in the LET frame, but MAP doesn't
+        // reference it.
+        assert_eq!(eval("=LET(x,99,MAP({1,2},LAMBDA(x,x+1)))", &[]), "2");
+    }
+
+    #[test]
+    fn map_with_scalar_input_returns_1x1() {
+        // =MAP(5, LAMBDA(x, x*10)) → {50}. Top-left = 50.
+        assert_eq!(eval("=MAP(5,LAMBDA(x,x*10))", &[]), "50");
+    }
+
+    #[test]
+    fn lambda_with_no_params_rejected_by_map() {
+        // MAP requires the lambda to take exactly one argument; a
+        // parameterless lambda is rejected before the body runs.
+        assert_eq!(eval("=MAP({1,2,3},LAMBDA(42))", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn lambda_definition_round_trip_through_let() {
+        // Composing LET + LAMBDA: the lambda is stored as a
+        // Value::Lambda inside the let frame, then MAP pulls it
+        // out and applies it.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=LET(double,LAMBDA(x,x*2),MAP({1,2,3,4},double))");
+        assert_eq!(d.cell_display_value(0, 0), "2");
     }
 }
