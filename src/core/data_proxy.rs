@@ -176,6 +176,14 @@ impl Default for PageSetup {
 #[derive(Debug, Clone)]
 pub struct DataProxy {
     pub name: String,
+    /// LET-name binding stack (Phase 3.2). Each LET invocation pushes
+    /// a frame; the body span evaluates with the top frame visible.
+    /// The frame is a `HashMap<String, Value>` so the same name in
+    /// an outer scope isn't shadowed by the inner one — the inner
+    /// shadow only affects lookups while the inner frame is on top.
+    /// `Rc<RefCell<…>>` so the immutable evaluator API can still
+    /// push / pop during a span's deferred evaluation.
+    pub let_bindings: Rc<RefCell<Vec<HashMap<String, Value>>>>,
     pub freeze: (usize, usize),
     pub styles: Vec<Style>,
     pub merges: Merges,
@@ -307,6 +315,7 @@ impl Default for DataProxy {
             charts: Vec::new(),
             tables: Vec::new(),
             named_ranges: HashMap::new(),
+            let_bindings: Rc::new(RefCell::new(Vec::new())),
             pivots: Vec::new(),
             slicers: Vec::new(),
             protection: crate::core::sheet_protection::SheetProtection::default(),
@@ -1057,6 +1066,13 @@ impl DataProxy {
                     let spans = self.arg_spans(t, pos);
                     return self.eval_lazy(&upper, t, &spans, vis);
                 }
+                // LET (Phase 3.2): name-binding scope over a body span.
+                // Spans-based evaluation lets the body see the LET
+                // frame without leaking the bindings to the outer scope.
+                if upper == "LET" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_let(t, &spans, vis);
+                }
                 // Position / reference functions (issue #37) need the calling
                 // cell or their argument's coordinates, not its value — they
                 // read the raw arg spans. SUBTOTAL (issue #30) joins them
@@ -1140,6 +1156,16 @@ impl DataProxy {
             }
             Token::Name(n) => {
                 *pos += 1;
+                // Phase 3.2: a LET binding takes precedence over a
+                // sheet-scoped named range, but only while its frame
+                // is on top. (Inner LET may shadow an outer name; we
+                // don't promote the outer binding back into scope
+                // once the inner frame pops.)
+                if let Some(frame) = self.let_bindings.borrow().last() {
+                    if let Some(v) = frame.get(&n) {
+                        return Ok(v.clone());
+                    }
+                }
                 // Scalar context: a named range resolves to its top-left cell;
                 // an undefined name is a #NAME? error.
                 match self.resolve_name(&n) {
@@ -1483,6 +1509,63 @@ impl DataProxy {
             [Token::Name(n)] => self.resolve_name(n),
             _ => None,
         }
+    }
+
+    /// LET(name, value, body) (Phase 3.2). Builds a name→Value map
+    /// from the (name, value) pairs, pushes it onto the LET-binding
+    /// stack, evaluates the body span with the top frame visible,
+    /// then pops the frame. Spans come from `arg_spans` so the
+    /// body sees the bindings without round-tripping through
+    /// `Value` (LET values can be anything, including arrays).
+    ///
+    /// Argument shape: an even number of name/value pairs followed
+    /// by one body expression. Returns `#VALUE!` on:
+    /// * any name slot that's not a single `Token::Name` (we
+    ///   disallow string-quoted names to keep the binding set
+    ///   alphanumeric — `"foo"` is a string, `foo` is a name),
+    /// * any name slot that's empty,
+    /// * odd number of slots before the body.
+    fn eval_let(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        if spans.len() < 3 {
+            return Err(EvalErr::Value);
+        }
+        let body_span = spans[spans.len() - 1];
+        let pairs = &spans[..spans.len() - 1];
+        if pairs.len() % 2 != 0 {
+            return Err(EvalErr::Value);
+        }
+        self.let_bindings.borrow_mut().push(HashMap::new());
+        for pair in pairs.chunks_exact(2) {
+            let name_span = pair[0];
+            let value_span = pair[1];
+            // The name slot must be exactly one Token::Name; empty
+            // spans (which would mean "name, ,value, body") are
+            // rejected.
+            if name_span.0 == name_span.1 {
+                return Err(EvalErr::Value);
+            }
+            let name_tok = t.get(name_span.0).ok_or(EvalErr::Value)?;
+            let Token::Name(name) = name_tok else {
+                return Err(EvalErr::Value);
+            };
+            let value = self.eval_span(t, value_span, vis)?;
+            // Insert into the TOP frame so later iterations and
+            // the body span see this binding.
+            if let Some(top) = self.let_bindings.borrow_mut().last_mut() {
+                top.insert(name.clone(), value);
+            }
+        }
+        // Push an empty frame first so subsequent value spans
+        // see earlier bindings. Pop regardless of result so a
+        // body error doesn't leak the bindings to the outer scope.
+        let result = self.eval_span(t, body_span, vis);
+        self.let_bindings.borrow_mut().pop();
+        result
     }
 
     /// Position / reference functions: ROW, COLUMN, ADDRESS, OFFSET, INDIRECT
@@ -8237,5 +8320,74 @@ mod tests {
         // still works alongside the new array-literal path.
         assert_eq!(eval("=2+3", &[]), "5");
         assert_eq!(eval("=SUM({1;2;3})", &[]), "6");
+    }
+
+    // --- Phase 3.2: LET ---
+
+    #[test]
+    fn let_simple_binding() {
+        // =LET(x, 5, x*2) → 10
+        assert_eq!(eval("=LET(x,5,x*2)", &[]), "10");
+    }
+
+    #[test]
+    fn let_repeated_name_uses_latest_value() {
+        // LET(x, 1, x + LET(x, 2, x)) → 1 + 2 = 3.
+        // The inner LET shadows x within its body; the outer
+        // binding is unaffected by the inner redefinition.
+        assert_eq!(eval("=LET(x,1,x+LET(x,2,x))", &[]), "3");
+    }
+
+    #[test]
+    fn let_binding_does_not_leak_after_body() {
+        // After the body returns, the binding is gone: a
+        // subsequent reference to `x` is #NAME?.
+        let sheet = "=LET(x,7,x)+1+IF(TRUE(),0,x)";
+        // The outer `x` is undefined → #NAME? propagates. Use
+        // 0+0 instead of 0+x to keep the test deterministic
+        // without parsing the failure surface twice.
+        let _ = sheet;
+        // Direct test: a separate LET call after a referencing
+        // expression must NOT see the prior binding.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=LET(x,5,x)");
+        d.set_cell_text(1, 0, "=x");
+        // After commit the formula in (0,0) returns 5; the
+        // formula in (1,0) references an undefined name → #NAME?.
+        assert_eq!(d.cell_display_value(0, 0), "5");
+        assert_eq!(d.cell_display_value(1, 0), "#NAME?");
+    }
+
+    #[test]
+    fn let_multiple_bindings() {
+        // =LET(a, 2, b, 3, a*b + a + b) → 6 + 2 + 3 = 11.
+        assert_eq!(eval("=LET(a,2,b,3,a*b+a+b)", &[]), "11");
+    }
+
+    #[test]
+    fn let_odd_arg_count_is_value_error() {
+        // LET requires name, value, …, body — only 1 pair (no body)
+        // is #VALUE!.
+        assert_eq!(eval("=LET(x,1)", &[]), "#VALUE!");
+        // 2 pairs + body → let body evaluate the undefined name.
+        assert_eq!(eval("=LET(x,1,y)", &[]), "#NAME?");
+    }
+
+    #[test]
+    fn let_three_args_minimum() {
+        // LET(name, value, body) is the minimum valid shape.
+        assert_eq!(eval("=LET(x,42,x)", &[]), "42");
+    }
+
+    #[test]
+    fn let_value_can_reference_previous_binding() {
+        // LET(a, 1, b, a+10, a+b) → b = 11, body = 12.
+        assert_eq!(eval("=LET(a,1,b,a+10,a+b)", &[]), "12");
+    }
+
+    #[test]
+    fn let_undefined_name_in_body_is_name_error() {
+        // LET(x, 5, y*2) → #NAME? (y is not bound).
+        assert_eq!(eval("=LET(x,5,y*2)", &[]), "#NAME?");
     }
 }
