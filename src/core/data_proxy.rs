@@ -2352,6 +2352,7 @@ impl DataProxy {
         }
         self.merges
             .delete_intersecting(&CellRange::new(r0, c0, r1, c1));
+        self.adjust_formulas_for_delete_cells(r0, c0, r1, c1, horizontal);
     }
 
     /// Rewrite cell references in every formula after a structural edit. Any
@@ -2368,6 +2369,36 @@ impl DataProxy {
             for cell in row.cells.values_mut() {
                 if cell.text.starts_with('=') {
                     cell.text = adjust_formula_refs(&cell.text, is_row, shift_from, delta, deleted);
+                }
+            }
+        }
+    }
+
+    /// After a rectangular cell deletion with shift (delete_cells), rewrite
+    /// every formula: references inside the deleted rect become `#REF!`, and
+    /// references to cells that shifted are adjusted.
+    ///
+    /// `horizontal=true` → cells in rows r0..=r1 to the right of c1 shift left;
+    /// `horizontal=false` → cells in cols c0..=c1 below r1 shift up.
+    fn adjust_formulas_for_delete_cells(
+        &mut self,
+        r0: usize,
+        c0: usize,
+        r1: usize,
+        c1: usize,
+        horizontal: bool,
+    ) {
+        for row in self.rows.values_mut() {
+            for cell in row.cells.values_mut() {
+                if cell.text.starts_with('=') {
+                    cell.text = adjust_refs_for_delete_cells(
+                        &cell.text,
+                        r0,
+                        c0,
+                        r1,
+                        c1,
+                        horizontal,
+                    );
                 }
             }
         }
@@ -2930,6 +2961,60 @@ fn adjust_formula_refs(
                 }
             } else if col_lock.is_empty() && col >= shift_from {
                 new_col = (col as isize + delta).max(0) as usize;
+            }
+
+            format!(
+                "{}{}{}{}",
+                col_lock,
+                string_at(new_col),
+                row_lock,
+                new_row + 1
+            )
+        })
+        .to_string();
+    restore_placeholders(&shifted, &placeholders)
+}
+
+/// After a rectangular cell deletion with shift, rewrite cell references:
+/// those inside the deleted rectangle become `#REF!`; those that shifted
+/// are adjusted. The shift logic mirrors the cell-move in `delete_cells`.
+fn adjust_refs_for_delete_cells(
+    text: &str,
+    r0: usize,
+    c0: usize,
+    r1: usize,
+    c1: usize,
+    horizontal: bool,
+) -> String {
+    let (masked, mut placeholders) = mask_sheet_prefixes(text);
+    let masked = mask_struct_refs(&masked, &mut placeholders);
+    let w = c1 - c0 + 1;
+    let h = r1 - r0 + 1;
+    let re = Regex::new(r"(\$?)([A-Za-z]+)(\$?)([0-9]+)").unwrap();
+    let shifted = re
+        .replace_all(&masked, |caps: &regex::Captures| {
+            let col_lock = &caps[1];
+            let row_lock = &caps[3];
+            let col = index_at(&caps[2]);
+            let row = caps[4].parse::<usize>().unwrap_or(1).saturating_sub(1);
+
+            // References inside the deleted rectangle → #REF!.
+            if row >= r0 && row <= r1 && col >= c0 && col <= c1 {
+                return "#REF!".to_string();
+            }
+
+            let mut new_col = col;
+            let mut new_row = row;
+            if horizontal {
+                // Cells in the same row band, right of the rect, shift left.
+                if col_lock.is_empty() && row >= r0 && row <= r1 && col > c1 {
+                    new_col = col.saturating_sub(w);
+                }
+            } else {
+                // Cells in the same column band, below the rect, shift up.
+                if row_lock.is_empty() && col >= c0 && col <= c1 && row > r1 {
+                    new_row = row.saturating_sub(h);
+                }
             }
 
             format!(
@@ -4891,6 +4976,67 @@ mod tests {
     }
 
     #[test]
+    fn delete_cells_formula_ref_to_deleted_cell_becomes_ref() {
+        // Shift up: a formula referencing a deleted cell → #REF!.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "old");
+        d.set_cell_text(2, 0, "=A1"); // references the to-be-deleted cell
+        d.delete_cells(0, 0, 0, 0, false); // shift up, deletes A1
+        assert_eq!(d.get_cell_text(0, 0), ""); // A1 cleared, nothing above to pull up
+        assert_eq!(d.get_cell_text(1, 0), "=#REF!");
+        assert_eq!(d.cell_display_value(1, 0), "#REF!");
+    }
+
+    #[test]
+    fn delete_cells_formula_ref_to_shifted_cell_adjusts() {
+        // Shift up: a formula referencing a cell below the deleted rect → adjusted.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(1, 0, "val");
+        d.set_cell_text(3, 0, "=A2"); // references A2 (row 1), which shifts to A1
+        d.delete_cells(0, 0, 0, 0, false); // shift up, deletes A1, A2→A1, A3→A2, etc.
+        assert_eq!(d.get_cell_text(0, 0), "val"); // A2 moved up to A1
+        assert_eq!(d.get_cell_text(2, 0), "=A1"); // reference adjusted
+    }
+
+    #[test]
+    fn delete_cells_absolute_ref_to_deleted_cell_becomes_ref() {
+        // Even $A$1 becomes #REF! when A1 itself is deleted.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "pin");
+        d.set_cell_text(1, 0, "=$A$1");
+        d.delete_cells(0, 0, 0, 0, false);
+        assert_eq!(d.get_cell_text(0, 0), "=#REF!");
+        assert_eq!(d.cell_display_value(0, 0), "#REF!");
+    }
+
+    #[test]
+    fn delete_cells_ref_to_cell_outside_rect_and_shift_zone_untouched() {
+        // Shift up: a formula referencing a cell in a different column AND
+        // outside the shift zone stays completely unchanged.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "del");
+        d.set_cell_text(0, 1, "=B3"); // references B3 — col B, different from deleted col A
+        d.set_cell_text(2, 1, "z"); // B3
+        d.delete_cells(0, 0, 0, 0, false); // shift up, deletes A1 only (col A, row 0)
+        // =B3 is in col B, the shifted column is A — reference B3 is untouched
+        assert_eq!(d.get_cell_text(0, 1), "=B3");
+        assert_eq!(d.cell_display_value(0, 1), "z");
+    }
+
+    #[test]
+    fn delete_cells_locked_ref_to_shifted_cell_stays_put() {
+        // $ references in the shift zone don't shift (but still #REF! if deleted).
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(2, 0, "v0");
+        d.set_cell_text(3, 0, "v1");
+        d.set_cell_text(4, 0, "=$A$3"); // $A$3 (= row 2), below deleted rect, column same
+        d.delete_cells(0, 0, 0, 0, false); // delete A1, shift up col A rows > 0
+        assert_eq!(d.get_cell_text(3, 0), "=$A$3"); // $A$3 locked, doesn't shift
+        // A3 (now row 2) contains v1 (was A4, shifted up into A3)
+        assert_eq!(d.cell_display_value(3, 0), "v1");
+    }
+
+    #[test]
     fn insert_cells_drops_overlapping_merge() {
         let mut d = DataProxy::new("t");
         d.merges.add(CellRange::new(0, 0, 1, 1)); // A1:B2
@@ -5761,6 +5907,62 @@ mod tests {
         );
         // Filled right shifts columns instead.
         assert_eq!(fill_line(&["=A1".into()], 2, false), vec!["=B1", "=C1"]);
+    }
+
+    #[test]
+    fn fill_line_absolute_col_stays_put_when_filled_right() {
+        // $A1 — column locked, row relative.
+        // Filled RIGHT (axis_is_row=false → shifts columns).
+        assert_eq!(
+            fill_line(&["=$A1".into()], 2, false),
+            vec!["=$A1", "=$A1"]
+        );
+    }
+
+    #[test]
+    fn fill_line_absolute_row_stays_put_when_filled_right() {
+        // A$1 — row locked, column relative.
+        // Filled RIGHT (axis_is_row=false → shifts columns, row locked stays).
+        assert_eq!(
+            fill_line(&["=A$1".into()], 2, false),
+            vec!["=B$1", "=C$1"]
+        );
+    }
+
+    #[test]
+    fn fill_line_relative_formula_filled_down_only_shifts_rows() {
+        // =A1 filled DOWN: column stays A, row shifts 1→2, 1→3, 1→4.
+        assert_eq!(
+            fill_line(&["=A1".into()], 3, true),
+            vec!["=A2", "=A3", "=A4"]
+        );
+    }
+
+    #[test]
+    fn fill_line_fully_absolute_stays_put_in_both_directions() {
+        // $A$1 — both locked. Neither direction changes it.
+        assert_eq!(
+            fill_line(&["=$A$1".into()], 2, true),
+            vec!["=$A$1", "=$A$1"]
+        );
+        assert_eq!(
+            fill_line(&["=$A$1".into()], 2, false),
+            vec!["=$A$1", "=$A$1"]
+        );
+    }
+
+    #[test]
+    fn fill_line_mixed_absolute_in_multi_source_tiling() {
+        // Two source cells: one with locked col, one with locked row.
+        // Filled down (axis_is_row=true, shift=2 for first cycle).
+        let src = vec!["=$A1".to_string(), "=B$1".to_string()];
+        let filled = fill_line(&src, 4, true);
+        // i=0: src=$A1 shift=2 → row 1→3 → $A3; i=1: src=B$1 shift=2 → col B→B, row locked → B$1
+        // i=2: src=$A1 shift=4 → row 1→5 → $A5; i=3: src=B$1 shift=4 → col B→B, row locked → B$1
+        assert_eq!(&filled[0], "=$A3"); // row shifted, col locked
+        assert_eq!(&filled[1], "=B$1"); // row locked, stays
+        assert_eq!(&filled[2], "=$A5"); // second cycle, row shifted
+        assert_eq!(&filled[3], "=B$1"); // row locked, stays
     }
 
     // --- Cross-sheet references (issue #4) ---

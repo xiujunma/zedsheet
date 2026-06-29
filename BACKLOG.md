@@ -1,0 +1,126 @@
+# Backlog
+
+> Critical and noteworthy features **not yet implemented** in zedsheet. The
+> goal is Excel / Google Sheets parity for a personal-use single-user
+> spreadsheet, so this list is scoped to features users actually hit.
+>
+> **Convention:** issue numbers refer to the GitHub issue tracker where a
+> fuller discussion lives. Severity tags:
+> - **P0** — correctness bug or a feature users hit on day one
+> - **P1** — meaningful gap; users will want this before considering zedsheet "done"
+> - **P2** — parity nice-to-have; smaller surface or specialised use
+>
+> Generated 2026-06-23 from a fresh audit (`git log`, `gh issue list`,
+> placeholder dirs under `src/`, stub functions, and code-grep for known
+> patterns). Re-run after each major feature to keep it current.
+
+---
+
+## 1. Formula engine
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | ~~**P0**~~ ✅ | `#REF!` propagation when a referenced cell/row/column is deleted | Fixed 2026-06-29: `delete_cells` now calls `adjust_formulas_for_delete_cells` which rewrites references inside the deleted rectangle to `#REF!` and adjusts shifted references. Tests in `data_proxy.rs`. |
+| | ~~**P0**~~ ✅ | Absolute references `$A$1`, `$A1`, `A$1` in the formula parser | Verified 2026-06-29: `tokenize()` → `shift_formula_refs()` / `fill_line()` all handle `$` correctly. The production path (fill-handle → `apply_fill` → `fill_line` → `shift_formula_refs`) honours absolute markers. Added comprehensive tests. `FormulaParser::parse()` is dead code. |
+| | **P1** | Financial functions: `PMT`, `PV`, `FV`, `NPV`, `IRR`, `RATE`, `XNPV`, `XIRR`, `SLN`, `DB`, `DDB`, `PPMT`, `IPMT` | Not implemented. Critical for any "real" financial model. |
+| | **P1** | Array literals `{1,2,3;4,5,6}` and `A1:B3` shape in formula context | Bare-range spill exists; constant arrays do not. Blocks `MMULT` matrix work. |
+| | **P1** | Modern dynamic-array helpers: `LET`, `LAMBDA`, `MAP`, `REDUCE`, `BYROW`, `BYCOL`, `MAKEARRAY` | Excel 365 / Sheets primitives; compose naturally with `FILTER`/`SORT`. |
+| | **P2** | Statistical extensions: `STDEV.S` / `STDEV.P` aliases, `PERCENTILE.INC`, `QUARTILE.INC`, `RANK.EQ`, `COVARIANCE.P`, `CORREL` | Existing `STDEV`/`VAR` work; the `.S`/`.P` / `.INC` / `.EXC` form aliases are the modern name set. |
+| | **P2** | `INFO`, `TYPE`, `N`, `T`, `CELL` | Info utilities — `CELL` is the most-asked-for (returns filename, sheet, address). |
+| | **P2** | `WEBSERVICE` / `IMPORTXML` style data imports | Optional; some users want stock prices, but in a wasm sandbox this is awkward. |
+| | **P2** | `HYPERLINK` formula function (the cell-level link UI is done; the formula form is not) | The hyperlink cell feature (issue #23) is in, but `=HYPERLINK(url, label)` in a formula is not. |
+
+## 2. Cell & data model
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | ~~**P0**~~ ✅ | Delete-cell shift (`Ctrl+-`) and delete-row/column | Fixed 2026-06-29: `Ctrl+-` opens a delete dialog with "Shift cells up", "Shift cells left", "Entire row", "Entire column" (full-row/col selections run directly). Dialog at `src/zedsheet/delete_modal.rs`, shortcut in `events.rs`. |
+| | **P1** | Hide / show rows and columns | The data model has no `hidden` flag on rows/cols yet. Right-click → Hide is a long-standing request. |
+| | **P1** | Rich text / inline formatting within a single cell (bold word inside a sentence) | Cell-level `Style` is monolithic; per-run formatting isn't. Requires multi-run cell representation + multi-run canvas drawing. |
+| | **P1** | Auto-fit column width and row height (double-click on header border) | Manual resize is in; auto-fit from content is the obvious next click. |
+| | **P2** | Images inside cells (logo in `A1`, photo in `B2`) | Standard spreadsheet feature. Requires an overlay layer (the empty `src/overlayer/` placeholder hints at this) and an image store on `DataProxy`. |
+| | **P2** | Shapes / drawing layer (rectangles, arrows, text boxes) | Same infrastructure as images; the empty `src/editor/` dir hints at a port of the x-spreadsheet editor. |
+| | **P2** | Diagonal borders (up and down) and double-line border style | Existing border editor likely covers the common 4 sides; verify diagonal / double in `core/cell.rs` and `renderer/border.rs`. |
+| | **P2** | Cell comments thread (notes already exist; multi-author, resolve/reopen) | Issue #22 added single-author notes. Threaded comments (Sheets-style) are a different model. |
+
+## 3. UI / interaction
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | **P1** | Drag-to-move and resize slicer panels | The `Slicer` struct already carries `x/y/width/height` (issue #61). The drag/resize handler is the missing half. |
+| | **P1** | Sort dialog (Data → Sort) with multi-level sort keys and "has header row" | The `sort_filter_range` engine primitive exists (`renderer/table_renderer.rs:2265`) and AutoFilter uses it; the dedicated *sort the entire sheet* UI is missing. |
+| | **P1** | "Insert from URL" / image insert from clipboard | Standard UX in Sheets; not present. |
+| | **P1** | Cell-level protection with password (sheet protection dialog) | The `editable` flag exists per cell (issue #24), but the UI to set a password that gates *changing the flag* doesn't. |
+| | **P2** | Custom keyboard shortcuts / accelerator re-binding | None of the workbooks have it. |
+| | **P2** | Paste preview (highlight where the paste will land before commit) | Drag-paste with ghost cell. |
+| | **P2** | Recent-files list (for the JS `load_data` API) | Browser-side; purely UX. |
+| | **P2** | Defined-name scope: workbook vs per-sheet | The `named_ranges` map is workbook-wide only. |
+| | **P2** | Conditional-formatting rule reordering via UI | Depends on whether the current UI supports drag-to-reorder; verify. |
+
+## 4. Persistence & import / export
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | ~~**P0**~~ ✅ | XLSX shared-strings table on **write** (export) | Verified 2026-06-29: `rust_xlsxwriter` v0.79 uses shared strings by default (`use_inline_strings: false`). The `SharedStringsTable` is populated during `wb.save_to_buffer()`. No code changes needed; added roundtrip test with 100 repeated strings. |
+| | ~~**P0**~~ ✅ | `import_xlsx` returns `bool`; the actual error is swallowed (`lib.rs:230`) | Fixed 2026-06-29: return type changed to `Result<(), JsValue>`. Parse errors now throw a JS `Error` with the human-readable reason (bad zip, empty workbook, corrupt sheet). |
+| | **P1** | OOXML chart round-trip on import | If `core/xlsx.rs` uses calamine, chart objects are typically dropped on import. Verify. |
+| | **P1** | ODS / Google Sheets format import (and re-export to `.xlsx` with formula preservation) | Optional but common. |
+| | **P2** | Auto-save to IndexedDB (debounced) | `persist.rs` already does localStorage; IndexedDB gives room for large workbooks. |
+| | **P2** | Per-cell permission keys (not just the `editable` boolean) | Sheet-level `setSheetReadOnly` and per-cell `editable` are in; finer permissions (e.g. allow formatting but not value changes) aren't. |
+
+## 5. Print & presentation
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | **P1** | Page setup: orientation, paper size, margins, scale-to-fit, repeat header rows on each page | `src/zedsheet/print.rs` is 185 lines and renders a single page. Headers/footers, page breaks, and print-area selection are absent. |
+| | **P2** | Page break preview / manual page break insertion | Excel parity. |
+| | **P2** | Print only the active sheet vs entire workbook | Currently single-sheet. |
+| | **P2** | PDF export (via the browser's print dialog → "Save as PDF") | Free via `window.print()`, but worth a one-click button. |
+
+## 6. Charts & graphics
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | **P1** | New chart types: scatter, bubble, radar, area, doughnut, surface, waterfall, treemap, sunburst | Issue #16 added the basic line/bar/pie set. The remainder is the long tail. |
+| | **P1** | Chart trendlines (linear, exponential, polynomial) | Standard chart option. |
+| | **P1** | Secondary axis and combination charts (line + bar on dual axes) | Common in finance dashboards. |
+| | **P1** | Sparklines (inline mini-charts in a cell) | Sheets has them; Excel has them. Requires overlay/draw pass. |
+| | **P2** | Conditional-formatting data-bar / icon-set rendering on top of bars, not replacing them | The CF primitives exist (issue #29); verify the data-bar / icon-set glyphs render correctly. |
+| | **P2** | Chart axis label formatting (number format, date format on the Y axis) | Standard chart option. |
+
+## 7. Collaboration & sharing (de-prioritised)
+
+zedsheet is a personal single-user wasm spreadsheet; the items below are
+listed for completeness but are **not on the critical path**. Track
+without an issue until someone asks.
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | P3 | Multi-user live editing (CRDT / OT) | Out of scope. |
+| | P3 | Comment threads with author / resolve / reopen | P2 under data model. |
+| | P3 | Presence indicators (live cursors) | Out of scope. |
+| | P3 | Version history / named snapshots | Not a critical need. |
+| | P3 | "Share link" / read-only view URL | Requires a backend. |
+
+---
+
+## 8. Codebase hygiene
+
+Small things the audit turned up. These are easy to clean up alongside
+the next feature that touches the same area.
+
+| # | Severity | Item | Notes |
+|---|----------|------|-------|
+| | P2 | `src/renderer/canvas.rs:181` `set_line_dash` has a `// FIXME` and a manual `Float64Array` build | Should use `js_sys::Float64Array::from` (or `.from_iter`) — same call shape as the wasm-bindgen docs. |
+| | P2 | Empty port-placeholder directories: `src/editor/`, `src/overlayer/`, `src/resizer/`, `src/scrollbar/`, `src/selector/` (each has only a `.keep`) | `CLAUDE.md` says don't "clean up" unwired code unless superseded. Audit before deletion: the editor / overlayer might be the future home of cell-level rich-text + image rendering (P1 items in §2). |
+| | P2 | `set_line_dash`/`set_dash` is a single FIXME, but the rest of the canvas helpers (`fill_text`, `stroke_rect`, `save`/`restore` wrappers) look complete | Minor, but worth landing a fix-it commit. |
+| | P3 | Clippy `-D warnings` currently fails (267 warnings + 1 error pre-existing) | Project rule says treat as errors. Either suppress the noisy style lints or refactor. |
+
+---
+
+## How to add an entry
+
+- Be specific. "Sort" is not a backlog item; "Sort dialog with multi-level keys, has-header option, case sensitivity" is.
+- Reference the GitHub issue number if one exists, or note "no issue yet" so the next person filing knows.
+- Keep severity honest. If a P0 has lived here for a year, it's probably a P1.
+- Re-run the audit (`gh issue list --state all`, the placeholder-dir scan, the function-table grep) after each major feature closes.

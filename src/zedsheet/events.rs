@@ -22,6 +22,7 @@ pub(crate) fn wire_events(
     filter_menu_node: Option<web_sys::Element>,
     filter_menu_visible: Rc<RefCell<bool>>,
     sync: &SyncFn,
+    delete_open: OpenHandle,
 ) {
     let dragging = Rc::new(RefCell::new(false));
     let drag: Rc<RefCell<Option<DragState>>> = Rc::new(RefCell::new(None));
@@ -431,6 +432,7 @@ pub(crate) fn wire_events(
         let editing = editing.clone();
         let editor_error = editor_error_node.clone();
         let sync = sync.clone();
+        let delete_open = delete_open.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
             if editing.borrow().is_some() {
                 return; // cell editor handles its own keys while editing
@@ -452,6 +454,7 @@ pub(crate) fn wire_events(
             // the `copy`/`cut`/`paste` events we listen for).
             if ke.ctrl_key() || ke.meta_key() {
                 let mut handled = true;
+                let mut show_delete_dialog = false;
                 {
                     let mut r = renderer.borrow_mut();
                     match key.to_lowercase().as_str() {
@@ -476,7 +479,29 @@ pub(crate) fn wire_events(
                         "y" => {
                             perform_redo(&mut r, &sheets, &active);
                         }
-                        // Ctrl/Cmd+Home → A1; Ctrl/Cmd+End → last used cell (#41).
+                        // Ctrl+- (and Ctrl+NumpadSubtract) → delete dialog
+                        // (#14). Whole-row or whole-col selection runs the
+                        // operation directly; partial selection shows the
+                        // dialog.
+                        "-" | "Subtract" | "NumpadSubtract" => {
+                            let sel = r.selection_bounds();
+                            let is_full_row =
+                                sel.1 == 0
+                                    && sel.3 as usize
+                                        == r.data.col_count().saturating_sub(1);
+                            let is_full_col =
+                                sel.0 == 0
+                                    && sel.2 as usize
+                                        == r.data.row_count().saturating_sub(1);
+                            if is_full_row {
+                                r.delete_rows_at_selection();
+                            } else if is_full_col {
+                                r.delete_cols_at_selection();
+                            } else {
+                                show_delete_dialog = true;
+                                handled = false;
+                            }
+                        }
                         "home" => r.select_and_reveal(0, 0),
                         "end" => {
                             let (mr, mc) = r.data.used_extent().unwrap_or((0, 0));
@@ -491,6 +516,11 @@ pub(crate) fn wire_events(
                 if handled {
                     ke.prevent_default();
                     sync();
+                } else if show_delete_dialog {
+                    ke.prevent_default();
+                    if let Some(open) = delete_open.borrow().as_ref() {
+                        open();
+                    }
                 }
                 return;
             }

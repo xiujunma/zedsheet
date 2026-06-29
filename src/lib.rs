@@ -224,17 +224,17 @@ pub fn export_xlsx(selector: &str) -> Option<Vec<u8>> {
 }
 
 /// Replace the mounted workbook with the parsed `.xlsx` (all sheets; stored
-/// formulas stay live). Returns `false` when the bytes don't parse
-/// (issue #15).
+/// formulas stay live). Returns `Ok(())` on success, or throws a JS error
+/// with a human-readable reason on failure (issue #15).
 #[wasm_bindgen]
-pub fn import_xlsx(selector: &str, bytes: &[u8]) -> bool {
+pub fn import_xlsx(selector: &str, bytes: &[u8]) -> Result<(), JsValue> {
     match core::xlsx::from_xlsx(bytes) {
         Ok(sheets) => {
             let json = core::workbook::serialize(&sheets);
             load_data(selector, &json);
-            true
+            Ok(())
         }
-        Err(_) => false,
+        Err(msg) => Err(JsValue::from_str(&msg)),
     }
 }
 

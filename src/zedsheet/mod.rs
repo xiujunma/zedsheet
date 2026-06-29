@@ -25,6 +25,7 @@ mod chart_modal;
 mod cond_format_modal;
 mod context_menu;
 mod data_validation;
+mod delete_modal;
 mod events;
 mod filter_menu;
 mod find_replace;
@@ -41,6 +42,7 @@ pub(crate) use chart_modal::*;
 pub(crate) use cond_format_modal::*;
 pub(crate) use context_menu::*;
 pub(crate) use data_validation::*;
+pub(crate) use delete_modal::*;
 pub(crate) use events::*;
 pub(crate) use filter_menu::*;
 pub(crate) use find_replace::*;
@@ -507,6 +509,7 @@ impl ZedSheet {
         let pivot_open: OpenHandle = Rc::new(RefCell::new(None));
         // …and the Slicer dialog (issue #61).
         let slicer_open: OpenHandle = Rc::new(RefCell::new(None));
+        let delete_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -648,6 +651,7 @@ impl ZedSheet {
             filter_menu_node.clone(),
             filter_menu_visible.clone(),
             &sync,
+            delete_open.clone(),
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
             wire_context_menu(
@@ -662,6 +666,7 @@ impl ZedSheet {
                 chart_open.clone(),
                 pivot_open.clone(),
                 slicer_open.clone(),
+                delete_open.clone(),
             );
         }
         if let Some(fb) = fbar_node.clone() {
@@ -926,6 +931,26 @@ impl ZedSheet {
                     &sheets_for_open,
                     &active_for_open,
                 );
+            }));
+        }
+
+        // Delete-cell dialog (Ctrl+-, issue #14): mounted hidden at root,
+        // opened by the Ctrl+- keyboard shortcut.
+        let mut delete_modal_root = h("div", Some("zs-delete-modal-root"));
+        delete_modal_root.set_inner_html(delete_modal_html());
+        let delete_modal_node: Option<web_sys::Element> =
+            delete_modal_root.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut delete_modal_root);
+        if let Some(ref node) = delete_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-delete-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_delete_modal(inner.clone(), &renderer, &sync);
+            let renderer_for_open = renderer.clone();
+            *delete_open.borrow_mut() = Some(Rc::new(move || {
+                open_delete_modal(&inner, &renderer_for_open);
             }));
         }
 

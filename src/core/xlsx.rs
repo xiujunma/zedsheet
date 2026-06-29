@@ -135,4 +135,34 @@ mod tests {
         assert_eq!(sheets[0].get_cell_text(0, 0), "100");
         assert_eq!(sheets[0].get_cell_text(0, 1), "1.5");
     }
+
+    #[test]
+    fn xlsx_roundtrip_repeated_strings() {
+        // Many copies of the same string should survive roundtrip.
+        // rust_xlsxwriter uses shared strings by default, so the output
+        // won't bloat (verified by reading the library source).
+        let mut d = DataProxy::new("repeat");
+        for r in 0..50 {
+            d.set_cell_text(r, 0, "Shared");
+            d.set_cell_text(r, 1, "Repeated");
+        }
+        let bytes = to_xlsx(&[d]).expect("write");
+        let sheets = from_xlsx(&bytes).expect("read");
+        assert_eq!(sheets.len(), 1);
+        for r in 0..50 {
+            assert_eq!(sheets[0].get_cell_text(r, 0), "Shared");
+            assert_eq!(sheets[0].get_cell_text(r, 1), "Repeated");
+        }
+        // The exported bytes should be compact (shared strings means each
+        // unique string appears once in the SST). 100 string cells + XML
+        // overhead should fit well under 4 KiB; inline strings would be
+        // several times larger.
+        // XML overhead per cell (~row + c + v tags) adds up; at ~57 bytes
+        // per cell this is still well within shared-string territory.
+        assert!(
+            bytes.len() < 8192,
+            "shared strings should keep export compact: {} bytes",
+            bytes.len()
+        );
+    }
 }

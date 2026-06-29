@@ -105,6 +105,7 @@ pub(crate) fn wire_context_menu(
     chart_open: OpenHandle,
     pivot_open: OpenHandle,
     slicer_open: OpenHandle,
+    _delete_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
