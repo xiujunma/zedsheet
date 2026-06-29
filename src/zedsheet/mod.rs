@@ -167,7 +167,23 @@ impl ZedSheet {
         });
         sheet_el.append_child(&mut canvas_el);
         sheet_el.append_child(&mut editor_el);
-        sheet_el.append_child(&mut cmenu_el);
+        // Append the context menu to \`document.body\` rather than
+        // \`sheet_el\`. The sheet has \`overflow: hidden\` (to clip the
+        // editor textarea + slicer panels), which would otherwise clip
+        // the menu to the sheet's content box and hide items past the
+        // bottom edge. As a body child, \`position: absolute\`
+        // resolves to the viewport and the menu escapes the clip.
+        if let Some(body) = document().body() {
+            // \`HtmlBodyElement::append_child\` takes \`&Node\`;
+            // the \`Element\` wrapper auto-coerces for \`Element::append_child\`
+            // but not here. Pass the inner \`web_sys::Element\` so
+            // the call resolves to the right method.
+            if let Some(cmenu_web) = cmenu_el.el.as_ref() {
+                let _ = body.append_child(cmenu_web);
+            }
+        } else {
+            sheet_el.append_child(&mut cmenu_el);
+        }
         root.append_child(&mut sheet_el);
 
         // Bottom bar: add(+) button followed by the sheet-tab menu.

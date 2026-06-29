@@ -120,6 +120,17 @@ pub(crate) fn wire_context_menu(
         canvas_el.add_event_listener("contextmenu", move |event: web_sys::Event| {
             event.prevent_default();
             let me: MouseEvent = event.dyn_into().unwrap();
+            // The menu is now a child of \`document.body\` (so it
+            // escapes the sheet's \`overflow: hidden\`, see
+            // \`zedsheet/mod.rs\`). With \`position: absolute\` and a
+            // body parent, \`left\` / \`top\` resolve to the
+            // viewport, so the click coords for menu positioning
+            // must be viewport-relative (MouseEvent::client_x/y).
+            // \`cell_at\`, on the other hand, expects canvas-relative
+            // coords — its hit-test subtracts the row / col header
+            // widths from the input — so we still use \`offset_x/y\`
+            // for the hit-test.
+            let (vx, vy) = (me.client_x() as f64, me.client_y() as f64);
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
@@ -134,8 +145,12 @@ pub(crate) fn wire_context_menu(
             }
             let style = menu.unchecked_ref::<web_sys::HtmlElement>().style();
             let _ = style.set_property("display", "block");
-            let _ = style.set_property("left", &format!("{}px", x));
-            let _ = style.set_property("top", &format!("{}px", y));
+            // Position via the viewport coords so the menu lands
+            // under the cursor even when the canvas is scrolled or
+            // offset from the viewport (e.g. below the toolbar /
+            // formula bar).
+            let _ = style.set_property("left", &format!("{}px", vx));
+            let _ = style.set_property("top", &format!("{}px", vy));
             // Hide "Refresh pivot" if the active sheet isn't a pivot output
             // (issue #35). The query is by data-cmenu so the row's
             // display is toggled directly.
