@@ -226,6 +226,11 @@ pub fn export_xlsx(selector: &str) -> Option<Vec<u8>> {
 /// Replace the mounted workbook with the parsed `.xlsx` (all sheets; stored
 /// formulas stay live). Returns `Ok(())` on success, or throws a JS error
 /// with a human-readable reason on failure (issue #15).
+///
+/// **Charts are dropped on import (Phase 2.3).** `calamine` doesn't
+/// expose chart parts, so any embedded charts in the source workbook
+/// are silently discarded; their underlying data still loads, so the
+/// user can re-create the chart in zedsheet from the same range.
 #[wasm_bindgen]
 pub fn import_xlsx(selector: &str, bytes: &[u8]) -> Result<(), JsValue> {
     match core::xlsx::from_xlsx(bytes) {

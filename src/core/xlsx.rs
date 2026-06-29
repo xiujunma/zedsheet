@@ -492,4 +492,35 @@ mod tests {
             "chart export should add chart XML to the xlsx"
         );
     }
+
+    #[test]
+    fn chart_roundtrip_drops_charts_on_import_but_keeps_data() {
+        // Phase 2.3b: calamine doesn't expose chart parts, so a
+        // workbook with a chart exports fine but on import the
+        // chart is dropped while the underlying data survives.
+        let mut d = DataProxy::new("Data");
+        d.set_cell_text(0, 0, "Name");
+        d.set_cell_text(0, 1, "Score");
+        d.set_cell_text(1, 0, "Alice");
+        d.set_cell_text(1, 1, "100");
+        d.charts.push(crate::core::chart::Chart {
+            kind: "bar".into(),
+            range: "A1:B2".into(),
+            title: "Scores".into(),
+            anchor: "D2".into(),
+            width: 360.0,
+            height: 220.0,
+            trendline: crate::core::trendline::Trendline::None,
+            secondary_range: None,
+        });
+        let bytes = to_xlsx(&[d]).expect("write");
+        let sheets = from_xlsx(&bytes).expect("read");
+        assert_eq!(sheets.len(), 1);
+        // Data is preserved.
+        assert_eq!(sheets[0].get_cell_text(0, 0), "Name");
+        assert_eq!(sheets[0].get_cell_text(1, 0), "Alice");
+        assert_eq!(sheets[0].get_cell_text(1, 1), "100");
+        // Chart is dropped (calamine limitation, Phase 2.3b).
+        assert_eq!(sheets[0].charts.len(), 0);
+    }
 }
