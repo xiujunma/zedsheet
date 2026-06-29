@@ -18,6 +18,7 @@ pub mod pivot;
 pub mod row;
 pub mod state;
 pub mod table;
+pub mod trendline;
 pub mod validation;
 pub mod workbook;
 pub mod xlsx;
