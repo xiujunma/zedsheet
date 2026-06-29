@@ -1033,6 +1033,7 @@ impl DataProxy {
         vis: &mut Visited,
     ) -> Result<Value, EvalErr> {
         let tok = t.get(*pos).ok_or(EvalErr::Value)?.clone();
+        eprintln!("DBG parse_factor tok={:?}", tok);
         match tok {
             Token::Number(n) => {
                 *pos += 1;
@@ -1095,6 +1096,25 @@ impl DataProxy {
                 if upper == "MAP" {
                     let spans = self.arg_spans(t, pos);
                     return self.eval_map(t, &spans, vis);
+                }
+                // REDUCE / BYROW / BYCOL / MAKEARRAY (Phase 3.4):
+                // every one reuses `call_lambda` so the lambda body
+                // sees the LET-binding frame exactly the way MAP does.
+                if upper == "REDUCE" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_reduce(t, &spans, vis);
+                }
+                if upper == "BYROW" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_byrow(t, &spans, vis);
+                }
+                if upper == "BYCOL" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_bycol(t, &spans, vis);
+                }
+                if upper == "MAKEARRAY" {
+                    let spans = self.arg_spans(t, pos);
+                    return self.eval_makearray(t, &spans, vis);
                 }
                 // Position / reference functions (issue #37) need the calling
                 // cell or their argument's coordinates, not its value — they
@@ -1178,6 +1198,7 @@ impl DataProxy {
                 }
             }
             Token::Name(n) => {
+                eprintln!("DBG name arm n={:?}, pos={}, t.len={}", n, *pos, t.len());
                 *pos += 1;
                 // Phase 3.2: a LET binding takes precedence over a
                 // sheet-scoped named range, but only while its frame
@@ -1335,12 +1356,22 @@ impl DataProxy {
             } else if let Some(Token::Name(n)) = t.get(*pos).cloned() {
                 // A bare named range as an argument expands to its grid; a name
                 // inside a larger expression (e.g. `Rev*2`) falls through to the
-                // scalar handling in parse_cmp/parse_factor.
+                // scalar handling in parse_cmp/parse_factor. A LET / LAMBDA
+                // binding wins over a sheet-scoped named range, so the
+                // lambda-body case (e.g. `=SUM(c)` where `c` is the lambda
+                // parameter) reaches parse_cmp instead of resolving to
+                // #NAME? against the workbook.
                 let bare = matches!(
                     t.get(*pos + 1),
                     Some(Token::Comma) | Some(Token::RightParen) | None
                 );
-                if bare {
+                let bound = self
+                    .let_bindings
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .find_map(|f| f.get(&n).cloned());
+                if bare && bound.is_none() {
                     *pos += 1;
                     match self.resolve_name(&n) {
                         Some((r0, c0, r1, c1)) => self.resolve_grid(r0, c0, r1, c1, vis),
@@ -1648,9 +1679,14 @@ impl DataProxy {
         for (p, v) in params.iter().zip(args.into_iter()) {
             frame.insert(p.clone(), v);
         }
+        eprintln!(
+            "DBG call_lambda: params={:?}, body_tokens={:?}",
+            params, body_tokens
+        );
         self.let_bindings.borrow_mut().push(frame);
         let mut p = 0usize;
         let result = self.parse_cmp(&body_tokens, &mut p, vis);
+        eprintln!("DBG call_lambda result={:?}", result);
         self.let_bindings.borrow_mut().pop();
         result
     }
@@ -1698,6 +1734,158 @@ impl DataProxy {
                 Ok(Value::Array(vec![vec![v]]))
             }
         }
+    }
+
+    /// REDUCE(initial, array, LAMBDA(acc, x, body)) (Phase 3.4).
+    /// Fold-style accumulation: starts with `initial`, calls the
+    /// lambda once per cell of `array`, threading the prior
+    /// return value as `acc`. Returns the final accumulator. The
+    /// lambda must take exactly 2 parameters (acc, x); otherwise
+    /// #VALUE!.
+    fn eval_reduce(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        if spans.len() != 3 {
+            return Err(EvalErr::Value);
+        }
+        let initial = self.eval_span(t, spans[0], vis)?;
+        let array = self.eval_span(t, spans[1], vis)?;
+        let lambda = self.eval_span(t, spans[2], vis)?;
+        let Value::Lambda { params, .. } = &lambda else {
+            return Err(EvalErr::Value);
+        };
+        if params.len() != 2 {
+            return Err(EvalErr::Value);
+        }
+        let Value::Array(rows) = array else {
+            return Err(EvalErr::Value);
+        };
+        let mut acc = initial;
+        for row in rows.iter().flatten() {
+            acc = self.call_lambda(&lambda, vec![acc, row.clone()], vis)?;
+        }
+        Ok(acc)
+    }
+
+    /// BYROW(array, LAMBDA(row, body)) (Phase 3.4). Each row of
+    /// `array` is passed to the lambda as a one-dimensional array
+    /// argument; the results form a column vector. A 1-D array
+    /// has one row, so BYROW returns a 1×1 array of one result.
+    fn eval_byrow(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        self.eval_by_dimension(t, spans, vis, /*by_column=*/ false)
+    }
+
+    /// BYCOL(array, LAMBDA(col, body)) (Phase 3.4). Like BYROW
+    /// but iterates the inner dimension. A 1×N range gets N
+    /// column calls; an M×N range walks one column at a time,
+    /// yielding M results.
+    fn eval_bycol(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        self.eval_by_dimension(t, spans, vis, /*by_column=*/ true)
+    }
+
+    /// Shared body for BYROW / BYCOL. Iterates the requested
+    /// dimension; the lambda must take exactly one argument.
+    fn eval_by_dimension(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+        by_column: bool,
+    ) -> Result<Value, EvalErr> {
+        if spans.len() != 2 {
+            return Err(EvalErr::Value);
+        }
+        let array = self.eval_span(t, spans[0], vis)?;
+        let lambda = self.eval_span(t, spans[1], vis)?;
+        let Value::Lambda { params, .. } = &lambda else {
+            return Err(EvalErr::Value);
+        };
+        if params.len() != 1 {
+            return Err(EvalErr::Value);
+        }
+        let Value::Array(rows) = array else {
+            return Err(EvalErr::Value);
+        };
+        eprintln!(
+            "DBG by_dim: rows.len={}, rows[0].len={}, params={:?}",
+            rows.len(),
+            rows.first().map(|r| r.len()).unwrap_or(0),
+            params
+        );
+        if by_column {
+            if rows.is_empty() {
+                return Ok(Value::Array(Vec::new()));
+            }
+            let ncols = rows[0].len();
+            let mut out: Vec<Vec<Value>> = Vec::with_capacity(ncols);
+            for col in 0..ncols {
+                let column: Vec<Value> = rows.iter().map(|r| r[col].clone()).collect();
+                let v = self.call_lambda(&lambda, vec![Value::Array(vec![column])], vis)?;
+                out.push(vec![v]);
+            }
+            // BYCOL yields one value per column, laid out as a
+            // single column: ncols rows × 1 column.
+            let one_col: Vec<Vec<Value>> = out.into_iter().map(|v| vec![v[0].clone()]).collect();
+            Ok(Value::Array(one_col))
+        } else {
+            let mut out: Vec<Vec<Value>> = Vec::with_capacity(rows.len());
+            for row in rows {
+                let v = self.call_lambda(&lambda, vec![Value::Array(vec![row])], vis)?;
+                out.push(vec![v]);
+            }
+            Ok(Value::Array(out))
+        }
+    }
+
+    /// MAKEARRAY(rows, cols, LAMBDA(i, j, body)) (Phase 3.4).
+    /// Builds an `rows × cols` array where each cell is the
+    /// lambda evaluated with `(i, j)` (1-based indices). Lambda
+    /// must take exactly 2 parameters.
+    fn eval_makearray(
+        &self,
+        t: &[Token],
+        spans: &[(usize, usize)],
+        vis: &mut Visited,
+    ) -> Result<Value, EvalErr> {
+        if spans.len() != 3 {
+            return Err(EvalErr::Value);
+        }
+        let nrows = self.eval_span(t, spans[0], vis)?.as_number() as usize;
+        let ncols = self.eval_span(t, spans[1], vis)?.as_number() as usize;
+        let lambda = self.eval_span(t, spans[2], vis)?;
+        let Value::Lambda { params, .. } = &lambda else {
+            return Err(EvalErr::Value);
+        };
+        if params.len() != 2 {
+            return Err(EvalErr::Value);
+        }
+        let mut grid: Vec<Vec<Value>> = Vec::with_capacity(nrows);
+        for i in 1..=nrows {
+            let mut row: Vec<Value> = Vec::with_capacity(ncols);
+            for j in 1..=ncols {
+                let v = self.call_lambda(
+                    &lambda,
+                    vec![Value::Number(i as f64), Value::Number(j as f64)],
+                    vis,
+                )?;
+                row.push(v);
+            }
+            grid.push(row);
+        }
+        Ok(Value::Array(grid))
     }
 
     /// Position / reference functions: ROW, COLUMN, ADDRESS, OFFSET, INDIRECT
@@ -8634,5 +8822,101 @@ mod tests {
         let mut d = DataProxy::new("t");
         d.set_cell_text(0, 0, "=LET(double,LAMBDA(x,x*2),MAP({1,2,3,4},double))");
         assert_eq!(d.cell_display_value(0, 0), "2");
+    }
+
+    // --- Phase 3.4: REDUCE / BYROW / BYCOL / MAKEARRAY ---
+    //
+    // Each one reuses call_lambda so the LET-binding frame and
+    // lambda-body evaluation are unchanged. The arguments
+    // validated here are the **count** (2 for REDUCE/MAKEARRAY,
+    // 1 for BYROW/BYCOL) and the basic shape of the result.
+
+    #[test]
+    fn reduce_sums_with_initial_zero() {
+        // =REDUCE(0, {1,2,3,4}, LAMBDA(acc,x,acc+x)) → 10.
+        assert_eq!(eval("=REDUCE(0,{1,2,3,4},LAMBDA(acc,x,acc+x))", &[]), "10");
+    }
+
+    #[test]
+    fn reduce_with_non_zero_initial() {
+        // Initial accumulator is respected.
+        assert_eq!(
+            eval("=REDUCE(100,{1,2,3,4},LAMBDA(acc,x,acc+x))", &[]),
+            "110"
+        );
+    }
+
+    #[test]
+    fn reduce_wrong_lambda_arity_is_value_error() {
+        // LAMBDA takes 1 param; REDUCE needs 2.
+        assert_eq!(eval("=REDUCE(0,{1,2},LAMBDA(a,a+1))", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn reduce_non_lambda_second_arg_is_value_error() {
+        // The accumulator argument doesn't matter; the second
+        // arg must still be a lambda.
+        assert_eq!(eval("=REDUCE(0,{1,2},99)", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn reduce_wrong_arg_count_is_value_error() {
+        assert_eq!(eval("=REDUCE(0,{1,2})", &[]), "#VALUE!");
+        assert_eq!(eval("=REDUCE(0)", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn byrow_sums_each_row() {
+        // 2×3 array {1,2,3;4,5,6}, lambda gets each row,
+        // SUM reduces. Result: a column vector {6, 15}.
+        assert_eq!(eval("=BYROW({1,2,3;4,5,6},LAMBDA(r,SUM(r)))", &[]), "6");
+    }
+
+    #[test]
+    fn byrow_wrong_lambda_arity_is_value_error() {
+        // Lambda must take 1 param (the row array).
+        assert_eq!(eval("=BYROW({1,2;3,4},LAMBDA(a,b,a+b))", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn bycol_passes_each_column() {
+        // 2×3 array, lambda receives each column as its 1-D
+        // argument. =BYCOL({1,2,3;4,5,6}, LAMBDA(c,SUM(c)))
+        // returns {5, 7, 9} as a single column → top-left = 5.
+        assert_eq!(eval("=BYCOL({1,2,3;4,5,6},LAMBDA(c,SUM(c)))", &[]), "5");
+    }
+
+    #[test]
+    fn makearray_builds_grid() {
+        // =MAKEARRAY(3,2, LAMBDA(i,j,i+j)) → {{2,3},{3,4},{4,5}};
+        // top-left = 2.
+        assert_eq!(eval("=MAKEARRAY(3,2,LAMBDA(i,j,i+j))", &[]), "2");
+    }
+
+    #[test]
+    fn makearray_wrong_lambda_arity_is_value_error() {
+        // Lambda must take 2 params (i, j).
+        assert_eq!(eval("=MAKEARRAY(2,2,LAMBDA(k,k*2))", &[]), "#VALUE!");
+    }
+
+    #[test]
+    fn reduce_borrow_row_col_makearray_pair_with_let() {
+        // All four work inside a LET frame.
+        let mut d = DataProxy::new("t");
+        // REDUCE via LET to share a multiplier.
+        d.set_cell_text(0, 0, "=LET(k,10,REDUCE(0,{1,2,3},LAMBDA(a,x,a+x*k)))");
+        assert_eq!(d.cell_display_value(0, 0), "60");
+        // BYROW via LET to scale each row's SUM.
+        d.set_cell_text(
+            1,
+            0,
+            "=LET(scale,2,BYROW({1,2;3,4},LAMBDA(r,SUM(r)*scale)))",
+        );
+        assert_eq!(d.cell_display_value(1, 0), "6");
+        // MAKEARRAY via LET to parameterise a generated grid.
+        d.set_cell_text(2, 0, "=LET(fill,9,MAKEARRAY(2,2,LAMBDA(i,j,i*10+j+fill)))");
+        // i=1,j=1 → 10+1+9=20; i=1,j=2 → 10+2+9=21;
+        // i=2,j=1 → 20+1+9=30; i=2,j=2 → 20+2+9=31.
+        assert_eq!(d.cell_display_value(2, 0), "20");
     }
 }
