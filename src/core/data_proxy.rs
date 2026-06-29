@@ -4624,6 +4624,15 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "MEDIAN" => median(args),
         "VAR" => variance(args),
         "STDEV" => variance(args).sqrt(),
+        "STDEV.S" => variance(args).sqrt(),
+        "STDEV.P" => population_variance(args).sqrt(),
+        "VAR.P" => population_variance(args),
+        "VAR.S" => variance(args),
+        "PERCENTILE.INC" => percentile_inc(args, second),
+        "QUARTILE.INC" => quartile_inc(args, second),
+        "RANK.EQ" => rank_eq(args, first),
+        "COVARIANCE.P" => covariance_p(args),
+        "CORREL" => correlation(args),
 
         // Logical (non-zero is truthy; returns 1.0/0.0)
         "AND" => bool_f64(!args.is_empty() && args.iter().all(|&v| v != 0.0)),
@@ -4701,13 +4710,65 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "TODAY" => today_serial(),
         "NOW" => now_serial(),
 
+        // --- Financial functions ---
+        "PMT" => pmt(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0)),
+        "PV" => pv(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0)),
+        "FV" => fv(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0)),
+        "NPV" => npv(first, &args[1..]),
+        "IRR" => {
+            let guess = if args.len() > 1 { second } else { 0.1 };
+            irr(args, guess)
+        }
+        "RATE" => rate(second, args.get(2).copied().unwrap_or(0.0),
+            first,
+            args.get(3).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0),
+            args.get(5).copied().unwrap_or(0.1)),
+        "SLN" => sln(first, second, args.get(2).copied().unwrap_or(0.0)),
+        "DB" => db(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(1.0),
+            args.get(4).copied().unwrap_or(12.0)),
+        "DDB" => ddb(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(1.0),
+            args.get(4).copied().unwrap_or(2.0)),
+        "PPMT" => ppmt(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0),
+            args.get(5).copied().unwrap_or(0.0)),
+        "IPMT" => ipmt(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(3).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0),
+            args.get(5).copied().unwrap_or(0.0)),
+        "XNPV" => {
+            if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+                return Err(EvalErr::Value);
+            }
+            xnpv(first, &args[1..])
+        }
+        "XIRR" => {
+            if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+                return Err(EvalErr::Value);
+            }
+            let guess = if args.len() > 1 { second } else { 0.1 };
+            xirr(&args[1..], guess)
+        }
+
         // Unknown function name.
         _ => return Err(EvalErr::Name),
     };
 
     // A finite-domain math function that produced NaN/∞ is a #NUM! error
     // (e.g. SQRT(-1), LN(0)).
-    if matches!(upper.as_str(), "SQRT" | "LN" | "LOG" | "LOG10") && !v.is_finite() {
+    if matches!(upper.as_str(),
+        "SQRT" | "LN" | "LOG" | "LOG10" | "POWER" | "RATE" | "IRR" | "XIRR"
+    ) && !v.is_finite()
+    {
         return Err(EvalErr::Num);
     }
     Ok(Value::Number(v))
@@ -4801,6 +4862,333 @@ fn today_serial() -> f64 {
 fn now_serial() -> f64 {
     0.0
 }
+
+// ---------------------------------------------------------------------------
+// Statistical helpers
+// ---------------------------------------------------------------------------
+
+/// Population variance (n denominator), matching Excel's VAR.P.
+fn population_variance(args: &[f64]) -> f64 {
+    let n = args.len();
+    if n < 1 {
+        return 0.0;
+    }
+    let mean = args.iter().sum::<f64>() / n as f64;
+    args.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64
+}
+
+/// PERCENTILE.INC(array, k) — k in [0, 1]. Linear interpolation.
+fn percentile_inc(args: &[f64], k: f64) -> f64 {
+    if args.is_empty() {
+        return 0.0;
+    }
+    let k = k.clamp(0.0, 1.0);
+    let mut v: Vec<f64> = args.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    if n == 1 {
+        return v[0];
+    }
+    let pos = k * (n - 1) as f64;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    if lo == hi {
+        v[lo]
+    } else {
+        let frac = pos - lo as f64;
+        v[lo] + (v[hi] - v[lo]) * frac
+    }
+}
+
+/// QUARTILE.INC(array, quart) — quart: 0=min, 1=25%, 2=median, 3=75%, 4=max.
+fn quartile_inc(args: &[f64], quart: f64) -> f64 {
+    let q = quart.clamp(0.0, 4.0);
+    if q == 0.0 {
+        return args.iter().cloned().fold(f64::INFINITY, f64::min);
+    }
+    if q == 4.0 {
+        return args.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    }
+    percentile_inc(args, q * 0.25)
+}
+
+/// RANK.EQ(number, ref) — rank of `number` in descending order (Excel default).
+/// `number` is `first` arg, `ref` is the rest of flattened args.
+fn rank_eq(args: &[f64], value: f64) -> f64 {
+    if args.len() < 2 {
+        return 0.0;
+    }
+    let data = &args[1..]; // skip the value itself
+    let rank = 1 + data.iter().filter(|&&x| x > value).count();
+    rank as f64
+}
+
+/// Population covariance.
+fn covariance_p(args: &[f64]) -> f64 {
+    let n = args.len();
+    if n < 2 || n % 2 != 0 {
+        return 0.0;
+    }
+    let half = n / 2;
+    let (xs, ys) = (&args[..half], &args[half..]);
+    let mx = xs.iter().sum::<f64>() / half as f64;
+    let my = ys.iter().sum::<f64>() / half as f64;
+    xs.iter()
+        .zip(ys.iter())
+        .map(|(x, y)| (x - mx) * (y - my))
+        .sum::<f64>()
+        / half as f64
+}
+
+/// Pearson correlation coefficient.
+fn correlation(args: &[f64]) -> f64 {
+    let n = args.len();
+    if n < 2 || n % 2 != 0 {
+        return 0.0;
+    }
+    let half = n / 2;
+    let (xs, ys) = (&args[..half], &args[half..]);
+    let mx = xs.iter().sum::<f64>() / half as f64;
+    let my = ys.iter().sum::<f64>() / half as f64;
+    let cov = xs
+        .iter()
+        .zip(ys.iter())
+        .map(|(x, y)| (x - mx) * (y - my))
+        .sum::<f64>()
+        / half as f64;
+    let sx = (xs.iter().map(|x| (x - mx).powi(2)).sum::<f64>() / half as f64).sqrt();
+    let sy = (ys.iter().map(|y| (y - my).powi(2)).sum::<f64>() / half as f64).sqrt();
+    if sx == 0.0 || sy == 0.0 {
+        0.0
+    } else {
+        cov / (sx * sy)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Financial function implementations
+// ---------------------------------------------------------------------------
+
+/// PMT(rate, nper, pv, [fv], [type_])
+/// type_=0: payments at end of period (default); 1: beginning.
+/// Signed so a positive PV (loan) gives a negative PMT (payment).
+fn pmt(rate: f64, nper: f64, pv: f64, fv: f64, type_: f64) -> f64 {
+    if rate == 0.0 {
+        return -(pv + fv) / nper;
+    }
+    let f = (1.0 + rate).powf(nper);
+    let pmt_val = -(pv * f + fv) * rate / (f - 1.0);
+    if type_ == 1.0 {
+        pmt_val / (1.0 + rate)
+    } else {
+        pmt_val
+    }
+}
+
+/// PV(rate, nper, pmt, [fv], [type_])
+fn pv(rate: f64, nper: f64, pmt: f64, fv: f64, type_: f64) -> f64 {
+    if rate == 0.0 {
+        return -fv - pmt * nper;
+    }
+    let f = (1.0 + rate).powf(nper);
+    let start = if type_ == 1.0 { 1.0 + rate } else { 1.0 };
+    let pv_factor = (1.0 - 1.0 / f) / rate;
+    -fv / f - pmt * start * pv_factor
+}
+
+/// FV(rate, nper, pmt, [pv], [type_])
+fn fv(rate: f64, nper: f64, pmt: f64, pv: f64, type_: f64) -> f64 {
+    if rate == 0.0 {
+        return -pv - pmt * nper;
+    }
+    let f = (1.0 + rate).powf(nper);
+    let start = if type_ == 1.0 { 1.0 + rate } else { 1.0 };
+    -pv * f - pmt * start * (f - 1.0) / rate
+}
+
+/// NPV(rate, values...)
+fn npv(rate: f64, values: &[f64]) -> f64 {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| v / (1.0 + rate).powf(i as f64 + 1.0))
+        .sum()
+}
+
+/// IRR(values, [guess]) — internal rate of return via Newton's method.
+fn irr(cashflows: &[f64], guess: f64) -> f64 {
+    if cashflows.len() < 2 {
+        return 0.0;
+    }
+    let mut r = guess;
+    for _ in 0..100 {
+        let (npv, dnpv) = cashflows.iter().enumerate().fold(
+            (0.0, 0.0),
+            |(n, d), (i, &cf)| {
+                let denom = (1.0 + r).powf(i as f64);
+                (n + cf / denom, d - i as f64 * cf / (denom * (1.0 + r)))
+            },
+        );
+        if dnpv.abs() < 1e-15 {
+            break;
+        }
+        let dr = npv / dnpv;
+        r -= dr;
+        if dr.abs() < 1e-8 {
+            break;
+        }
+    }
+    r
+}
+
+/// RATE(nper, pmt, pv, [fv], [type_], [guess]) via Newton iteration.
+fn rate(nper: f64, pmt: f64, pv: f64, fv: f64, type_: f64, guess: f64) -> f64 {
+    let mut r = guess;
+    for _ in 0..100 {
+        let f = (1.0 + r).powf(nper);
+        let df = nper * (1.0 + r).powf(nper - 1.0);
+        let start = if type_ == 1.0 { 1.0 + r } else { 1.0 };
+        let dstart = if type_ == 1.0 { 1.0 } else { 0.0 };
+        let pv_t = pv * f + pmt * start * (f - 1.0) / r + fv;
+        let dpv = pv * df
+            + pmt * (dstart * (f - 1.0) / r + start * (df / r - (f - 1.0) / (r * r)));
+        if dpv.abs() < 1e-15 {
+            break;
+        }
+        let dr = pv_t / dpv;
+        r -= dr;
+        if dr.abs() < 1e-8 {
+            break;
+        }
+    }
+    r
+}
+
+/// SLN(cost, salvage, life) — straight-line depreciation.
+fn sln(cost: f64, salvage: f64, life: f64) -> f64 {
+    if life == 0.0 {
+        return 0.0;
+    }
+    (cost - salvage) / life
+}
+
+/// DB(cost, salvage, life, period, [month]) — fixed-declining balance.
+fn db(cost: f64, salvage: f64, life: f64, period: f64, month: f64) -> f64 {
+    if life <= 0.0 || period < 1.0 {
+        return 0.0;
+    }
+    let rate = 1.0 - (salvage / cost).powf(1.0 / life);
+    let rate = (rate * 1000.0).round() / 1000.0; // round to 3 decimal places
+    let first_period_rate = rate * month / 12.0;
+    let mut total = cost - cost * first_period_rate;
+    if period == 1.0 {
+        return cost * first_period_rate;
+    }
+    for _ in 2..(period as usize).min(life as usize) {
+        total -= total * rate;
+    }
+    if period >= life {
+        // Final period: remaining book value minus salvage
+        (total - salvage).max(0.0)
+    } else {
+        total * rate
+    }
+}
+
+/// DDB(cost, salvage, life, period, [factor]) — double-declining balance.
+fn ddb(cost: f64, salvage: f64, life: f64, period: f64, factor: f64) -> f64 {
+    if life <= 0.0 || period < 1.0 || period > life {
+        return 0.0;
+    }
+    let rate = factor / life;
+    let mut book = cost;
+    let mut total_dep = 0.0;
+    for _ in 1..(period as usize) {
+        let dep = (book * rate).min(book - salvage).max(0.0);
+        total_dep += dep;
+        book -= dep;
+    }
+    let dep = (book * rate).min(book - salvage).max(0.0);
+    dep
+}
+
+/// PPMT(rate, per, nper, pv, [fv], [type_])
+fn ppmt(rate: f64, per: f64, nper: f64, pv_val: f64, fv: f64, type_: f64) -> f64 {
+    if per < 1.0 || per > nper {
+        return 0.0;
+    }
+    let payment = pmt(rate, nper, pv_val, fv, type_);
+    let interest = ipmt(rate, per, nper, pv_val, fv, type_);
+    payment - interest
+}
+
+/// IPMT(rate, per, nper, pv, [fv], [type_])
+fn ipmt(rate: f64, per: f64, nper: f64, pv_val: f64, fv: f64, type_: f64) -> f64 {
+    if per < 1.0 || per > nper {
+        return 0.0;
+    }
+    if rate == 0.0 {
+        return 0.0;
+    }
+    let payment = pmt(rate, nper, pv_val, fv, type_);
+    let start_balance = if per == 1.0 {
+        pv_val
+    } else {
+        let prior_pv = if type_ == 1.0 {
+            pv(rate, per - 1.0, payment, fv, 1.0)
+        } else {
+            pv(rate, per - 1.0, payment, fv, 0.0)
+        };
+        -prior_pv
+    };
+    start_balance * rate
+}
+
+/// XNPV(rate, values_and_dates...) where args are [value0, date0, value1, date1, ...]
+fn xnpv(rate: f64, values_and_dates: &[f64]) -> f64 {
+    let n = values_and_dates.len();
+    let d0 = values_and_dates[1]; // first date as reference
+    let mut total = 0.0;
+    for i in (0..n).step_by(2) {
+        let v = values_and_dates[i];
+        let d = values_and_dates[i + 1];
+        let days = d - d0;
+        total += v / (1.0 + rate).powf(days / 365.0);
+    }
+    total
+}
+
+/// XIRR(values_and_dates..., [guess]) — IRR for irregular cash flows.
+fn xirr(values_and_dates: &[f64], guess: f64) -> f64 {
+    let n = values_and_dates.len();
+    if n < 4 {
+        return 0.0;
+    }
+    let d0 = values_and_dates[1];
+    let mut r = guess;
+    for _ in 0..100 {
+        let (npv, dnpv) = (0..n).step_by(2).fold(
+            (0.0, 0.0),
+            |(n_sum, d_sum), i| {
+                let v = values_and_dates[i];
+                let d = values_and_dates[i + 1];
+                let t = (d - d0) / 365.0;
+                let denom = (1.0 + r).powf(t);
+                (n_sum + v / denom, d_sum - t * v / (denom * (1.0 + r)))
+            },
+        );
+        if dnpv.abs() < 1e-15 {
+            break;
+        }
+        let dr = npv / dnpv;
+        r -= dr;
+        if dr.abs() < 1e-8 {
+            break;
+        }
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7338,5 +7726,155 @@ mod tests {
         // A later anchor whose range hits an existing spill blocks.
         d.set_cell_text(0, 1, "=SEQUENCE(2)"); // wants B1:B2, but B2 is taken
         assert_eq!(d.cell_display_value(0, 1), "#SPILL!");
+    }
+
+    // -- Financial function tests --
+
+    #[test]
+    fn pmt_loan_payment() {
+        // $100k loan at 5% APR, 30 years monthly → ~$536.82
+        let r = pmt(0.05 / 12.0, 360.0, 100000.0, 0.0, 0.0);
+        assert!((r + 536.82).abs() < 0.5);
+    }
+
+    #[test]
+    fn pmt_with_fv_and_type() {
+        // $10k at 6% for 3 years, FV=$500, type=1 (beginning)
+        let r = pmt(0.06, 3.0, 10000.0, 500.0, 1.0);
+        assert!((r.abs() - 3686.0).abs() < 10.0);
+    }
+
+    #[test]
+    fn pv_present_value() {
+        // PV of $100/month for 60 months at 0.5%/month
+        let r = pv(0.005, 60.0, -100.0, 0.0, 0.0);
+        assert!((r - 5172.56).abs() < 1.0);
+    }
+
+    #[test]
+    fn fv_future_value() {
+        // $200/month for 10 years at 5% annually (monthly compounding)
+        let r = fv(0.05 / 12.0, 120.0, -200.0, 0.0, 0.0);
+        assert!((r - 31057.0).abs() < 100.0);
+    }
+
+    #[test]
+    fn npv_net_present_value() {
+        // NPV(0.1, 300, 400, 500, 600) — cash flows from period 1 onward
+        let r = npv(0.1, &[300.0, 400.0, 500.0, 600.0]);
+        assert!((r - 1389.0).abs() < 10.0, "got {}", r);
+    }
+
+    #[test]
+    fn irr_internal_rate() {
+        let r = irr(&[-1000.0, 300.0, 400.0, 500.0, 600.0], 0.1);
+        assert!((r - 0.22).abs() < 0.05);
+    }
+
+    #[test]
+    fn sln_straight_line_dep() {
+        // Cost $10k, salvage $1k, 5 years → $1800/year
+        let r = sln(10000.0, 1000.0, 5.0);
+        assert!((r - 1800.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn ddb_double_declining() {
+        // Cost $10k, salvage $1k, 5 years, period 1
+        let r = ddb(10000.0, 1000.0, 5.0, 1.0, 2.0);
+        assert!((r - 4000.0).abs() < 0.01);
+    }
+
+    // -- Statistical function tests --
+
+    #[test]
+    fn stdev_p_population() {
+        let data = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let sd = population_variance(&data).sqrt();
+        assert!((sd - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn percentile_inc_median() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let p50 = percentile_inc(&data, 0.5);
+        assert!((p50 - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn rank_eq_descending() {
+        let data = [10.0, 7.0, 8.0, 9.0]; // rank of 7 → 4th (10=1, 9=2, 8=3, 7=4)
+        // RANK.EQ expects [value, data...] in flattened args
+        let all = [7.0, 10.0, 7.0, 8.0, 9.0];
+        let r = rank_eq(&all, 7.0);
+        assert!((r - 4.0).abs() < 0.01);
+    }
+
+    // -- Formula-level integration tests --
+
+    #[test]
+    fn formula_pmt_evaluates() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "0.05");   // A1 = rate
+        d.set_cell_text(1, 0, "360");    // A2 = nper
+        d.set_cell_text(2, 0, "100000"); // A3 = pv
+        d.set_cell_text(3, 0, "=PMT(A1/12, A2, A3)");
+        let v = d.cell_display_value(3, 0);
+        let n: f64 = v.parse().unwrap();
+        assert!(n < -400.0 && n > -600.0, "PMT = {}", n);
+    }
+
+    #[test]
+    fn formula_npv_evaluates() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "0.1");   // A1 = rate
+        d.set_cell_text(0, 1, "100");   // B1
+        d.set_cell_text(0, 2, "200");   // C1
+        d.set_cell_text(0, 3, "300");   // D1
+        d.set_cell_text(1, 0, "=NPV(A1, B1, C1, D1)");
+        let v = d.cell_display_value(1, 0);
+        let n: f64 = v.parse().unwrap();
+        assert!(n > 400.0 && n < 550.0, "NPV = {}", n);
+    }
+
+    #[test]
+    fn formula_sln_evaluates() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=SLN(10000, 1000, 5)");
+        assert_eq!(d.cell_display_value(0, 0), "1800");
+    }
+
+    #[test]
+    fn formula_stdev_p_evaluates() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "2");   // A1
+        d.set_cell_text(0, 1, "4");   // B1
+        d.set_cell_text(0, 2, "6");   // C1
+        d.set_cell_text(1, 0, "=STDEV.P(A1:C1)");
+        let v = d.cell_display_value(1, 0);
+        assert!(
+            v != "#NAME?" && v != "#VALUE!" && v != "0",
+            "unexpected: {}",
+            v
+        );
+        let n: f64 = v.parse().unwrap();
+        assert!(n > 1.0 && n < 3.0, "STDEV.P = {}", n);
+    }
+
+    #[test]
+    fn formula_var_p_evaluates() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "2");   // A1
+        d.set_cell_text(0, 1, "4");   // B1
+        d.set_cell_text(0, 2, "6");   // C1
+        d.set_cell_text(1, 0, "=VAR.P(A1:C1)");
+        let v = d.cell_display_value(1, 0);
+        assert!(
+            v != "#NAME?" && v != "#VALUE!" && v != "0",
+            "unexpected: {}",
+            v
+        );
+        let n: f64 = v.parse().unwrap();
+        assert!(n > 1.0 && n < 4.0, "VAR.P = {}", n);
     }
 }

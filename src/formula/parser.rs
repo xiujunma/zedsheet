@@ -436,7 +436,9 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
 
         if c.is_alphabetic() || c == '$' {
             let mut ident = String::new();
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '$') {
+            while i < chars.len()
+                && (chars[i].is_alphanumeric() || chars[i] == '$' || chars[i] == '.')
+            {
                 ident.push(chars[i].to_ascii_uppercase());
                 i += 1;
             }
