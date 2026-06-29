@@ -63,6 +63,8 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
                 "bubble" => {
                     draw_axes_chart(canvas, px, py, pw, ph, &data, "bubble", chart.trendline)
                 }
+                "area" => draw_axes_chart(canvas, px, py, pw, ph, &data, "area", chart.trendline),
+                "radar" => draw_radar(canvas, px, py, pw, ph, &data, chart.trendline),
                 "pie" => draw_pie(canvas, px, py, pw, ph, &data),
                 _ => draw_axes_chart(canvas, px, py, pw, ph, &data, "bar", chart.trendline),
             },
@@ -226,6 +228,50 @@ fn draw_axes_chart(
                 }
             }
         }
+        "area" => {
+            // Like line, but the area under the curve is filled
+            // with a translucent variant of the series colour. The
+            // fill path runs along the line from the first x to the
+            // last x, drops to the y=0 baseline at the right edge,
+            // runs back along zero to the left edge, then closes.
+            for (si, (_, values)) in data.series.iter().enumerate() {
+                let color = PALETTE[si % PALETTE.len()];
+                canvas.set_fill_style(&with_alpha(color, 0.25));
+                canvas.begin_path();
+                if let Some(v0) = values.first() {
+                    let cx0 = px + group_w * 0.5;
+                    canvas.move_to(cx0, y_of(*v0));
+                    for (i, v) in values.iter().enumerate().skip(1) {
+                        let cx = px + group_w * (i as f64 + 0.5);
+                        canvas.line_to(cx, y_of(*v));
+                    }
+                }
+                // Close down to the zero baseline at the right edge,
+                // back along zero to the left edge, then up to the
+                // starting point.
+                if !values.is_empty() {
+                    let last_cx = px + group_w * (values.len() as f64 - 0.5);
+                    canvas.line_to(last_cx, y_of(0.0));
+                    canvas.line_to(px + group_w * 0.5, y_of(0.0));
+                }
+                canvas.close_path();
+                canvas.fill(None);
+                // Then the line on top, opaque.
+                canvas.set_stroke_style(color);
+                canvas.set_line_width(2.0);
+                canvas.begin_path();
+                for (i, v) in values.iter().enumerate() {
+                    let cx = px + group_w * (i as f64 + 0.5);
+                    let cy = y_of(*v);
+                    if i == 0 {
+                        canvas.move_to(cx, cy);
+                    } else {
+                        canvas.line_to(cx, cy);
+                    }
+                }
+                canvas.stroke();
+            }
+        }
         _ => {
             // Unknown mode: fall back to a single neutral marker so a
             // bad string doesn't silently draw nothing.
@@ -320,6 +366,25 @@ fn darken(hex: &str) -> String {
     }
 }
 
+/// Convert a hex colour string (\"#rrggbb\") to an rgba() CSS string
+/// at the given alpha (0..=1). Used by the area renderer to make a
+/// translucent fill for the curve. Pure helper, host-tested.
+fn with_alpha(hex: &str, alpha: f64) -> String {
+    let s = hex.strip_prefix('#').unwrap_or(hex);
+    if s.len() != 6 {
+        return format!("rgba(128,128,128,{})", alpha.clamp(0.0, 1.0));
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok();
+    let g = u8::from_str_radix(&s[2..4], 16).ok();
+    let b = u8::from_str_radix(&s[4..6], 16).ok();
+    match (r, g, b) {
+        (Some(r), Some(g), Some(b)) => {
+            format!("rgba({},{},{},{})", r, g, b, alpha.clamp(0.0, 1.0))
+        }
+        _ => format!("rgba(128,128,128,{})", alpha.clamp(0.0, 1.0)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +404,160 @@ mod tests {
         assert_eq!(darken("not-a-color"), "#333333");
         assert_eq!(darken(""), "#333333");
         assert_eq!(darken("#abc"), "#333333"); // wrong length
+    }
+
+    #[test]
+    fn with_alpha_produces_rgba() {
+        assert_eq!(with_alpha("#1e88e5", 0.25), "rgba(30,136,229,0.25)");
+        assert_eq!(with_alpha("#ffffff", 0.5), "rgba(255,255,255,0.5)");
+        assert_eq!(with_alpha("#000000", 1.0), "rgba(0,0,0,1)");
+    }
+
+    #[test]
+    fn with_alpha_clamps_alpha() {
+        assert_eq!(with_alpha("#ffffff", 2.0), "rgba(255,255,255,1)");
+        assert_eq!(with_alpha("#ffffff", -0.5), "rgba(255,255,255,0)");
+    }
+
+    #[test]
+    fn with_alpha_falls_back_on_invalid_hex() {
+        assert_eq!(with_alpha("not-a-color", 0.3), "rgba(128,128,128,0.3)");
+        assert_eq!(with_alpha("#abc", 0.3), "rgba(128,128,128,0.3)");
+    }
+}
+
+/// Radar / spider chart (Phase 2.1b). One polygon per series, with
+/// the categories evenly spaced around a circle. The polygon's
+/// vertices are placed at the angle for each category, with the
+/// radius scaled by the normalised value. A filled translucent
+/// polygon body plus a solid outline so overlapping series stay
+/// readable.
+fn draw_radar(
+    canvas: &Canvas,
+    px: f64,
+    py: f64,
+    pw: f64,
+    ph: f64,
+    data: &ChartData,
+    _trendline: Trendline,
+) {
+    let n = data.labels.len();
+    if n < 3 {
+        // A radar chart needs at least 3 axes to form a polygon.
+        canvas.set_font("11px Arial");
+        canvas.set_fill_style("#999999");
+        canvas.fill_text(
+            "Radar needs ≥ 3 categories",
+            px + pw / 2.0,
+            py + ph / 2.0,
+            None,
+        );
+        return;
+    }
+    let vmax = data
+        .series
+        .iter()
+        .flat_map(|(_, v)| v.iter())
+        .fold(0.0_f64, |a, b| a.max(*b))
+        .max(1e-9);
+    let cx = px + pw / 2.0;
+    let cy = py + ph / 2.0;
+    // Leave room for category labels around the edge.
+    let r_outer = (pw.min(ph) / 2.0 - 14.0).max(10.0);
+    // Concentric polygon gridlines (4 rings) for scale reference.
+    canvas.set_stroke_style("#e4e7ea");
+    canvas.set_line_width(1.0);
+    for ring in 1..=4 {
+        let r = r_outer * ring as f64 / 4.0;
+        canvas.begin_path();
+        for i in 0..n {
+            // Start at the top (12 o'clock) and go clockwise.
+            let theta =
+                -std::f64::consts::FRAC_PI_2 + (i as f64) * 2.0 * std::f64::consts::PI / n as f64;
+            let x = cx + r * theta.cos();
+            let y = cy + r * theta.sin();
+            if i == 0 {
+                canvas.move_to(x, y);
+            } else {
+                canvas.line_to(x, y);
+            }
+        }
+        canvas.close_path();
+        canvas.stroke();
+    }
+    // Spokes.
+    for i in 0..n {
+        let theta =
+            -std::f64::consts::FRAC_PI_2 + (i as f64) * 2.0 * std::f64::consts::PI / n as f64;
+        let x = cx + r_outer * theta.cos();
+        let y = cy + r_outer * theta.sin();
+        canvas.begin_path();
+        canvas.move_to(cx, cy);
+        canvas.line_to(x, y);
+        canvas.stroke();
+    }
+    // Category labels around the outside.
+    canvas.set_font("10px Arial");
+    canvas.set_text_align("center");
+    canvas.set_fill_style("#555555");
+    for (i, label) in data.labels.iter().enumerate() {
+        let theta =
+            -std::f64::consts::FRAC_PI_2 + (i as f64) * 2.0 * std::f64::consts::PI / n as f64;
+        let lr = r_outer + 10.0;
+        let lx = cx + lr * theta.cos();
+        let ly = cy + lr * theta.sin();
+        canvas.fill_text(label, lx, ly + 3.0, Some(60.0));
+    }
+    // One polygon per series. Filled translucent + opaque outline
+    // + small dot at each vertex.
+    for (si, (_, values)) in data.series.iter().enumerate() {
+        let color = PALETTE[si % PALETTE.len()];
+        canvas.set_fill_style(&with_alpha(color, 0.25));
+        canvas.begin_path();
+        for i in 0..n {
+            let v = values.get(i).copied().unwrap_or(0.0);
+            let r = r_outer * (v / vmax).clamp(0.0, 1.0);
+            let theta =
+                -std::f64::consts::FRAC_PI_2 + (i as f64) * 2.0 * std::f64::consts::PI / n as f64;
+            let x = cx + r * theta.cos();
+            let y = cy + r * theta.sin();
+            if i == 0 {
+                canvas.move_to(x, y);
+            } else {
+                canvas.line_to(x, y);
+            }
+        }
+        canvas.close_path();
+        canvas.fill(None);
+        canvas.set_stroke_style(color);
+        canvas.set_line_width(2.0);
+        canvas.begin_path();
+        for i in 0..n {
+            let v = values.get(i).copied().unwrap_or(0.0);
+            let r = r_outer * (v / vmax).clamp(0.0, 1.0);
+            let theta =
+                -std::f64::consts::FRAC_PI_2 + (i as f64) * 2.0 * std::f64::consts::PI / n as f64;
+            let x = cx + r * theta.cos();
+            let y = cy + r * theta.sin();
+            if i == 0 {
+                canvas.move_to(x, y);
+            } else {
+                canvas.line_to(x, y);
+            }
+        }
+        canvas.close_path();
+        canvas.stroke();
+        // Vertex dots.
+        canvas.set_fill_style(color);
+        for i in 0..n {
+            let v = values.get(i).copied().unwrap_or(0.0);
+            let r = r_outer * (v / vmax).clamp(0.0, 1.0);
+            let theta =
+                -std::f64::consts::FRAC_PI_2 + (i as f64) * 2.0 * std::f64::consts::PI / n as f64;
+            let x = cx + r * theta.cos();
+            let y = cy + r * theta.sin();
+            canvas.fill_rect(x - 2.0, y - 2.0, 4.0, 4.0);
+        }
     }
 }
 
