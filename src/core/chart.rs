@@ -36,6 +36,15 @@ pub struct Chart {
     /// loading with `Trendline::None`.
     #[serde(default)]
     pub trendline: Trendline,
+    /// Optional secondary-axis data range (Phase 2.2). When `Some`,
+    /// the renderer draws a right-hand Y axis scaled to this range's
+    /// values, and the secondary range's series are drawn as a line
+    /// overlay on top of the primary bars. The primary range's
+    /// labels are reused — both ranges must have the same row count.
+    /// `#[serde(default)]` keeps pre-2.2 workbooks loading with
+    /// `None`.
+    #[serde(default)]
+    pub secondary_range: Option<String>,
 }
 
 /// Chart-ready table: one label per category, one or more named series.
@@ -120,6 +129,68 @@ pub fn extract_chart_data(sheet: &DataProxy, range: &str) -> Option<ChartData> {
         .collect();
 
     Some(ChartData { labels, series })
+}
+
+/// Extract a secondary-axis data range (Phase 2.2). Behaviour
+/// mirrors [`extract_chart_data`] but reuses the primary range's
+/// labels — the secondary range's first row (header) and first
+/// column (labels) are ignored; the secondary columns are treated
+/// as a pure value block aligned with `primary_labels`.
+///
+/// Returns `None` when:
+/// * the range string is invalid,
+/// * the range parses to fewer rows than `primary_labels.len()`,
+/// * the range has zero value columns.
+///
+/// Used by the renderer to draw a dual-axis chart with a line
+/// overlay scaled to the secondary range's values.
+pub fn extract_secondary_chart_data(
+    sheet: &DataProxy,
+    range: &str,
+    primary_labels: &[String],
+) -> Option<ChartData> {
+    let r = CellRange::from_str(range).ok()?;
+    let (r0, c0, r1, c1) = (r.sri, r.sci, r.eri, r.eci);
+    let raw = |ri: usize, ci: usize| sheet.cell_raw_value(ri, ci);
+    // Treat the whole range as a header-less, label-less value
+    // block. We need at least `primary_labels.len()` rows; we accept
+    // more and clip, matching Excel's behaviour where the
+    // secondary range's row count must equal the primary's.
+    let n_rows = primary_labels.len();
+    if r1 + 1 < r0 + n_rows {
+        return None;
+    }
+    if c0 > c1 {
+        return None;
+    }
+    let labels: Vec<String> = primary_labels.to_vec();
+    let series: Vec<(String, Vec<f64>)> = (c0..=c1)
+        .map(|ci| {
+            let name = format!("Secondary {}", ci - c0 + 1);
+            let values = (0..n_rows)
+                .map(|i| {
+                    let ri = r0 + i;
+                    raw(ri, ci).trim().parse::<f64>().unwrap_or(0.0)
+                })
+                .collect();
+            (name, values)
+        })
+        .collect();
+    if series.is_empty() {
+        return None;
+    }
+    Some(ChartData { labels, series })
+}
+
+/// True when `range` parses and has at least `min_rows` data rows
+/// available (r1 - r0 + 1 >= min_rows). Used by the modal to gate
+/// the "Apply" button on the secondary-range field before the
+/// renderer tries to draw.
+pub fn range_has_rows(range: &str, min_rows: usize) -> bool {
+    let Ok(r) = CellRange::from_str(range) else {
+        return false;
+    };
+    r.eri + 1 >= r.sri + min_rows
 }
 
 /// Round `v` up to a "nice" axis maximum: 1, 2, or 5 × 10^k.
@@ -223,11 +294,89 @@ mod tests {
             width: 360.0,
             height: 220.0,
             trendline: Trendline::Linear,
+            secondary_range: None,
         };
         let json = serde_json::to_value(&c).unwrap();
         let back: Chart = serde_json::from_value(json).unwrap();
         assert_eq!(back.kind, "bar");
         assert_eq!(back.anchor, "F2");
         assert_eq!(back.width, 360.0);
+        assert_eq!(back.height, 220.0);
+        assert_eq!(back.trendline, Trendline::Linear);
+        // Backward-compat: pre-2.2 workbooks without `secondary_range`
+        // round-trip with `None`.
+        let legacy = serde_json::json!({
+            "kind": "bar",
+            "range": "A1:B4",
+            "anchor": "F2",
+        });
+        let back: Chart = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.secondary_range, None);
+    }
+
+    #[test]
+    fn secondary_round_trips_with_secondary_range() {
+        let c = Chart {
+            kind: "bar".into(),
+            range: "A1:B4".into(),
+            title: "Sales".into(),
+            anchor: "F2".into(),
+            width: 360.0,
+            height: 220.0,
+            trendline: Trendline::None,
+            secondary_range: Some("D1:E4".into()),
+        };
+        let json = serde_json::to_value(&c).unwrap();
+        let back: Chart = serde_json::from_value(json).unwrap();
+        assert_eq!(back.secondary_range, Some("D1:E4".to_string()));
+    }
+
+    #[test]
+    fn extract_secondary_uses_primary_labels() {
+        // Primary range: labels in col A + values in col B, 3 rows.
+        let d = sheet(&[
+            (0, 0, "Q1"),
+            (0, 1, "10"),
+            (1, 0, "Q2"),
+            (1, 1, "20"),
+            (2, 0, "Q3"),
+            (2, 1, "30"),
+        ]);
+        let primary = extract_chart_data(&d, "A1:B3").unwrap();
+        // Secondary range: a 3-row, 1-col block — labels ignored.
+        let d2 = sheet(&[(0, 3, "100"), (1, 3, "200"), (2, 3, "300")]);
+        let secondary = extract_secondary_chart_data(&d2, "D1:D3", &primary.labels).unwrap();
+        // Labels are reused from primary.
+        assert_eq!(secondary.labels, vec!["Q1", "Q2", "Q3"]);
+        // One series with three values from the secondary range.
+        assert_eq!(secondary.series.len(), 1);
+        assert_eq!(secondary.series[0].0, "Secondary 1");
+        assert_eq!(secondary.series[0].1, vec![100.0, 200.0, 300.0]);
+    }
+
+    #[test]
+    fn extract_secondary_rejects_short_range() {
+        // Primary has 3 rows; secondary has only 1.
+        let d = sheet(&[
+            (0, 0, "Q1"),
+            (0, 1, "10"),
+            (1, 0, "Q2"),
+            (1, 1, "20"),
+            (2, 0, "Q3"),
+            (2, 1, "30"),
+        ]);
+        let primary = extract_chart_data(&d, "A1:B3").unwrap();
+        assert_eq!(primary.labels.len(), 3);
+        // Secondary range with only 1 row can't cover 3 labels.
+        let d2 = sheet(&[(0, 3, "100")]);
+        assert!(extract_secondary_chart_data(&d2, "D1:D1", &primary.labels).is_none());
+    }
+
+    #[test]
+    fn range_has_rows_accepts_equal_or_larger() {
+        assert!(range_has_rows("A1:A3", 3));
+        assert!(range_has_rows("A1:A5", 3));
+        assert!(!range_has_rows("A1:A2", 3));
+        assert!(!range_has_rows("bogus", 3));
     }
 }

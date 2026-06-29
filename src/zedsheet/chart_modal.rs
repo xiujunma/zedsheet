@@ -209,6 +209,7 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 width: 360.0,
                 height: 220.0,
                 trendline,
+                secondary_range: None,
             };
             // Reject inputs that could never draw, so the dialog gives
             // immediate feedback.
