@@ -222,6 +222,13 @@ pub struct DataProxy {
     /// no slicing. Round-trips through `get_data` / `set_data` so
     /// pre-#61 workbooks (which lack this key) load with an empty vec.
     pub slicers: Vec<crate::core::pivot::Slicer>,
+    /// Sheet protection metadata (Phase 1.3). The `enabled` flag mirrors
+    /// `read_only` for the data-layer block — when protection is enabled
+    /// the UI also sets `read_only = true`. `password_hash` is the
+    /// optional djb2 hash that gates disabling. Backward-compat: pre-1.3
+    /// workbooks don't include the `"protection"` key in `set_data`, so
+    /// the field stays at its default.
+    pub protection: crate::core::sheet_protection::SheetProtection,
     /// All sheets in the workbook, used to resolve `Sheet2!A1` references
     /// (issue #4). `None` for tests / standalone use that don't need
     /// cross-sheet refs; `ZedSheet` wires this up at construction time.
@@ -302,6 +309,7 @@ impl Default for DataProxy {
             named_ranges: HashMap::new(),
             pivots: Vec::new(),
             slicers: Vec::new(),
+            protection: crate::core::sheet_protection::SheetProtection::default(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
             eval_cell: std::cell::Cell::new((0, 0)),
@@ -342,6 +350,26 @@ impl DataProxy {
     /// separate — see `is_cell_editable` for the combined check.
     pub fn is_read_only(&self) -> bool {
         *self.read_only.borrow()
+    }
+
+    /// Enable / disable sheet protection (Phase 1.3). Toggling on
+    /// also flips `read_only` so the data-layer "block edits" guard
+    /// stays in sync; toggling off clears both. The optional
+    /// `password` is hashed via [`SheetProtection::hash_password`];
+    /// `None` or `""` clears any existing password (an empty
+    /// password is treated as "no password").
+    pub fn set_protection(&mut self, enabled: bool, password: Option<&str>) {
+        self.protection.enabled = enabled;
+        self.protection.password_hash = match password {
+            Some(p) if !p.is_empty() => {
+                Some(crate::core::sheet_protection::SheetProtection::hash_password(p))
+            }
+            _ => None,
+        };
+        // Mirror the enable flag on the data-layer lock so the
+        // existing `is_cell_editable` guard (and `setSheetReadOnly`
+        // JS callers) see the same state.
+        self.set_read_only(enabled);
     }
 
     /// `true` when a write to `(ri, ci)` is allowed. Combines the sheet-wide
@@ -1634,7 +1662,10 @@ impl DataProxy {
     }
 
     /// Like `span_ref` but for an `Arg` result instead of raw tokens.
-    fn span_ref_from_arg(&self, arg: &Result<Arg, EvalErr>) -> Option<(usize, usize, usize, usize)> {
+    fn span_ref_from_arg(
+        &self,
+        arg: &Result<Arg, EvalErr>,
+    ) -> Option<(usize, usize, usize, usize)> {
         match arg {
             Ok(Arg::Scalar(Value::Text(s))) => {
                 if let Ok(cr) = crate::core::cell_range::CellRange::from_str(&s) {
@@ -2517,14 +2548,8 @@ impl DataProxy {
         for row in self.rows.values_mut() {
             for cell in row.cells.values_mut() {
                 if cell.text.starts_with('=') {
-                    cell.text = adjust_refs_for_delete_cells(
-                        &cell.text,
-                        r0,
-                        c0,
-                        r1,
-                        c1,
-                        horizontal,
-                    );
+                    cell.text =
+                        adjust_refs_for_delete_cells(&cell.text, r0, c0, r1, c1, horizontal);
                 }
             }
         }
@@ -2753,10 +2778,8 @@ impl DataProxy {
                 row.cells.insert(c, cell);
             }
         }
-        self.auto_filter.set_sorts(vec![Sort::new(
-            ci,
-            if asc { "asc" } else { "desc" },
-        )]);
+        self.auto_filter
+            .set_sorts(vec![Sort::new(ci, if asc { "asc" } else { "desc" })]);
         // Rows moved, so the hidden/visible assignment must be recomputed.
         self.apply_filter_visibility();
     }
@@ -2951,6 +2974,8 @@ impl DataProxy {
             // `get_data` / `set_data`; pre-#61 workbooks omit the key
             // and load with an empty list.
             "slicers": serde_json::to_value(&self.slicers).unwrap_or_default(),
+            // Sheet protection metadata (Phase 1.3).
+            "protection": serde_json::to_value(&self.protection).unwrap_or_default(),
             // Excel-style tables (issue #34).
             "tables": serde_json::to_value(&self.tables).unwrap_or_default(),
             "page": serde_json::to_value(&self.page_setup).unwrap_or_default(),
@@ -3066,6 +3091,17 @@ impl DataProxy {
             // Slicers (issue #61) — visual filters on the source sheet.
             // Absent in pre-#61 workbooks; `slicers` stays empty.
             self.slicers = sl;
+        }
+        if let Some(pr) = data
+            .get("protection")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            // Sheet protection metadata (Phase 1.3). Absent in
+            // pre-1.3 workbooks; `protection` stays at its default.
+            // Mirror `enabled` onto the existing read-only flag so the
+            // data-layer block stays consistent.
+            self.protection = pr;
+            self.set_read_only(self.protection.enabled);
         }
         if let Some(ts) = data
             .get("tables")
@@ -4010,7 +4046,7 @@ fn apply_info_function(
             let t = match scalar0() {
                 Some(Value::Number(_)) => 1.0,
                 Some(Value::Text(_)) => 2.0,
-                Some(Value::Blank) => 1.0,   // blank cells type as number (0)
+                Some(Value::Blank) => 1.0, // blank cells type as number (0)
                 Some(Value::Error(_)) => 16.0,
                 Some(Value::Array(_)) => 64.0,
                 None if err0.is_some() => 16.0,
@@ -4035,17 +4071,17 @@ fn apply_info_function(
                 None => Ok(Value::Number(0.0)),
             }
         }
-        "T" => {
-            match scalar0() {
-                Some(Value::Text(t)) => Ok(Value::Text(t)),
-                _ => Ok(Value::Text(String::new())),
-            }
-        }
+        "T" => match scalar0() {
+            Some(Value::Text(t)) => Ok(Value::Text(t)),
+            _ => Ok(Value::Text(String::new())),
+        },
         _ => return None,
     };
 
     // Guard: NaN/∞ from number ops becomes #NUM!.
-    if matches!(name.to_uppercase().as_str(), "N") && matches!(&v, Ok(Value::Number(n)) if !n.is_finite()) {
+    if matches!(name.to_uppercase().as_str(), "N")
+        && matches!(&v, Ok(Value::Number(n)) if !n.is_finite())
+    {
         return Some(Err(EvalErr::Num));
     }
     Some(v)
@@ -4829,40 +4865,71 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
         "NOW" => now_serial(),
 
         // --- Financial functions ---
-        "PMT" => pmt(first, second, args.get(2).copied().unwrap_or(0.0),
+        "PMT" => pmt(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(0.0),
-            args.get(4).copied().unwrap_or(0.0)),
-        "PV" => pv(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0),
+        ),
+        "PV" => pv(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(0.0),
-            args.get(4).copied().unwrap_or(0.0)),
-        "FV" => fv(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(0.0),
+        ),
+        "FV" => fv(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(0.0),
-            args.get(4).copied().unwrap_or(0.0)),
+            args.get(4).copied().unwrap_or(0.0),
+        ),
         "NPV" => npv(first, &args[1..]),
         "IRR" => {
             let guess = if args.len() > 1 { second } else { 0.1 };
             irr(args, guess)
         }
-        "RATE" => rate(second, args.get(2).copied().unwrap_or(0.0),
+        "RATE" => rate(
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             first,
             args.get(3).copied().unwrap_or(0.0),
             args.get(4).copied().unwrap_or(0.0),
-            args.get(5).copied().unwrap_or(0.1)),
+            args.get(5).copied().unwrap_or(0.1),
+        ),
         "SLN" => sln(first, second, args.get(2).copied().unwrap_or(0.0)),
-        "DB" => db(first, second, args.get(2).copied().unwrap_or(0.0),
+        "DB" => db(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(1.0),
-            args.get(4).copied().unwrap_or(12.0)),
-        "DDB" => ddb(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(12.0),
+        ),
+        "DDB" => ddb(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(1.0),
-            args.get(4).copied().unwrap_or(2.0)),
-        "PPMT" => ppmt(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(4).copied().unwrap_or(2.0),
+        ),
+        "PPMT" => ppmt(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(0.0),
             args.get(4).copied().unwrap_or(0.0),
-            args.get(5).copied().unwrap_or(0.0)),
-        "IPMT" => ipmt(first, second, args.get(2).copied().unwrap_or(0.0),
+            args.get(5).copied().unwrap_or(0.0),
+        ),
+        "IPMT" => ipmt(
+            first,
+            second,
+            args.get(2).copied().unwrap_or(0.0),
             args.get(3).copied().unwrap_or(0.0),
             args.get(4).copied().unwrap_or(0.0),
-            args.get(5).copied().unwrap_or(0.0)),
+            args.get(5).copied().unwrap_or(0.0),
+        ),
         "XNPV" => {
             if args.len() < 3 || (args.len() - 1) % 2 != 0 {
                 return Err(EvalErr::Value);
@@ -4883,7 +4950,8 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
 
     // A finite-domain math function that produced NaN/∞ is a #NUM! error
     // (e.g. SQRT(-1), LN(0)).
-    if matches!(upper.as_str(),
+    if matches!(
+        upper.as_str(),
         "SQRT" | "LN" | "LOG" | "LOG10" | "POWER" | "RATE" | "IRR" | "XIRR"
     ) && !v.is_finite()
     {
@@ -5140,13 +5208,13 @@ fn irr(cashflows: &[f64], guess: f64) -> f64 {
     }
     let mut r = guess;
     for _ in 0..100 {
-        let (npv, dnpv) = cashflows.iter().enumerate().fold(
-            (0.0, 0.0),
-            |(n, d), (i, &cf)| {
+        let (npv, dnpv) = cashflows
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(n, d), (i, &cf)| {
                 let denom = (1.0 + r).powf(i as f64);
                 (n + cf / denom, d - i as f64 * cf / (denom * (1.0 + r)))
-            },
-        );
+            });
         if dnpv.abs() < 1e-15 {
             break;
         }
@@ -5168,8 +5236,7 @@ fn rate(nper: f64, pmt: f64, pv: f64, fv: f64, type_: f64, guess: f64) -> f64 {
         let start = if type_ == 1.0 { 1.0 + r } else { 1.0 };
         let dstart = if type_ == 1.0 { 1.0 } else { 0.0 };
         let pv_t = pv * f + pmt * start * (f - 1.0) / r + fv;
-        let dpv = pv * df
-            + pmt * (dstart * (f - 1.0) / r + start * (df / r - (f - 1.0) / (r * r)));
+        let dpv = pv * df + pmt * (dstart * (f - 1.0) / r + start * (df / r - (f - 1.0) / (r * r)));
         if dpv.abs() < 1e-15 {
             break;
         }
@@ -5285,16 +5352,13 @@ fn xirr(values_and_dates: &[f64], guess: f64) -> f64 {
     let d0 = values_and_dates[1];
     let mut r = guess;
     for _ in 0..100 {
-        let (npv, dnpv) = (0..n).step_by(2).fold(
-            (0.0, 0.0),
-            |(n_sum, d_sum), i| {
-                let v = values_and_dates[i];
-                let d = values_and_dates[i + 1];
-                let t = (d - d0) / 365.0;
-                let denom = (1.0 + r).powf(t);
-                (n_sum + v / denom, d_sum - t * v / (denom * (1.0 + r)))
-            },
-        );
+        let (npv, dnpv) = (0..n).step_by(2).fold((0.0, 0.0), |(n_sum, d_sum), i| {
+            let v = values_and_dates[i];
+            let d = values_and_dates[i + 1];
+            let t = (d - d0) / 365.0;
+            let denom = (1.0 + r).powf(t);
+            (n_sum + v / denom, d_sum - t * v / (denom * (1.0 + r)))
+        });
         if dnpv.abs() < 1e-15 {
             break;
         }
@@ -5645,7 +5709,7 @@ mod tests {
         d.set_cell_text(0, 1, "=B3"); // references B3 — col B, different from deleted col A
         d.set_cell_text(2, 1, "z"); // B3
         d.delete_cells(0, 0, 0, 0, false); // shift up, deletes A1 only (col A, row 0)
-        // =B3 is in col B, the shifted column is A — reference B3 is untouched
+                                           // =B3 is in col B, the shifted column is A — reference B3 is untouched
         assert_eq!(d.get_cell_text(0, 1), "=B3");
         assert_eq!(d.cell_display_value(0, 1), "z");
     }
@@ -5659,7 +5723,7 @@ mod tests {
         d.set_cell_text(4, 0, "=$A$3"); // $A$3 (= row 2), below deleted rect, column same
         d.delete_cells(0, 0, 0, 0, false); // delete A1, shift up col A rows > 0
         assert_eq!(d.get_cell_text(3, 0), "=$A$3"); // $A$3 locked, doesn't shift
-        // A3 (now row 2) contains v1 (was A4, shifted up into A3)
+                                                    // A3 (now row 2) contains v1 (was A4, shifted up into A3)
         assert_eq!(d.cell_display_value(3, 0), "v1");
     }
 
@@ -6540,20 +6604,14 @@ mod tests {
     fn fill_line_absolute_col_stays_put_when_filled_right() {
         // $A1 — column locked, row relative.
         // Filled RIGHT (axis_is_row=false → shifts columns).
-        assert_eq!(
-            fill_line(&["=$A1".into()], 2, false),
-            vec!["=$A1", "=$A1"]
-        );
+        assert_eq!(fill_line(&["=$A1".into()], 2, false), vec!["=$A1", "=$A1"]);
     }
 
     #[test]
     fn fill_line_absolute_row_stays_put_when_filled_right() {
         // A$1 — row locked, column relative.
         // Filled RIGHT (axis_is_row=false → shifts columns, row locked stays).
-        assert_eq!(
-            fill_line(&["=A$1".into()], 2, false),
-            vec!["=B$1", "=C$1"]
-        );
+        assert_eq!(fill_line(&["=A$1".into()], 2, false), vec!["=B$1", "=C$1"]);
     }
 
     #[test]
@@ -7922,7 +7980,7 @@ mod tests {
     #[test]
     fn rank_eq_descending() {
         let data = [10.0, 7.0, 8.0, 9.0]; // rank of 7 → 4th (10=1, 9=2, 8=3, 7=4)
-        // RANK.EQ expects [value, data...] in flattened args
+                                          // RANK.EQ expects [value, data...] in flattened args
         let all = [7.0, 10.0, 7.0, 8.0, 9.0];
         let r = rank_eq(&all, 7.0);
         assert!((r - 4.0).abs() < 0.01);
@@ -7933,8 +7991,8 @@ mod tests {
     #[test]
     fn formula_pmt_evaluates() {
         let mut d = DataProxy::new("t");
-        d.set_cell_text(0, 0, "0.05");   // A1 = rate
-        d.set_cell_text(1, 0, "360");    // A2 = nper
+        d.set_cell_text(0, 0, "0.05"); // A1 = rate
+        d.set_cell_text(1, 0, "360"); // A2 = nper
         d.set_cell_text(2, 0, "100000"); // A3 = pv
         d.set_cell_text(3, 0, "=PMT(A1/12, A2, A3)");
         let v = d.cell_display_value(3, 0);
@@ -7945,10 +8003,10 @@ mod tests {
     #[test]
     fn formula_npv_evaluates() {
         let mut d = DataProxy::new("t");
-        d.set_cell_text(0, 0, "0.1");   // A1 = rate
-        d.set_cell_text(0, 1, "100");   // B1
-        d.set_cell_text(0, 2, "200");   // C1
-        d.set_cell_text(0, 3, "300");   // D1
+        d.set_cell_text(0, 0, "0.1"); // A1 = rate
+        d.set_cell_text(0, 1, "100"); // B1
+        d.set_cell_text(0, 2, "200"); // C1
+        d.set_cell_text(0, 3, "300"); // D1
         d.set_cell_text(1, 0, "=NPV(A1, B1, C1, D1)");
         let v = d.cell_display_value(1, 0);
         let n: f64 = v.parse().unwrap();
@@ -7965,9 +8023,9 @@ mod tests {
     #[test]
     fn formula_stdev_p_evaluates() {
         let mut d = DataProxy::new("t");
-        d.set_cell_text(0, 0, "2");   // A1
-        d.set_cell_text(0, 1, "4");   // B1
-        d.set_cell_text(0, 2, "6");   // C1
+        d.set_cell_text(0, 0, "2"); // A1
+        d.set_cell_text(0, 1, "4"); // B1
+        d.set_cell_text(0, 2, "6"); // C1
         d.set_cell_text(1, 0, "=STDEV.P(A1:C1)");
         let v = d.cell_display_value(1, 0);
         assert!(
@@ -7997,7 +8055,7 @@ mod tests {
         d.set_cell_text(0, 1, "42");
         d.set_cell_text(1, 0, "=N(A1)");
         d.set_cell_text(1, 1, "=N(B1)");
-        assert_eq!(d.cell_display_value(1, 0), "0");  // text → 0
+        assert_eq!(d.cell_display_value(1, 0), "0"); // text → 0
         assert_eq!(d.cell_display_value(1, 1), "42"); // numeric text → 42
     }
 
@@ -8048,9 +8106,9 @@ mod tests {
     #[test]
     fn formula_var_p_evaluates() {
         let mut d = DataProxy::new("t");
-        d.set_cell_text(0, 0, "2");   // A1
-        d.set_cell_text(0, 1, "4");   // B1
-        d.set_cell_text(0, 2, "6");   // C1
+        d.set_cell_text(0, 0, "2"); // A1
+        d.set_cell_text(0, 1, "4"); // B1
+        d.set_cell_text(0, 2, "6"); // C1
         d.set_cell_text(1, 0, "=VAR.P(A1:C1)");
         let v = d.cell_display_value(1, 0);
         assert!(

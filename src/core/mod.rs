@@ -16,6 +16,7 @@ pub mod merges;
 pub mod outline;
 pub mod pivot;
 pub mod row;
+pub mod sheet_protection;
 pub mod state;
 pub mod table;
 pub mod trendline;
