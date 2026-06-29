@@ -145,12 +145,61 @@ pub(crate) fn wire_context_menu(
             }
             let style = menu.unchecked_ref::<web_sys::HtmlElement>().style();
             let _ = style.set_property("display", "block");
-            // Position via the viewport coords so the menu lands
-            // under the cursor even when the canvas is scrolled or
-            // offset from the viewport (e.g. below the toolbar /
-            // formula bar).
+            // Provisional position under the cursor (viewport coords).
+            // We measure after this so the menu has its real
+            // height (the \`max-height: min(70vh, 600px)\` clamp
+            // is already applied inline).
             let _ = style.set_property("left", &format!("{}px", vx));
             let _ = style.set_property("top", &format!("{}px", vy));
+            // Flip when the cursor is too close to the bottom or
+            // right edge of the viewport. \`getBoundingClientRect\`
+            // returns viewport-relative coords (matches our \`left\`/
+            // \`top\` values); \`window.inner_width/height\` is the
+            // viewport size. A 4px margin keeps the menu from
+            // touching the edge.
+            // Flip when the cursor is too close to the bottom or
+            // right edge of the viewport. \`getBoundingClientRect\`
+            // returns viewport-relative coords (matches our \`left\`/
+            // \`top\` values); \`window.inner_width/height\` is the
+            // viewport size. A 4px margin keeps the menu from
+            // touching the edge.
+            // gloo's `window()` returns `Window` directly (not Option),
+            // so we pair it with the menu's `dyn_ref` for an Option
+            // tuple. `Window` is a thin reference wrapper, not an
+            // `Option<Window>`, so we wrap explicitly.
+            let Some(menu_html) = menu.dyn_ref::<web_sys::HtmlElement>() else {
+                return;
+            };
+            let win = gloo::utils::window();
+            {
+                let rect = menu_html.get_bounding_client_rect();
+                // \`Window::inner_width/inner_height\` return
+                // \`Result<JsValue, JsValue>\` (the \`?\` operator
+                // would need the wasm-bindgen futures shim). Use
+                // \`as_f64()\` on the success path and fall back to
+                // 0 on either error or non-numeric value.
+                let vw = win
+                    .inner_width()
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let vh = win
+                    .inner_height()
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                if vh > 0.0 && rect.bottom() > vh - 4.0 && rect.height() < vh {
+                    // Flip up: anchor the menu's bottom edge to the
+                    // cursor. \`top = cursor_y - menu_height\` keeps
+                    // the menu's bottom right at the click point.
+                    let new_top = (vy - rect.height()).max(4.0);
+                    let _ = style.set_property("top", &format!("{}px", new_top));
+                }
+                if vw > 0.0 && rect.right() > vw - 4.0 && rect.width() < vw {
+                    let new_left = (vx - rect.width()).max(4.0);
+                    let _ = style.set_property("left", &format!("{}px", new_left));
+                }
+            }
             // Hide "Refresh pivot" if the active sheet isn't a pivot output
             // (issue #35). The query is by data-cmenu so the row's
             // display is toggled directly.
