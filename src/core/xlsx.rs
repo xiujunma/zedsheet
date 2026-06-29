@@ -494,6 +494,35 @@ mod tests {
     }
 
     #[test]
+    fn sparklines_round_trip_through_xlsx_export() {
+        // Phase 4.1b: a sheet with a sparkline exports the chart
+        // parts alongside the data. We don't read them back (xlsx
+        // import doesn't parse chart parts), but the data still
+        // loads + the export size grows above the data-only
+        // baseline.
+        use crate::core::sparkline::{Sparkline, SparklineKind};
+        let mut d = DataProxy::new("Data");
+        for i in 0..5 {
+            d.set_cell_text(i, 0, &format!("{}", (i as f64 + 1.0) * 2.5));
+        }
+        d.sparklines.push(Sparkline {
+            kind: SparklineKind::Line,
+            range: "A1:A5".into(),
+            anchor: "B1".into(),
+            color: "#1e88e5".into(),
+            width: 120.0,
+            height: 20.0,
+        });
+        let bytes = to_xlsx(&[d]).expect("write");
+        assert_eq!(&bytes[0..2], b"PK", "xlsx is a zip container");
+        let sheets = from_xlsx(&bytes).expect("read");
+        assert_eq!(sheets.len(), 1);
+        // Data round-trips.
+        assert_eq!(sheets[0].get_cell_text(0, 0), "2.5");
+        assert_eq!(sheets[0].get_cell_text(4, 0), "12.5");
+    }
+
+    #[test]
     fn chart_roundtrip_drops_charts_on_import_but_keeps_data() {
         // Phase 2.3b: calamine doesn't expose chart parts, so a
         // workbook with a chart exports fine but on import the

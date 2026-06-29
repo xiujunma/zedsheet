@@ -1181,6 +1181,11 @@ pub fn render(renderer: &TableRenderer) {
         // Charts float over the body (issue #16); headers drawn after this
         // naturally cover any overflow at the grid edges.
         crate::renderer::chart_render::draw_charts(&canvas, renderer);
+        // Sparklines (Phase 4.1b) draw into the same cells the text
+        // renderer just painted, overlaying the value. The body
+        // pass is the only safe spot — headers drawn after this
+        // would cover the overlay.
+        crate::renderer::chart_render::draw_sparklines(&canvas, renderer);
 
         // Column headers span the frozen + body columns; row headers span the
         // frozen + body rows. area4 covers the common (no-freeze) case.

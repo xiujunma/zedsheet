@@ -4,6 +4,7 @@
 //! the existing `Canvas` wrapper — no DOM.
 
 use crate::core::chart::{extract_chart_data, extract_secondary_chart_data, nice_ceil, ChartData};
+use crate::core::sparkline::{Sparkline, SparklineKind};
 use crate::core::trendline::{
     exponential_eval, exponential_regression, linear_eval, linear_regression, quadratic_eval,
     quadratic_regression, Trendline,
@@ -375,6 +376,124 @@ fn draw_axes_chart(
             canvas.set_fill_style("#555555");
             canvas.fill_text(name, lx + 11.0, ly, None);
             lx += 11.0 + canvas.measure_text_width(name) + 12.0;
+        }
+    }
+}
+
+/// Render every sparkline anchored to a visible cell (Phase 4.1b).
+/// Each sparkline is painted as a tiny chart inside the cell's
+/// screen rect with 4px padding all around. We re-read the data
+/// range on every render so a live data update propagates to the
+/// sparkline immediately.
+pub fn draw_sparklines(canvas: &Canvas, renderer: &TableRenderer) {
+    for sparkline in &renderer.data.sparklines {
+        let (ac, ar) = match crate::renderer::alphabets::exp2xy(&sparkline.anchor) {
+            (c, r) if r < renderer.body_start_row() || c < renderer.body_start_col() => continue,
+            (c, r) => (c, r),
+        };
+        let rect = renderer.cell_screen_rect(ar, ac);
+        if rect.x >= renderer.width || rect.y >= renderer.height {
+            continue;
+        }
+        let data = match crate::core::chart::extract_chart_data(&renderer.data, &sparkline.range) {
+            Some(d) if !d.series.is_empty() => d,
+            _ => continue,
+        };
+        draw_one_sparkline(canvas, &rect, &sparkline, &data);
+    }
+}
+
+fn draw_one_sparkline(
+    canvas: &Canvas,
+    rect: &crate::renderer::table_renderer::Rect,
+    sparkline: &Sparkline,
+    data: &ChartData,
+) {
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    // 4px padding all around so the line/bars don't touch the cell border.
+    let pad = 4.0;
+    let px = x + pad;
+    let py = y + pad;
+    let pw = (w - pad * 2.0).max(8.0);
+    let ph = (h - pad * 2.0).max(8.0);
+    let values: &[f64] = &data.series[0].1;
+    if values.is_empty() {
+        return;
+    }
+    let n = values.len();
+    let vmin = values
+        .iter()
+        .cloned()
+        .fold(f64::INFINITY, f64::min)
+        .min(0.0);
+    let vmax = values
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(0.0);
+    let span = (vmax - vmin).max(1e-9);
+    let color = sparkline.effective_color();
+    canvas.set_stroke_style(&color);
+    canvas.set_fill_style(&color);
+    canvas.set_line_width(1.0);
+    let slot_w = pw / n as f64;
+    match sparkline.kind {
+        SparklineKind::Line => {
+            canvas.begin_path();
+            for (i, &v) in values.iter().enumerate() {
+                let cx = px + slot_w * (i as f64 + 0.5);
+                let cy = py + ph - (v - vmin) / span * ph;
+                if i == 0 {
+                    canvas.move_to(cx, cy);
+                } else {
+                    canvas.line_to(cx, cy);
+                }
+            }
+            canvas.stroke();
+            // Final-value dot so the line is clearly closed.
+            let last = values.last().copied().unwrap_or(0.0);
+            let cx = px + slot_w * (n as f64 - 0.5);
+            let cy = py + ph - (last - vmin) / span * ph;
+            canvas.fill_rect(cx - 2.0, cy - 2.0, 4.0, 4.0);
+        }
+        SparklineKind::Column => {
+            let bar_w = (slot_w * 0.7).max(1.0);
+            // Zero baseline at v=0 in the cell's coords.
+            let baseline = py + ph - (0.0 - vmin) / span * ph;
+            for (i, &v) in values.iter().enumerate() {
+                let cx = px + slot_w * (i as f64 + 0.5) - bar_w / 2.0;
+                let top = py + ph - (v.max(0.0) - vmin) / span * ph;
+                let bottom = py + ph - (v.min(0.0) - vmin) / span * ph;
+                let (rect_top, rect_h) = if top < bottom {
+                    (top, bottom - top)
+                } else {
+                    (bottom, top - bottom)
+                };
+                canvas.fill_rect(cx, rect_top, bar_w, rect_h.max(1.0));
+            }
+            // Subtle zero line.
+            canvas.set_stroke_style("#e4e7ea");
+            canvas.begin_path();
+            canvas.move_to(px, baseline);
+            canvas.line_to(px + pw, baseline);
+            canvas.stroke();
+            canvas.set_stroke_style(&color);
+        }
+        SparklineKind::WinLoss => {
+            let block_w = (slot_w * 0.9).max(1.0);
+            canvas.set_stroke_style("#888888");
+            for (i, &v) in values.iter().enumerate() {
+                let cx = px + slot_w * (i as f64 + 0.5) - block_w / 2.0;
+                let (top, bottom) = if v >= 0.0 {
+                    (py + ph / 2.0, py + ph)
+                } else {
+                    (py, py + ph / 2.0)
+                };
+                canvas.set_fill_style(if v >= 0.0 { "#43a047" } else { "#e53935" });
+                canvas.fill_rect(cx, top, block_w, bottom - top);
+            }
+            canvas.set_fill_style(&color);
+            canvas.set_stroke_style(&color);
         }
     }
 }
