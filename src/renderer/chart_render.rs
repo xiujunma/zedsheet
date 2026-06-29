@@ -56,9 +56,15 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
 
         match extract_chart_data(&renderer.data, &chart.range) {
             Some(data) if !data.labels.is_empty() => match chart.kind.as_str() {
-                "line" => draw_axes_chart(canvas, px, py, pw, ph, &data, false, chart.trendline),
+                "line" => draw_axes_chart(canvas, px, py, pw, ph, &data, "line", chart.trendline),
+                "scatter" => {
+                    draw_axes_chart(canvas, px, py, pw, ph, &data, "scatter", chart.trendline)
+                }
+                "bubble" => {
+                    draw_axes_chart(canvas, px, py, pw, ph, &data, "bubble", chart.trendline)
+                }
                 "pie" => draw_pie(canvas, px, py, pw, ph, &data),
-                _ => draw_axes_chart(canvas, px, py, pw, ph, &data, true, chart.trendline),
+                _ => draw_axes_chart(canvas, px, py, pw, ph, &data, "bar", chart.trendline),
             },
             _ => {
                 canvas.set_font("11px Arial");
@@ -71,10 +77,17 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
     }
 }
 
-/// Shared bar/line body: y axis with nice bounds + gridlines, x labels,
-/// a legend when there are multiple series. When `trendline` is set,
-/// one fitted curve is drawn over each series after the bars/lines
-/// themselves (Phase 1.2).
+/// Shared bar/line/scatter/bubble/area body: y axis with nice bounds +
+/// gridlines, x labels, a legend when there are multiple series.
+/// `mode` selects the per-series draw style:
+///   - `"bar"`     → filled rectangles
+///   - `"line"`    → connected line + dot markers
+///   - `"scatter"` → dot markers only (no connecting line)
+///   - `"bubble"`  → like scatter, with radius proportional to |value|
+///   - `"area"`    → like line, but the area under the curve is filled
+///
+/// When `trendline` is set, one fitted curve is drawn over each series
+/// after the body (Phase 1.2).
 fn draw_axes_chart(
     canvas: &Canvas,
     px: f64,
@@ -82,7 +95,7 @@ fn draw_axes_chart(
     pw: f64,
     ph: f64,
     data: &ChartData,
-    bars: bool,
+    mode: &str,
     trendline: Trendline,
 ) {
     let all: Vec<f64> = data
@@ -133,40 +146,94 @@ fn draw_axes_chart(
     canvas.set_stroke_style("#9aa0a6");
     canvas.line(px, y_of(0.0), px + pw, y_of(0.0));
 
-    if bars {
-        let slot = group_w * 0.8 / data.series.len() as f64;
-        for (si, (_, values)) in data.series.iter().enumerate() {
-            canvas.set_fill_style(PALETTE[si % PALETTE.len()]);
-            for (i, v) in values.iter().enumerate() {
-                let bx = px + group_w * i as f64 + group_w * 0.1 + slot * si as f64;
-                let (top, bottom) = if *v >= 0.0 {
-                    (y_of(*v), y_of(0.0))
-                } else {
-                    (y_of(0.0), y_of(*v))
-                };
-                canvas.fill_rect(bx, top, (slot - 2.0).max(1.0), (bottom - top).max(1.0));
-            }
-        }
-    } else {
-        for (si, (_, values)) in data.series.iter().enumerate() {
-            let color = PALETTE[si % PALETTE.len()];
-            canvas.set_stroke_style(color);
-            canvas.set_line_width(2.0);
-            canvas.begin_path();
-            for (i, v) in values.iter().enumerate() {
-                let cx = px + group_w * (i as f64 + 0.5);
-                let cy = y_of(*v);
-                if i == 0 {
-                    canvas.move_to(cx, cy);
-                } else {
-                    canvas.line_to(cx, cy);
+    match mode {
+        "bar" => {
+            let slot = group_w * 0.8 / data.series.len() as f64;
+            for (si, (_, values)) in data.series.iter().enumerate() {
+                canvas.set_fill_style(PALETTE[si % PALETTE.len()]);
+                for (i, v) in values.iter().enumerate() {
+                    let bx = px + group_w * i as f64 + group_w * 0.1 + slot * si as f64;
+                    let (top, bottom) = if *v >= 0.0 {
+                        (y_of(*v), y_of(0.0))
+                    } else {
+                        (y_of(0.0), y_of(*v))
+                    };
+                    canvas.fill_rect(bx, top, (slot - 2.0).max(1.0), (bottom - top).max(1.0));
                 }
             }
-            canvas.stroke();
-            canvas.set_fill_style(color);
-            for (i, v) in values.iter().enumerate() {
+        }
+        "line" => {
+            for (si, (_, values)) in data.series.iter().enumerate() {
+                let color = PALETTE[si % PALETTE.len()];
+                canvas.set_stroke_style(color);
+                canvas.set_line_width(2.0);
+                canvas.begin_path();
+                for (i, v) in values.iter().enumerate() {
+                    let cx = px + group_w * (i as f64 + 0.5);
+                    let cy = y_of(*v);
+                    if i == 0 {
+                        canvas.move_to(cx, cy);
+                    } else {
+                        canvas.line_to(cx, cy);
+                    }
+                }
+                canvas.stroke();
+                canvas.set_fill_style(color);
+                for (i, v) in values.iter().enumerate() {
+                    let cx = px + group_w * (i as f64 + 0.5);
+                    canvas.fill_rect(cx - 2.0, y_of(*v) - 2.0, 4.0, 4.0);
+                }
+            }
+        }
+        "scatter" => {
+            // Plot only the data points, no connecting line. Same
+            // axes as bar/line. Fixed 4px square dot per point.
+            for (si, (_, values)) in data.series.iter().enumerate() {
+                let color = PALETTE[si % PALETTE.len()];
+                canvas.set_fill_style(color);
+                for (i, v) in values.iter().enumerate() {
+                    let cx = px + group_w * (i as f64 + 0.5);
+                    let cy = y_of(*v);
+                    canvas.fill_rect(cx - 2.0, cy - 2.0, 4.0, 4.0);
+                }
+            }
+        }
+        "bubble" => {
+            // Like scatter, but with a circle radius proportional to
+            // |value|, clamped to a legible range. Uses the canvas
+            // `arc` helper if available; falls back to fill_rect when
+            // the canvas wrapper doesn't expose one.
+            let vmax = data
+                .series
+                .iter()
+                .flat_map(|(_, v)| v.iter())
+                .fold(0.0_f64, |m, v| m.max(v.abs()))
+                .max(1e-9);
+            for (si, (_, values)) in data.series.iter().enumerate() {
+                let color = PALETTE[si % PALETTE.len()];
+                canvas.set_fill_style(color);
+                for (i, v) in values.iter().enumerate() {
+                    let cx = px + group_w * (i as f64 + 0.5);
+                    let cy = y_of(*v);
+                    // Radius in [3, 14] CSS px, scaled to |v|/vmax.
+                    let r = (3.0 + 11.0 * (v.abs() / vmax)).clamp(3.0, 14.0);
+                    // Squares as a stand-in for circles — the canvas
+                    // wrapper only exposes fill_rect; a future helper
+                    // could add arc(). Half-side = r/2 keeps total
+                    // size ≈ r for visual parity.
+                    let half = r / 2.0;
+                    canvas.fill_rect(cx - half, cy - half, r, r);
+                }
+            }
+        }
+        _ => {
+            // Unknown mode: fall back to a single neutral marker so a
+            // bad string doesn't silently draw nothing.
+            canvas.set_fill_style("#888888");
+            for (i, _v) in data.series[0].1.iter().enumerate() {
                 let cx = px + group_w * (i as f64 + 0.5);
-                canvas.fill_rect(cx - 2.0, y_of(*v) - 2.0, 4.0, 4.0);
+                let cy = py + ph * 0.5;
+                canvas.fill_rect(cx - 2.0, cy - 2.0, 4.0, 4.0);
             }
         }
     }

@@ -34,6 +34,8 @@ pub(crate) fn chart_modal_html() -> String {
                     <select class="zs-chart-kind" style="flex:1;padding:3px;">
                         <option value="bar">Bar</option>
                         <option value="line">Line</option>
+                        <option value="scatter">Scatter</option>
+                        <option value="bubble">Bubble</option>
                         <option value="pie">Pie</option>
                     </select>
                 </div>
