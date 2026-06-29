@@ -32,6 +32,7 @@ mod find_replace;
 mod formula_bar;
 mod pivot_modal;
 mod print;
+mod protect_sheet_modal;
 mod slicer_modal;
 mod sort_dialog;
 mod system_clipboard;
@@ -50,6 +51,7 @@ pub(crate) use find_replace::*;
 pub(crate) use formula_bar::*;
 pub(crate) use pivot_modal::*;
 pub(crate) use print::*;
+pub(crate) use protect_sheet_modal::*;
 pub(crate) use slicer_modal::*;
 pub(crate) use sort_dialog::*;
 pub(crate) use toolbar::*;
@@ -534,6 +536,8 @@ impl ZedSheet {
         let slicer_open: OpenHandle = Rc::new(RefCell::new(None));
         let delete_open: OpenHandle = Rc::new(RefCell::new(None));
         let sort_open: OpenHandle = Rc::new(RefCell::new(None));
+        // …and the Protect Sheet dialog (Phase 1.3).
+        let protect_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -693,6 +697,7 @@ impl ZedSheet {
                 slicer_open.clone(),
                 delete_open.clone(),
                 sort_open.clone(),
+                protect_open.clone(),
             );
         }
         if let Some(fb) = fbar_node.clone() {
@@ -978,6 +983,29 @@ impl ZedSheet {
             let renderer_for_open = renderer.clone();
             *delete_open.borrow_mut() = Some(Rc::new(move || {
                 open_delete_modal(&inner, &renderer_for_open);
+            }));
+        }
+
+        // Protect Sheet dialog (Phase 1.3). Mirrors the slicer/delete
+        // modal mount: hidden root, wire once, expose an OpenHandle.
+        let mut protect_modal_root = h("div", Some("zs-protect-modal-root"));
+        protect_modal_root.set_inner_html(protect_sheet_modal_html());
+        let protect_modal_node: Option<web_sys::Element> = protect_modal_root
+            .el
+            .clone()
+            .and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut protect_modal_root);
+        if let Some(ref node) = protect_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-protect-sheet-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_protect_sheet_modal(inner.clone(), &renderer, &sheets, &active, &sync);
+            let sheets_for_open = sheets.clone();
+            let active_for_open = active.clone();
+            *protect_open.borrow_mut() = Some(Rc::new(move || {
+                open_protect_sheet_modal(&inner, &sheets_for_open, &active_for_open);
             }));
         }
 

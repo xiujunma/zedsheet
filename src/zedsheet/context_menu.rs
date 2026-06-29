@@ -62,6 +62,8 @@ pub(crate) fn context_menu_html() -> String {
         item("pivot", "Insert PivotTable…"),
         // Issue #61: Slicers dialog.
         item("slicer", "Insert Slicer…"),
+        // Phase 1.3: Protect Sheet dialog.
+        item("protect", "Protect Sheet…"),
         // Issue #35: refresh the pivot whose output sheet is the active one.
         item("refresh-pivot", "Refresh pivot"),
         // Issue #30: row/column outline groups + Subtotal.
@@ -108,6 +110,7 @@ pub(crate) fn wire_context_menu(
     slicer_open: OpenHandle,
     _delete_open: OpenHandle,
     sort_open: OpenHandle,
+    protect_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -158,6 +161,7 @@ pub(crate) fn wire_context_menu(
         let menu_for_click = menu_node.clone();
         let sheets = sheets.clone();
         let active = active.clone();
+        let protect_open = protect_open.clone();
         let mut menu_el: Element = menu_node.clone().into();
         menu_el.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
@@ -244,6 +248,19 @@ pub(crate) fn wire_context_menu(
             // the open handle set up at mount time.
             if cmd == "slicer" {
                 if let Some(open) = slicer_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+                return;
+            }
+
+            // Protect Sheet dialog (Phase 1.3): same open-handle
+            // pattern as the chart / pivot / slicer modals.
+            if cmd == "protect" {
+                if let Some(open) = protect_open.borrow().as_ref() {
                     open();
                 }
                 let _ = menu_for_click
