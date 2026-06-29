@@ -151,7 +151,19 @@ impl ZedSheet {
         let mut cmenu_el = h("div", Some(&format!("{}-contextmenu", CSS_PREFIX)));
         cmenu_el.set_inner_html(context_menu_html());
         let _ = cmenu_el.el.as_ref().map(|e| {
-            let _ = e.set_attribute("style", "display:none;width:180px;");
+            // Scroll the menu when it has more items than fit on the
+            // viewport. \`min(70vh, 600px)\` caps the height at the
+            // smaller of 70% of the viewport or 600 CSS px, so a
+            // short menu still shows in full while a long one
+            // scrolls. \`overflow-y: auto\` is the standard
+            // "show a scrollbar only when needed" pattern; \`position:
+            // fixed\` (set on display:block elsewhere) lets the
+            // scrollable region follow the cursor without a parent
+            // clipping it.
+            let _ = e.set_attribute(
+                "style",
+                "display:none;width:180px;max-height:min(70vh,600px);overflow-y:auto;",
+            );
         });
         sheet_el.append_child(&mut canvas_el);
         sheet_el.append_child(&mut editor_el);
