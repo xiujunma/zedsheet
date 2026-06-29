@@ -183,7 +183,7 @@ pub struct DataProxy {
     /// shadow only affects lookups while the inner frame is on top.
     /// `Rc<RefCell<…>>` so the immutable evaluator API can still
     /// push / pop during a span's deferred evaluation.
-    pub let_bindings: Rc<RefCell<Vec<HashMap<String, Value>>>>,
+    pub(crate) let_bindings: Rc<RefCell<Vec<HashMap<String, Value>>>>,
     pub freeze: (usize, usize),
     pub styles: Vec<Style>,
     pub merges: Merges,
@@ -2078,10 +2078,7 @@ impl DataProxy {
             self.eval_cell.get()
         };
         match info_type.as_str() {
-            "address" => {
-                let abs = 0; // relative by default
-                Ok(Value::Text(crate::renderer::alphabets::xy2expr(ci, ri)))
-            }
+            "address" => Ok(Value::Text(crate::renderer::alphabets::xy2expr(ci, ri))),
             "col" => Ok(Value::Number((ci + 1) as f64)),
             "row" => Ok(Value::Number((ri + 1) as f64)),
             "filename" => Ok(Value::Text(self.name.clone())),
@@ -4534,7 +4531,7 @@ fn apply_info_function(
         "N" => {
             match scalar0() {
                 Some(Value::Number(n)) => Ok(Value::Number(n)),
-                Some(Value::Text(t)) => {
+                Some(Value::Text(_)) => {
                     // N of text is 0 unless it's a date string
                     Ok(Value::Number(0.0))
                 }
@@ -5764,15 +5761,16 @@ fn ddb(cost: f64, salvage: f64, life: f64, period: f64, factor: f64) -> f64 {
         return 0.0;
     }
     let rate = factor / life;
+    // DDB returns the depreciation for the *requested* period, not
+    // the cumulative sum, so we just walk the book value forward
+    // to that period and return the per-period delta. Earlier
+    // periods' deltas are discarded.
     let mut book = cost;
-    let mut total_dep = 0.0;
     for _ in 1..(period as usize) {
         let dep = (book * rate).min(book - salvage).max(0.0);
-        total_dep += dep;
         book -= dep;
     }
-    let dep = (book * rate).min(book - salvage).max(0.0);
-    dep
+    (book * rate).min(book - salvage).max(0.0)
 }
 
 /// PPMT(rate, per, nper, pv, [fv], [type_])
