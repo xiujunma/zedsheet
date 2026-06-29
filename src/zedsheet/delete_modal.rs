@@ -53,11 +53,7 @@ fn hide_delete_modal(modal: &web_sys::Element) {
 
 /// Wire the delete dialog: each button dispatches to the matching renderer
 /// method, then the dialog closes.
-pub(crate) fn wire_delete_modal(
-    modal: web_sys::Element,
-    renderer: &SharedRenderer,
-    sync: &SyncFn,
-) {
+pub(crate) fn wire_delete_modal(modal: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
     let renderer = renderer.clone();
     let sync = sync.clone();
     let modal_node = modal.clone();
@@ -71,47 +67,28 @@ pub(crate) fn wire_delete_modal(
         };
 
         // Close button.
-        if elx
-            .closest(".zs-delete-close")
-            .ok()
-            .flatten()
-            .is_some()
-        {
+        if elx.closest(".zs-delete-close").ok().flatten().is_some() {
             hide_delete_modal(&modal_node);
             return;
         }
 
-        let action: Option<fn(&mut TableRenderer)> = if elx
-            .closest(".zs-delete-shift-up")
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            Some(|r: &mut TableRenderer| r.delete_cells_at_selection(false))
-        } else if elx
-            .closest(".zs-delete-shift-left")
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            Some(|r: &mut TableRenderer| r.delete_cells_at_selection(true))
-        } else if elx
-            .closest(".zs-delete-row")
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            Some(|r: &mut TableRenderer| r.delete_rows_at_selection())
-        } else if elx
-            .closest(".zs-delete-col")
-            .ok()
-            .flatten()
-            .is_some()
-        {
-            Some(|r: &mut TableRenderer| r.delete_cols_at_selection())
-        } else {
-            return; // click on backdrop / other element → ignore
-        };
+        let action: Option<fn(&mut TableRenderer)> =
+            if elx.closest(".zs-delete-shift-up").ok().flatten().is_some() {
+                Some(|r: &mut TableRenderer| r.delete_cells_at_selection(false))
+            } else if elx
+                .closest(".zs-delete-shift-left")
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                Some(|r: &mut TableRenderer| r.delete_cells_at_selection(true))
+            } else if elx.closest(".zs-delete-row").ok().flatten().is_some() {
+                Some(|r: &mut TableRenderer| r.delete_rows_at_selection())
+            } else if elx.closest(".zs-delete-col").ok().flatten().is_some() {
+                Some(|r: &mut TableRenderer| r.delete_cols_at_selection())
+            } else {
+                return; // click on backdrop / other element → ignore
+            };
 
         {
             let mut r = renderer.borrow_mut();

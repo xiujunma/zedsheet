@@ -75,10 +75,7 @@ fn hide(modal: &web_sys::Element) {
         .set_property("display", "none");
 }
 
-pub(crate) fn open_sort_dialog(
-    modal: &web_sys::Element,
-    renderer: &SharedRenderer,
-) {
+pub(crate) fn open_sort_dialog(modal: &web_sys::Element, renderer: &SharedRenderer) {
     // Prefill the first sort column from the active cell.
     let r = renderer.borrow();
     let sel = r.get_selector();
@@ -106,11 +103,7 @@ pub(crate) fn open_sort_dialog(
         .set_property("display", "block");
 }
 
-pub(crate) fn wire_sort_dialog(
-    modal: web_sys::Element,
-    renderer: &SharedRenderer,
-    sync: &SyncFn,
-) {
+pub(crate) fn wire_sort_dialog(modal: web_sys::Element, renderer: &SharedRenderer, sync: &SyncFn) {
     let renderer = renderer.clone();
     let sync = sync.clone();
     let modal_node = modal.clone();
@@ -174,17 +167,15 @@ pub(crate) fn wire_sort_dialog(
                     // Sort the entire used extent (full-sheet sort).
                     // Ensure an autofilter range exists covering the data.
                     if let Some((mr, mc)) = r.data.used_extent() {
-                        r.data
-                            .auto_filter
-                            .ref_ = Some(
-                                crate::core::cell_range::CellRange::new(
-                                    if has_header { 0 } else { 0 },
-                                    0,
-                                    mr,
-                                    mc,
-                                )
-                                .to_string(),
-                            );
+                        r.data.auto_filter.ref_ = Some(
+                            crate::core::cell_range::CellRange::new(
+                                if has_header { 0 } else { 0 },
+                                0,
+                                mr,
+                                mc,
+                            )
+                            .to_string(),
+                        );
                         if !has_header {
                             // Set the sort directly, then sort the entire range
                             // without skipping a header row. We need a raw sort
@@ -197,12 +188,8 @@ pub(crate) fn wire_sort_dialog(
                 } else {
                     // No autofilter active: set one up over the used extent
                     if let Some((mr, mc)) = r.data.used_extent() {
-                        r.data
-                            .auto_filter
-                            .ref_ = Some(
-                                crate::core::cell_range::CellRange::new(0, 0, mr, mc)
-                                    .to_string(),
-                            );
+                        r.data.auto_filter.ref_ =
+                            Some(crate::core::cell_range::CellRange::new(0, 0, mr, mc).to_string());
                         r.sort_filter_multi(&sorts);
                     }
                 }

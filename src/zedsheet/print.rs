@@ -37,44 +37,44 @@ pub(crate) fn build_print_html(sheet: &DataProxy) -> String {
     let mut body = String::new();
     body.push_str("<table><colgroup>");
     for c in min_c..=max_c {
-            body.push_str(&format!(
-                "<col style=\"width:{}px\"/>",
-                sheet.get_col_width(c) as i64
-            ));
-        }
-        body.push_str("</colgroup>");
-        for r in min_r..=max_r {
-            body.push_str(&format!(
-                "<tr style=\"height:{}px\">",
-                sheet.get_row_height(r) as i64
-            ));
-            for c in min_c..=max_c {
-                let merge = sheet.cell_merge(r, c);
-                if let Some(m) = &merge {
-                    if (r, c) != (m.sri, m.sci) {
-                        continue;
-                    }
+        body.push_str(&format!(
+            "<col style=\"width:{}px\"/>",
+            sheet.get_col_width(c) as i64
+        ));
+    }
+    body.push_str("</colgroup>");
+    for r in min_r..=max_r {
+        body.push_str(&format!(
+            "<tr style=\"height:{}px\">",
+            sheet.get_row_height(r) as i64
+        ));
+        for c in min_c..=max_c {
+            let merge = sheet.cell_merge(r, c);
+            if let Some(m) = &merge {
+                if (r, c) != (m.sri, m.sci) {
+                    continue;
                 }
-                let mut style = sheet.get_cell_style(r, c);
-                sheet.apply_cond_format(r, c, &mut style);
-                let span = merge
-                    .map(|m| {
-                        format!(
-                            " colspan=\"{}\" rowspan=\"{}\"",
-                            m.eci - m.sci + 1,
-                            m.eri - m.sri + 1
-                        )
-                    })
-                    .unwrap_or_default();
-                body.push_str(&format!(
-                    "<td{span} style=\"{}\">{}</td>",
-                    td_style(&style),
-                    esc(&sheet.cell_display_value(r, c))
-                ));
             }
-            body.push_str("</tr>");
+            let mut style = sheet.get_cell_style(r, c);
+            sheet.apply_cond_format(r, c, &mut style);
+            let span = merge
+                .map(|m| {
+                    format!(
+                        " colspan=\"{}\" rowspan=\"{}\"",
+                        m.eci - m.sci + 1,
+                        m.eri - m.sri + 1
+                    )
+                })
+                .unwrap_or_default();
+            body.push_str(&format!(
+                "<td{span} style=\"{}\">{}</td>",
+                td_style(&style),
+                esc(&sheet.cell_display_value(r, c))
+            ));
         }
-        body.push_str("</table>");
+        body.push_str("</tr>");
+    }
+    body.push_str("</table>");
     let orientation_css = if ps.orientation == "landscape" {
         " size: landscape;"
     } else {
