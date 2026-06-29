@@ -768,7 +768,7 @@ fn is_white(color: &str) -> bool {
 
 /// Break `text` into lines that fit within `max_width`, breaking on spaces
 /// (and honoring explicit newlines). The canvas font must already be set.
-fn wrap_text(canvas: &Canvas, text: &str, max_width: f64) -> Vec<String> {
+pub(crate) fn wrap_text(canvas: &Canvas, text: &str, max_width: f64) -> Vec<String> {
     let mut lines = Vec::new();
     for raw_line in text.split('\n') {
         let mut cur = String::new();

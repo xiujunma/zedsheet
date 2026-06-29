@@ -1,4 +1,4 @@
-use crate::core::auto_filter::AutoFilter;
+use crate::core::auto_filter::{AutoFilter, Sort};
 use crate::core::cell::Cell;
 use crate::core::cell_range::CellRange;
 use crate::core::chart::Chart;
@@ -119,6 +119,60 @@ impl Default for Style {
     }
 }
 
+/// Page setup for printing (issue #14). Stored per-sheet; round-trips
+/// through `get_data` / `set_data`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageSetup {
+    /// "portrait" or "landscape"
+    #[serde(default = "default_orientation")]
+    pub orientation: String,
+    /// Paper size name: "letter", "a4", "legal", "a3"
+    #[serde(default = "default_paper_size")]
+    pub paper_size: String,
+    /// Margins in inches: top, right, bottom, left
+    #[serde(default = "default_margins")]
+    pub margins: (f64, f64, f64, f64),
+    /// Print scale as percentage (100 = no scaling)
+    #[serde(default = "default_scale")]
+    pub scale: u32,
+    /// Optional print area as "A1:B4" or None for the used extent
+    #[serde(default)]
+    pub print_area: Option<String>,
+    /// Row range to repeat at top of each page, e.g. "1:3"
+    #[serde(default)]
+    pub repeat_rows: Option<String>,
+    /// Column range to repeat at left of each page, e.g. "A:B"
+    #[serde(default)]
+    pub repeat_cols: Option<String>,
+}
+
+fn default_orientation() -> String {
+    "portrait".into()
+}
+fn default_paper_size() -> String {
+    "letter".into()
+}
+fn default_margins() -> (f64, f64, f64, f64) {
+    (0.75, 0.75, 0.75, 0.75)
+}
+fn default_scale() -> u32 {
+    100
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        Self {
+            orientation: default_orientation(),
+            paper_size: default_paper_size(),
+            margins: default_margins(),
+            scale: default_scale(),
+            print_area: None,
+            repeat_rows: None,
+            repeat_cols: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DataProxy {
     pub name: String,
@@ -143,6 +197,9 @@ pub struct DataProxy {
     pub row_groups: Vec<OutlineGroup>,
     /// Column outline groups (issue #30), drawn above the column headers.
     pub col_groups: Vec<OutlineGroup>,
+    /// Print / page setup (issue #14). Per-sheet; round-trips through
+    /// `get_data` / `set_data`.
+    pub page_setup: PageSetup,
     /// Charts floating over the grid, anchored at cells (issue #16).
     pub charts: Vec<Chart>,
     /// Excel-style Tables (issue #34): named regions with a header row,
@@ -239,6 +296,7 @@ impl Default for DataProxy {
             cond_formats: Vec::new(),
             row_groups: Vec::new(),
             col_groups: Vec::new(),
+            page_setup: PageSetup::default(),
             charts: Vec::new(),
             tables: Vec::new(),
             named_ranges: HashMap::new(),
@@ -1871,7 +1929,7 @@ impl DataProxy {
             if r.sri == t.sri && r.sci == t.sci {
                 self.auto_filter.ref_ = None;
                 self.auto_filter.filters.clear();
-                self.auto_filter.sort = None;
+                self.auto_filter.sort.clear();
                 // Filtered-out rows would otherwise stay hidden forever.
                 for ri in t.sri..=t.eri {
                     self.set_row_hidden(ri, false);
@@ -2591,6 +2649,7 @@ impl DataProxy {
     /// `ci`, moving only the cells within the range's column span so data
     /// outside the table stays put (issue #10). Keys are displayed values:
     /// numbers compare numerically, text case-insensitively, blanks last.
+    /// Sort rows within the autofilter range by a single column key.
     pub fn sort_filter_range(&mut self, ci: usize, asc: bool) {
         self.mark_spills_dirty();
         let Some(range) = self.auto_filter.range() else {
@@ -2626,9 +2685,64 @@ impl DataProxy {
                 row.cells.insert(c, cell);
             }
         }
-        self.auto_filter
-            .set_sort(ci, Some(if asc { "asc" } else { "desc" }));
+        self.auto_filter.set_sorts(vec![Sort::new(
+            ci,
+            if asc { "asc" } else { "desc" },
+        )]);
         // Rows moved, so the hidden/visible assignment must be recomputed.
+        self.apply_filter_visibility();
+    }
+
+    /// Sort rows within the autofilter range by multiple column keys (issue
+    /// #14). Each `Sort` gives a column index and direction. The least
+    /// significant key is applied first via stable sort so ties in later
+    /// (more significant) keys preserve the earlier ordering.
+    pub fn sort_filter_range_multi(&mut self, sorts: &[Sort]) {
+        self.mark_spills_dirty();
+        if sorts.is_empty() {
+            return;
+        }
+        let Some(range) = self.auto_filter.range() else {
+            return;
+        };
+        let (sri, eri) = (range.sri + 1, range.eri);
+        if sri > eri {
+            return;
+        }
+        let (sci, eci) = (range.sci, range.eci);
+        let mut entries: Vec<(Vec<String>, HashMap<usize, Cell>)> = (sri..=eri)
+            .map(|ri| {
+                let keys: Vec<String> = sorts
+                    .iter()
+                    .map(|s| self.cell_display_value(ri, s.ci))
+                    .collect();
+                let cells = self
+                    .rows
+                    .get(&ri)
+                    .map(|row| {
+                        row.cells
+                            .iter()
+                            .filter(|(c, _)| **c >= sci && **c <= eci)
+                            .map(|(c, cell)| (*c, cell.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (keys, cells)
+            })
+            .collect();
+        // Stable sort by each key least-significant-first.
+        for (idx, sort) in sorts.iter().enumerate().rev() {
+            let asc = sort.asc();
+            entries.sort_by(|a, b| cmp_cell_values(&a.0[idx], &b.0[idx], asc));
+        }
+        for (offset, (_, cells)) in entries.into_iter().enumerate() {
+            let row = self.rows.entry(sri + offset).or_default();
+            row.cells.retain(|c, _| *c < sci || *c > eci);
+            for (c, cell) in cells {
+                row.cells.insert(c, cell);
+            }
+        }
+        self.auto_filter.set_sorts(sorts.to_vec());
         self.apply_filter_visibility();
     }
 
@@ -2771,6 +2885,7 @@ impl DataProxy {
             "slicers": serde_json::to_value(&self.slicers).unwrap_or_default(),
             // Excel-style tables (issue #34).
             "tables": serde_json::to_value(&self.tables).unwrap_or_default(),
+            "page": serde_json::to_value(&self.page_setup).unwrap_or_default(),
             // Active cell (ri, ci) + selection rectangle, so a host can
             // round-trip selection state through get_data/load_data and read
             // the active cell from an on_change payload (issue #44).
@@ -2889,6 +3004,12 @@ impl DataProxy {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.tables = ts;
+        }
+        if let Some(ps) = data
+            .get("page")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            self.page_setup = ps;
         }
         // Restore the active cell + selection range (issue #44). Absent `sel`
         // (older payloads) leaves the default A1 selection.
@@ -5184,7 +5305,7 @@ mod tests {
             ["33", "10", "2"]
         );
         assert_eq!(
-            d.auto_filter.sort.as_ref().map(|s| s.order.as_str()),
+            d.auto_filter.sort.first().map(|s| s.order.as_str()),
             Some("desc")
         );
     }

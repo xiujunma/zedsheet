@@ -341,7 +341,7 @@ pub(crate) fn wire_events(
         });
     }
 
-    // dblclick: edit the clicked cell.
+    // dblclick: auto-fit column/row on header boundary, otherwise edit cell.
     {
         let renderer = renderer.clone();
         let textarea = textarea.clone();
@@ -350,6 +350,23 @@ pub(crate) fn wire_events(
         canvas_el.add_event_listener("dblclick", move |event: web_sys::Event| {
             let me: MouseEvent = event.dyn_into().unwrap();
             let (x, y) = (me.offset_x() as f64, me.offset_y() as f64);
+            // If the double-click lands on a header boundary, auto-fit the
+            // column or row instead of editing.
+            if let Some(kind) = renderer.borrow().resize_target(x, y) {
+                match kind {
+                    crate::renderer::table_renderer::DragKind::ColResize(ci) => {
+                        renderer.borrow_mut().auto_fit_col(ci);
+                        renderer.borrow_mut().render();
+                        return;
+                    }
+                    crate::renderer::table_renderer::DragKind::RowResize(ri) => {
+                        renderer.borrow_mut().auto_fit_row(ri);
+                        renderer.borrow_mut().render();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             let hit = renderer.borrow().cell_at(x, y);
             if let Some((ri, ci)) = hit {
                 // Edit the merge origin when the cell is part of a merge.

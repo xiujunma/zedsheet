@@ -71,6 +71,7 @@ pub(crate) fn context_menu_html() -> String {
         item("group-cols", "Group columns"),
         item("ungroup-cols", "Ungroup columns"),
         item("subtotal", "Subtotal by first column"),
+        item("sort-range", "Sort…"),
         // Issue #34: Excel-style tables.
         divider.clone(),
         item("format-table", "Format as table"),
@@ -106,6 +107,7 @@ pub(crate) fn wire_context_menu(
     pivot_open: OpenHandle,
     slicer_open: OpenHandle,
     _delete_open: OpenHandle,
+    sort_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -294,6 +296,7 @@ pub(crate) fn wire_context_menu(
                 return;
             }
 
+            let mut open_sort_dialog = false;
             {
                 let mut r = renderer.borrow_mut();
                 // Read-only mode blocks every *write* menu action. Copy is
@@ -357,6 +360,7 @@ pub(crate) fn wire_context_menu(
                     "group-cols" if !read_only => r.group_cols(),
                     "ungroup-cols" if !read_only => r.ungroup_cols(),
                     "subtotal" if !read_only => r.subtotal_selection(),
+                    "sort-range" => open_sort_dialog = true,
                     // Issue #34: Excel-style tables.
                     "format-table" if !read_only => r.format_selection_as_table(),
                     "table-totals" if !read_only => r.toggle_table_totals_at_selection(),
@@ -364,6 +368,12 @@ pub(crate) fn wire_context_menu(
                     _ => {}
                 }
                 r.render();
+            }
+            // Sort dialog: opens after releasing the renderer borrow.
+            if open_sort_dialog {
+                if let Some(open) = sort_open.borrow().as_ref() {
+                    open();
+                }
             }
             // Refresh the formula bar / undo state and persist the edit (#20).
             sync();

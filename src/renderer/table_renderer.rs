@@ -10,6 +10,7 @@ use web_sys::HtmlCanvasElement;
 
 use super::alphabets::string_at;
 use super::viewport::Viewport;
+use crate::core::auto_filter::Sort;
 use crate::core::cell::Cell as DataCell;
 use crate::core::cell_range::CellRange;
 use crate::core::clipboard_io::ParsedGrid;
@@ -2270,6 +2271,14 @@ impl TableRenderer {
         self.data.sort_filter_range(ci, asc);
     }
 
+    pub fn sort_filter_multi(&mut self, sorts: &[Sort]) {
+        if self.data.is_read_only() || sorts.is_empty() {
+            return;
+        }
+        self.snapshot();
+        self.data.sort_filter_range_multi(sorts);
+    }
+
     /// Distinct displayed values in filter column `ci` as
     /// `(value, count, currently_included)`, sorted for the dropdown
     /// (issue #10).
@@ -2841,6 +2850,89 @@ impl TableRenderer {
     pub fn set_row_height_clamped(&mut self, ri: usize, h: f64) {
         let model_h = h / self.data.zoom();
         self.data.set_row_height(ri, model_h.max(12f64));
+    }
+
+    /// Auto-fit a column's width to its content: measure every visible cell in
+    /// the column and set the width to the widest one plus padding.
+    pub fn auto_fit_col(&mut self, ci: usize) {
+        let canvas = Canvas::new(self.target.clone(), self.scale);
+        let Some((max_r, _)) = self.data.used_extent() else {
+            return;
+        };
+        let mut max_w: f64 = 60.0; // minimum column width in model pixels
+        for ri in 0..=max_r {
+            if self.data.is_row_hidden(ri) {
+                continue;
+            }
+            let display = self.data.cell_display_value(ri, ci);
+            if display.is_empty() {
+                continue;
+            }
+            let style = self.data.get_cell_style(ri, ci);
+            let font_size = style.font_size as f64;
+            let bold = if style.bold { "bold " } else { "" };
+            let italic = if style.italic { "italic " } else { "" };
+            let font = format!(
+                "{}{}{}px {}",
+                bold, italic, font_size + 2.0, style.font_family
+            );
+            canvas.ctx.set_font(&font);
+            let tw = canvas.measure_text_width(&display);
+            // Wrap-aware: if cell has text_wrap, measure each line
+            let cell_w = if style.text_wrap {
+                let pad = 10.0; // 5px each side
+                let col_w = self.data.get_col_width(ci) / self.data.zoom();
+                let lines = crate::renderer::render::wrap_text(&canvas, &display, col_w - pad);
+                lines
+                    .iter()
+                    .map(|l| canvas.measure_text_width(l))
+                    .fold(0f64, f64::max)
+            } else {
+                tw
+            };
+            let needed = cell_w + 12.0; // 6px padding each side
+            if needed > max_w {
+                max_w = needed;
+            }
+        }
+        self.data.set_col_width(ci, max_w.round().max(20.0));
+    }
+
+    /// Auto-fit a row's height to its content: measure every visible cell in
+    /// the row and set the height to accommodate the tallest one.
+    pub fn auto_fit_row(&mut self, ri: usize) {
+        let canvas = Canvas::new(self.target.clone(), self.scale);
+        let (_max_r, max_c) = self.data.used_extent().unwrap_or((0, 0));
+        let mut max_h: f64 = 12.0; // minimum row height in model pixels
+        for ci in 0..=max_c {
+            if self.data.is_col_hidden(ci) {
+                continue;
+            }
+            let display = self.data.cell_display_value(ri, ci);
+            if display.is_empty() {
+                continue;
+            }
+            let style = self.data.get_cell_style(ri, ci);
+            let font_size = style.font_size as f64;
+            let font = format!("{}px {}", font_size + 2.0, style.font_family);
+            canvas.ctx.set_font(&font);
+            if style.text_wrap {
+                let pad = 10.0;
+                let col_w = self.data.get_col_width(ci) / self.data.zoom();
+                let lines = crate::renderer::render::wrap_text(&canvas, &display, col_w - pad);
+                let line_h = font_size + 6.0;
+                let needed = lines.len() as f64 * line_h + 8.0;
+                if needed > max_h {
+                    max_h = needed;
+                }
+            } else {
+                let needed = font_size + 14.0;
+                if needed > max_h {
+                    max_h = needed;
+                }
+            }
+        }
+        self.data.set_row_height(ri, max_h.round().max(12.0));
     }
 
     /// Scroll vertically to a fraction [0, 1] of the rows.

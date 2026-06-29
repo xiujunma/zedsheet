@@ -33,6 +33,7 @@ mod formula_bar;
 mod pivot_modal;
 mod print;
 mod slicer_modal;
+mod sort_dialog;
 mod system_clipboard;
 mod toolbar;
 mod util;
@@ -50,6 +51,7 @@ pub(crate) use formula_bar::*;
 pub(crate) use pivot_modal::*;
 pub(crate) use print::*;
 pub(crate) use slicer_modal::*;
+pub(crate) use sort_dialog::*;
 pub(crate) use toolbar::*;
 pub(crate) use util::*;
 
@@ -510,6 +512,7 @@ impl ZedSheet {
         // …and the Slicer dialog (issue #61).
         let slicer_open: OpenHandle = Rc::new(RefCell::new(None));
         let delete_open: OpenHandle = Rc::new(RefCell::new(None));
+        let sort_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -667,6 +670,7 @@ impl ZedSheet {
                 pivot_open.clone(),
                 slicer_open.clone(),
                 delete_open.clone(),
+                sort_open.clone(),
             );
         }
         if let Some(fb) = fbar_node.clone() {
@@ -951,6 +955,26 @@ impl ZedSheet {
             let renderer_for_open = renderer.clone();
             *delete_open.borrow_mut() = Some(Rc::new(move || {
                 open_delete_modal(&inner, &renderer_for_open);
+            }));
+        }
+
+        // Sort dialog (issue #14): mounted hidden at root, opened by the
+        // right-click context menu or filter menu "More sort options…".
+        let mut sort_modal_root = h("div", Some("zs-sort-modal-root"));
+        sort_modal_root.set_inner_html(sort_dialog_html());
+        let sort_modal_node: Option<web_sys::Element> =
+            sort_modal_root.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut sort_modal_root);
+        if let Some(ref node) = sort_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-sort-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_sort_dialog(inner.clone(), &renderer, &sync);
+            let renderer_for_open = renderer.clone();
+            *sort_open.borrow_mut() = Some(Rc::new(move || {
+                open_sort_dialog(&inner, &renderer_for_open);
             }));
         }
 

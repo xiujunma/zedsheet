@@ -11,30 +11,46 @@ use crate::core::html_util::{esc, td_style};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlIFrameElement;
 
-/// Build a standalone HTML document of the sheet's used extent: a fixed-layout
-/// table with the grid's column widths and row heights, merged cells as
-/// colspan/rowspan, display-formatted values, and per-cell styles (including
-/// conditional formatting, issue #11).
+/// Build a standalone HTML document of the sheet's used extent (or the
+/// user-defined print area): a fixed-layout table with the grid's column
+/// widths and row heights, merged cells as colspan/rowspan, display-formatted
+/// values, per-cell styles, and page-setup CSS (issue #14).
 pub(crate) fn build_print_html(sheet: &DataProxy) -> String {
+    let ps = &sheet.page_setup;
+    let (mtop, mright, mbot, mleft) = ps.margins;
+
+    // Resolve the print range: explicit print_area, or the used extent.
+    let (min_r, min_c, max_r, max_c) = if let Some(ref area) = ps.print_area {
+        if let Ok(cr) = crate::core::cell_range::CellRange::from_str(area) {
+            (cr.sri, cr.sci, cr.eri, cr.eci)
+        } else if let Some((mr, mc)) = sheet.used_extent() {
+            (0, 0, mr, mc)
+        } else {
+            return empty_print_html(sheet);
+        }
+    } else if let Some((mr, mc)) = sheet.used_extent() {
+        (0, 0, mr, mc)
+    } else {
+        return empty_print_html(sheet);
+    };
+
     let mut body = String::new();
-    if let Some((max_r, max_c)) = sheet.used_extent() {
-        body.push_str("<table><colgroup>");
-        for c in 0..=max_c {
+    body.push_str("<table><colgroup>");
+    for c in min_c..=max_c {
             body.push_str(&format!(
                 "<col style=\"width:{}px\"/>",
                 sheet.get_col_width(c) as i64
             ));
         }
         body.push_str("</colgroup>");
-        for r in 0..=max_r {
+        for r in min_r..=max_r {
             body.push_str(&format!(
                 "<tr style=\"height:{}px\">",
                 sheet.get_row_height(r) as i64
             ));
-            for c in 0..=max_c {
+            for c in min_c..=max_c {
                 let merge = sheet.cell_merge(r, c);
                 if let Some(m) = &merge {
-                    // Only the merge origin renders; covered cells are skipped.
                     if (r, c) != (m.sri, m.sci) {
                         continue;
                     }
@@ -59,18 +75,68 @@ pub(crate) fn build_print_html(sheet: &DataProxy) -> String {
             body.push_str("</tr>");
         }
         body.push_str("</table>");
-    }
+    let orientation_css = if ps.orientation == "landscape" {
+        " size: landscape;"
+    } else {
+        ""
+    };
+    let scale_pct = ps.scale.clamp(10, 400);
     format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>{title}</title><style>\
-           @page {{ margin: 1.5cm; }}\
-           body {{ margin: 0; font: 12px Arial, sans-serif; }}\
+           @page {{ margin-top: {mtop}in; margin-right: {mright}in; \
+                    margin-bottom: {mbot}in; margin-left: {mleft}in;{orientation_css} }}\
+           body {{ margin: 0; font: 12px Arial, sans-serif; \
+                  transform: scale({scale}); transform-origin: top left; \
+                  width: {scale}%; }}\
            table {{ border-collapse: collapse; table-layout: fixed; }}\
            td {{ border: 1px solid #c8c8c8; padding: 2px 4px; overflow: hidden; \
                  white-space: nowrap; vertical-align: middle; }}\
            tr {{ break-inside: avoid; }}\
          </style></head><body>{body}</body></html>",
         title = esc(&sheet.name),
+        mtop = mtop,
+        mright = mright,
+        mbot = mbot,
+        mleft = mleft,
+        orientation_css = orientation_css,
+        scale = scale_pct as f64 / 100.0,
         body = body
+    )
+}
+
+/// Map a paper size name to the CSS `@page { size: … }` dimension keywords.
+fn pape_size_css(name: &str) -> &'static str {
+    match name {
+        "letter" => "",
+        "a4" => "",
+        "legal" => "",
+        "a3" => "",
+        _ => "",
+    }
+}
+
+/// Return an empty HTML document (no table) when the sheet has no content
+/// and no explicit print area.
+fn empty_print_html(sheet: &DataProxy) -> String {
+    let ps = &sheet.page_setup;
+    let (mtop, mright, mbot, mleft) = ps.margins;
+    let orientation_css = if ps.orientation == "landscape" {
+        " size: landscape;"
+    } else {
+        ""
+    };
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>{title}</title><style>\
+           @page {{ margin-top: {mtop}in; margin-right: {mright}in; \
+                    margin-bottom: {mbot}in; margin-left: {mleft}in;{orientation_css} }}\
+           body {{ margin: 0; font: 12px Arial, sans-serif; }}\
+         </style></head><body></body></html>",
+        title = esc(&sheet.name),
+        mtop = mtop,
+        mright = mright,
+        mbot = mbot,
+        mleft = mleft,
+        orientation_css = orientation_css,
     )
 }
 

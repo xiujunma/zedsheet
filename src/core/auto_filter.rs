@@ -62,7 +62,8 @@ pub struct AutoFilter {
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     pub ref_: Option<String>,
     pub filters: Vec<Filter>,
-    pub sort: Option<Sort>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sort: Vec<Sort>,
 }
 
 impl Default for AutoFilter {
@@ -70,7 +71,7 @@ impl Default for AutoFilter {
         AutoFilter {
             ref_: None,
             filters: Vec::new(),
-            sort: None,
+            sort: Vec::new(),
         }
     }
 }
@@ -120,12 +121,12 @@ impl AutoFilter {
         self.filters.iter_mut().find(|f| f.ci == ci)
     }
 
-    pub fn set_sort(&mut self, ci: usize, order: Option<&str>) {
-        self.sort = order.map(|o| Sort::new(ci, o));
+    pub fn set_sorts(&mut self, sorts: Vec<Sort>) {
+        self.sort = sorts;
     }
 
     pub fn get_sort(&self, ci: usize) -> Option<&Sort> {
-        self.sort.as_ref().filter(|s| s.ci == ci)
+        self.sort.iter().find(|s| s.ci == ci)
     }
 
     pub fn filtered_rows<F>(&self, get_cell: F) -> (HashSet<usize>, HashSet<usize>)
@@ -192,7 +193,7 @@ impl AutoFilter {
     pub fn clear(&mut self) {
         self.ref_ = None;
         self.filters.clear();
-        self.sort = None;
+        self.sort.clear();
     }
 
     pub fn get_data(&self) -> serde_json::Value {
@@ -206,12 +207,13 @@ impl AutoFilter {
                         "value": f.value
                     })
                 }).collect::<Vec<_>>(),
-                "sort": self.sort.as_ref().map(|s| {
-                    serde_json::json!({
-                        "ci": s.ci,
-                        "order": s.order
-                    })
-                })
+                "sort": if self.sort.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(self.sort.iter().map(|s| {
+                        serde_json::json!({"ci": s.ci, "order": s.order})
+                    }).collect::<Vec<_>>())
+                }
             })
         } else {
             serde_json::json!({})
@@ -238,12 +240,24 @@ impl AutoFilter {
                 })
                 .collect();
         }
-        if let Some(sort) = data.get("sort").and_then(|v| v.as_object()) {
-            if let (Some(ci), Some(order)) = (
-                sort.get("ci").and_then(|v| v.as_u64()).map(|v| v as usize),
-                sort.get("order").and_then(|v| v.as_str()),
-            ) {
-                self.sort = Some(Sort::new(ci, order));
+        if let Some(sorts) = data.get("sort") {
+            if let Some(arr) = sorts.as_array() {
+                self.sort = arr
+                    .iter()
+                    .filter_map(|s| {
+                        let ci = s.get("ci")?.as_u64()? as usize;
+                        let order = s.get("order")?.as_str()?;
+                        Some(Sort::new(ci, order))
+                    })
+                    .collect();
+            } else if let Some(obj) = sorts.as_object() {
+                // Legacy single-sort format
+                if let (Some(ci), Some(order)) = (
+                    obj.get("ci").and_then(|v| v.as_u64()).map(|v| v as usize),
+                    obj.get("order").and_then(|v| v.as_str()),
+                ) {
+                    self.sort = vec![Sort::new(ci, order)];
+                }
             }
         }
     }

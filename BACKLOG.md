@@ -35,9 +35,9 @@
 | # | Severity | Feature | Notes |
 |---|----------|---------|-------|
 | | ~~**P0**~~ ✅ | Delete-cell shift (`Ctrl+-`) and delete-row/column | Fixed 2026-06-29: `Ctrl+-` opens a delete dialog with "Shift cells up", "Shift cells left", "Entire row", "Entire column" (full-row/col selections run directly). Dialog at `src/zedsheet/delete_modal.rs`, shortcut in `events.rs`. |
-| | **P1** | Hide / show rows and columns | The data model has no `hidden` flag on rows/cols yet. Right-click → Hide is a long-standing request. |
+| | ~~**P1**~~ ✅ | Hide / show rows and columns | Verified 2026-06-29: already implemented. `Row::hide` / `Col::hide` fields exist with `set_row_hidden`/`is_row_hidden`/`set_col_hidden`/`is_col_hidden` on DataProxy and renderer wrappers. Context menu has all four items; outline groups and AutoFilter use hide flags. |
 | | **P1** | Rich text / inline formatting within a single cell (bold word inside a sentence) | Cell-level `Style` is monolithic; per-run formatting isn't. Requires multi-run cell representation + multi-run canvas drawing. |
-| | **P1** | Auto-fit column width and row height (double-click on header border) | Manual resize is in; auto-fit from content is the obvious next click. |
+| | | ~~**P1**~~ ✅ | Auto-fit column width and row height (double-click on header border) | Fixed 2026-06-29: `auto_fit_col(ci)` / `auto_fit_row(ri)` on TableRenderer measure content via canvas and set width/height. Double-click on header boundary triggers auto-fit instead of cell edit. |
 | | **P2** | Images inside cells (logo in `A1`, photo in `B2`) | Standard spreadsheet feature. Requires an overlay layer (the empty `src/overlayer/` placeholder hints at this) and an image store on `DataProxy`. |
 | | **P2** | Shapes / drawing layer (rectangles, arrows, text boxes) | Same infrastructure as images; the empty `src/editor/` dir hints at a port of the x-spreadsheet editor. |
 | | **P2** | Diagonal borders (up and down) and double-line border style | Existing border editor likely covers the common 4 sides; verify diagonal / double in `core/cell.rs` and `renderer/border.rs`. |
@@ -48,7 +48,7 @@
 | # | Severity | Feature | Notes |
 |---|----------|---------|-------|
 | | **P1** | Drag-to-move and resize slicer panels | The `Slicer` struct already carries `x/y/width/height` (issue #61). The drag/resize handler is the missing half. |
-| | **P1** | Sort dialog (Data → Sort) with multi-level sort keys and "has header row" | The `sort_filter_range` engine primitive exists (`renderer/table_renderer.rs:2265`) and AutoFilter uses it; the dedicated *sort the entire sheet* UI is missing. |
+| | ~~**P1**~~ ✅ | Sort dialog (Data → Sort) with multi-level sort keys and "has header row" | Fixed 2026-06-29: `AutoFilter::sort` widened from `Option<Sort>` to `Vec<Sort>` with legacy format support. `sort_filter_range_multi` does stable sort by multiple keys. New sort dialog (`sort_dialog.rs`) with 3 sort levels and "has header row". Right-click → Sort… opens it. |
 | | **P1** | "Insert from URL" / image insert from clipboard | Standard UX in Sheets; not present. |
 | | **P1** | Cell-level protection with password (sheet protection dialog) | The `editable` flag exists per cell (issue #24), but the UI to set a password that gates *changing the flag* doesn't. |
 | | **P2** | Custom keyboard shortcuts / accelerator re-binding | None of the workbooks have it. |
@@ -72,7 +72,7 @@
 
 | # | Severity | Feature | Notes |
 |---|----------|---------|-------|
-| | **P1** | Page setup: orientation, paper size, margins, scale-to-fit, repeat header rows on each page | `src/zedsheet/print.rs` is 185 lines and renders a single page. Headers/footers, page breaks, and print-area selection are absent. |
+| | ~~**P1**~~ ✅ | Page setup: orientation, paper size, margins, scale-to-fit, repeat header rows on each page | Fixed 2026-06-29: `PageSetup` struct on `DataProxy` with orientation, paper_size, margins, scale, print_area, repeat_rows, repeat_cols — round-trips through `get_data`/`set_data`. `build_print_html` reads page setup and applies `@page` margins, orientation, scale transform, and honours print_area range. |
 | | **P2** | Page break preview / manual page break insertion | Excel parity. |
 | | **P2** | Print only the active sheet vs entire workbook | Currently single-sheet. |
 | | **P2** | PDF export (via the browser's print dialog → "Save as PDF") | Free via `window.print()`, but worth a one-click button. |
