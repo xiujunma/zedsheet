@@ -47,10 +47,11 @@
 
 | # | Severity | Feature | Notes |
 |---|----------|---------|-------|
-| | **P1** | Drag-to-move and resize slicer panels | The `Slicer` struct already carries `x/y/width/height` (issue #61). The drag/resize handler is the missing half. |
+| | ~~**P1**~~ ✅ | Drag-to-move and resize slicer panels | Shipped 2026-06-29 (commits 287ec34, db80a6f): pure geometry helpers in `util.rs` + 9 unit tests, then DOM wiring. `DragKind::SlicerDrag(id)` and `SlicerResize(id)` variants; shared `Rc<RefCell<Option<DragState>>>` created in `ZedSheet::new` and threaded to both `wire_events` and `wire_slicer_modal`. Mouseup commits the final `end_panel_*` geometry to `DataProxy.slicers[i]` and snapshots for undo. Min panel size 140×60 CSS px. Header strip has `cursor: move`; the new bottom-right grip glyph has `cursor: nwse-resize`. The chips area's `max-height` is `calc(100% - 30px)` so it tracks the panel during resize. |
+| | **P1** | "Insert from URL" / image insert from clipboard | Standard UX in Sheets; not present. |
 | | ~~**P1**~~ ✅ | Sort dialog (Data → Sort) with multi-level sort keys and "has header row" | Fixed 2026-06-29: `AutoFilter::sort` widened from `Option<Sort>` to `Vec<Sort>` with legacy format support. `sort_filter_range_multi` does stable sort by multiple keys. New sort dialog (`sort_dialog.rs`) with 3 sort levels and "has header row". Right-click → Sort… opens it. |
 | | **P1** | "Insert from URL" / image insert from clipboard | Standard UX in Sheets; not present. |
-| | **P1** | Cell-level protection with password (sheet protection dialog) | The `editable` flag exists per cell (issue #24), but the UI to set a password that gates *changing the flag* doesn't. |
+| | ~~**P1**~~ ✅ | Cell-level protection with password (sheet protection dialog) | Shipped 2026-06-29 (commits bd6cf90, 766fd4a). New `core::sheet_protection::SheetProtection { enabled, password_hash }` with djb2 + fixed salt ("zedsheet:protect:") → 8-char lowercase hex; 12 unit tests pin determinism, case-sensitivity, no-password-always-verifies, serde round-trip. `DataProxy::set_protection(enabled, password)` mirrors `enabled` onto the existing `read_only` flag. Right-click → "Protect Sheet…" opens a two-mode dialog: protected+hash requires the password to unlock; wrong password surfaces an inline `.zs-protect-error`. Apply snapshots for undo. Backward-compat: pre-1.3 workbooks without the `protection` key in `set_data` load with `enabled = false` and no hash. |
 | | **P2** | Custom keyboard shortcuts / accelerator re-binding | None of the workbooks have it. |
 | | **P2** | Paste preview (highlight where the paste will land before commit) | Drag-paste with ghost cell. |
 | | **P2** | Recent-files list (for the JS `load_data` API) | Browser-side; purely UX. |
@@ -82,7 +83,7 @@
 | # | Severity | Feature | Notes |
 |---|----------|---------|-------|
 | | **P1** | New chart types: scatter, bubble, radar, area, doughnut, surface, waterfall, treemap, sunburst | Issue #16 added the basic line/bar/pie set. The remainder is the long tail. |
-| | **P1** | Chart trendlines (linear, exponential, polynomial) | Standard chart option. |
+| | ~~**P1**~~ ✅ | Chart trendlines (linear, exponential, polynomial) | Shipped 2026-06-29 (commits 319fa75, 55123ee). New `core::trendline::Trendline` enum (None / Linear / Exponential / Polynomial) with serde lowercase + `#[serde(default)]`. Three pure least-squares regressions (linear: ordinary LS; exponential: log-linear, returns None for y<=0; polynomial: quadratic via normal equations) + `*_eval` evaluators. 15 unit tests. `Chart.trendline` field added (backward-compat: pre-1.2 workbooks load with None). New "Trendline" `<select>` in the chart modal. Renderer (`draw_axes_chart`) draws one fitted curve per series in a darkened variant of the series' palette colour, clamped to the visible y-range so the curve never escapes the plot box. Pie charts don't get trendlines. |
 | | **P1** | Secondary axis and combination charts (line + bar on dual axes) | Common in finance dashboards. |
 | | **P1** | Sparklines (inline mini-charts in a cell) | Sheets has them; Excel has them. Requires overlay/draw pass. |
 | | **P2** | Conditional-formatting data-bar / icon-set rendering on top of bars, not replacing them | The CF primitives exist (issue #29); verify the data-bar / icon-set glyphs render correctly. |
