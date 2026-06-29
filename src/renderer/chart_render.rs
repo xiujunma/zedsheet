@@ -3,7 +3,7 @@
 //! and re-read their data range every render (live updates). Pure geometry +
 //! the existing `Canvas` wrapper — no DOM.
 
-use crate::core::chart::{extract_chart_data, nice_ceil, ChartData};
+use crate::core::chart::{extract_chart_data, extract_secondary_chart_data, nice_ceil, ChartData};
 use crate::core::trendline::{
     exponential_eval, exponential_regression, linear_eval, linear_regression, quadratic_eval,
     quadratic_regression, Trendline,
@@ -55,20 +55,54 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
         let (pw, ph) = ((w - 52.0).max(20.0), (h - 54.0).max(20.0));
 
         match extract_chart_data(&renderer.data, &chart.range) {
-            Some(data) if !data.labels.is_empty() => match chart.kind.as_str() {
-                "line" => draw_axes_chart(canvas, px, py, pw, ph, &data, "line", chart.trendline),
-                "scatter" => {
-                    draw_axes_chart(canvas, px, py, pw, ph, &data, "scatter", chart.trendline)
+            Some(data) if !data.labels.is_empty() => {
+                // Secondary axis (Phase 2.2b): when `secondary_range`
+                // is set AND its extracted data is non-empty, draw a
+                // dual-axis combo chart. The primary range's series
+                // render as bars at the left-axis scale; the
+                // secondary range's series render as a line overlay
+                // at the right-axis scale.
+                let combo = chart
+                    .secondary_range
+                    .as_deref()
+                    .and_then(|sr| extract_secondary_chart_data(&renderer.data, sr, &data.labels));
+                if let Some(secondary) = combo {
+                    draw_combo_chart(canvas, px, py, pw, ph, &data, &secondary, chart.trendline);
+                } else {
+                    match chart.kind.as_str() {
+                        "line" => {
+                            draw_axes_chart(canvas, px, py, pw, ph, &data, "line", chart.trendline)
+                        }
+                        "scatter" => draw_axes_chart(
+                            canvas,
+                            px,
+                            py,
+                            pw,
+                            ph,
+                            &data,
+                            "scatter",
+                            chart.trendline,
+                        ),
+                        "bubble" => draw_axes_chart(
+                            canvas,
+                            px,
+                            py,
+                            pw,
+                            ph,
+                            &data,
+                            "bubble",
+                            chart.trendline,
+                        ),
+                        "area" => {
+                            draw_axes_chart(canvas, px, py, pw, ph, &data, "area", chart.trendline)
+                        }
+                        "radar" => draw_radar(canvas, px, py, pw, ph, &data, chart.trendline),
+                        "doughnut" => draw_doughnut(canvas, px, py, pw, ph, &data),
+                        "pie" => draw_pie(canvas, px, py, pw, ph, &data),
+                        _ => draw_axes_chart(canvas, px, py, pw, ph, &data, "bar", chart.trendline),
+                    }
                 }
-                "bubble" => {
-                    draw_axes_chart(canvas, px, py, pw, ph, &data, "bubble", chart.trendline)
-                }
-                "area" => draw_axes_chart(canvas, px, py, pw, ph, &data, "area", chart.trendline),
-                "radar" => draw_radar(canvas, px, py, pw, ph, &data, chart.trendline),
-                "doughnut" => draw_doughnut(canvas, px, py, pw, ph, &data),
-                "pie" => draw_pie(canvas, px, py, pw, ph, &data),
-                _ => draw_axes_chart(canvas, px, py, pw, ph, &data, "bar", chart.trendline),
-            },
+            }
             _ => {
                 canvas.set_font("11px Arial");
                 canvas.set_fill_style("#999999");
@@ -383,6 +417,123 @@ fn with_alpha(hex: &str, alpha: f64) -> String {
             format!("rgba({},{},{},{})", r, g, b, alpha.clamp(0.0, 1.0))
         }
         _ => format!("rgba(128,128,128,{})", alpha.clamp(0.0, 1.0)),
+    }
+}
+
+/// Dual-axis combination chart (Phase 2.2). The primary range's
+/// series render as bars at the left-axis scale; the secondary
+/// range's series render as a line overlay at the right-axis
+/// scale. The two Y axes share the same X (the primary labels).
+///
+/// Layout adjustment: the plot box is shrunk a bit to leave room
+/// for the right-side tick labels (≈ 22 extra px). The trendline
+/// overlay is skipped to keep the dual-axis version simple — the
+/// secondary line is the second axis already, and overlaying a
+/// fitted curve on top of an axis that already has its own series
+/// is busy enough without trend lines.
+fn draw_combo_chart(
+    canvas: &Canvas,
+    px: f64,
+    py: f64,
+    pw: f64,
+    ph: f64,
+    primary: &ChartData,
+    secondary: &ChartData,
+    _trendline: Trendline,
+) {
+    // Left Y axis (primary).
+    let primary_max = primary
+        .series
+        .iter()
+        .flat_map(|(_, v)| v.iter())
+        .fold(0.0_f64, |a, b| a.max(*b))
+        .max(1e-9);
+    let ymax_l = nice_ceil(primary_max);
+    let ymin_l = 0.0_f64;
+    let span_l = (ymax_l - ymin_l).max(1e-9);
+    // Right Y axis (secondary).
+    let secondary_max = secondary
+        .series
+        .iter()
+        .flat_map(|(_, v)| v.iter())
+        .fold(0.0_f64, |a, b| a.max(*b))
+        .max(1e-9);
+    let ymax_r = nice_ceil(secondary_max);
+    let ymin_r = 0.0_f64;
+    let span_r = (ymax_r - ymin_r).max(1e-9);
+
+    // Plot box: shrink on the right by 22 px for the right Y axis.
+    let pxw = (pw - 22.0).max(40.0);
+
+    // Gridlines + left Y labels.
+    canvas.set_font("10px Arial");
+    canvas.set_text_align("right");
+    let ticks = 4;
+    for i in 0..=ticks {
+        let v = ymin_l + span_l * i as f64 / ticks as f64;
+        let gy = py + ph - (v - ymin_l) / span_l * ph;
+        canvas.set_stroke_style("#e4e7ea");
+        canvas.line(px, gy, px + pxw, gy);
+        canvas.set_fill_style("#777777");
+        canvas.fill_text(&format_tick(v), px - 5.0, gy + 3.0, None);
+    }
+    // Right Y labels.
+    canvas.set_text_align("left");
+    for i in 0..=ticks {
+        let v = ymin_r + span_r * i as f64 / ticks as f64;
+        let gy = py + ph - (v - ymin_r) / span_r * ph;
+        canvas.set_fill_style("#777777");
+        canvas.fill_text(&format_tick(v), px + pxw + 5.0, gy + 3.0, None);
+    }
+
+    let n = primary.labels.len();
+    let group_w = pxw / n as f64;
+
+    // X labels (shared).
+    canvas.set_text_align("center");
+    for (i, label) in primary.labels.iter().enumerate() {
+        let cx = px + group_w * (i as f64 + 0.5);
+        canvas.set_fill_style("#777777");
+        canvas.fill_text(label, cx, py + ph + 14.0, Some(group_w - 2.0));
+    }
+
+    // Primary bars.
+    let slot = group_w * 0.8 / primary.series.len() as f64;
+    for (si, (_, values)) in primary.series.iter().enumerate() {
+        canvas.set_fill_style(PALETTE[si % PALETTE.len()]);
+        for (i, v) in values.iter().enumerate() {
+            let bx = px + group_w * i as f64 + group_w * 0.1 + slot * si as f64;
+            let top = py + ph - (v - ymin_l) / span_l * ph;
+            let bottom = py + ph;
+            canvas.fill_rect(bx, top, (slot - 2.0).max(1.0), (bottom - top).max(1.0));
+        }
+    }
+
+    // Secondary line overlay, scaled to the right Y axis.
+    for (si, (_, values)) in secondary.series.iter().enumerate() {
+        // Continue the palette from where primary left off so the
+        // first secondary line is a distinct colour from the first
+        // primary bar.
+        let color = PALETTE[(si + primary.series.len()) % PALETTE.len()];
+        canvas.set_stroke_style(color);
+        canvas.set_line_width(2.0);
+        canvas.begin_path();
+        for (i, v) in values.iter().enumerate() {
+            let cx = px + group_w * (i as f64 + 0.5);
+            let cy = py + ph - (v - ymin_r) / span_r * ph;
+            if i == 0 {
+                canvas.move_to(cx, cy);
+            } else {
+                canvas.line_to(cx, cy);
+            }
+        }
+        canvas.stroke();
+        canvas.set_fill_style(color);
+        for (i, v) in values.iter().enumerate() {
+            let cx = px + group_w * (i as f64 + 0.5);
+            let cy = py + ph - (v - ymin_r) / span_r * ph;
+            canvas.fill_rect(cx - 2.0, cy - 2.0, 4.0, 4.0);
+        }
     }
 }
 
