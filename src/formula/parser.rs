@@ -24,6 +24,12 @@ pub enum Token {
     RightParen,
     Comma,
     Colon,
+    /// Opening brace of an inline array literal (Phase 3.1).
+    LeftBrace,
+    /// Closing brace of an inline array literal (Phase 3.1).
+    RightBrace,
+    /// Row separator inside an inline array literal `{1,2;3,4}`.
+    Semicolon,
     String(String),
     /// A literal error value like `#DIV/0!` or `#N/A`.
     Error(String),
@@ -564,6 +570,18 @@ pub fn tokenize(formula: &str) -> Vec<Token> {
             }
             ',' => {
                 tokens.push(Token::Comma);
+                i += 1;
+            }
+            '{' => {
+                tokens.push(Token::LeftBrace);
+                i += 1;
+            }
+            '}' => {
+                tokens.push(Token::RightBrace);
+                i += 1;
+            }
+            ';' => {
+                tokens.push(Token::Semicolon);
                 i += 1;
             }
             // Comparison operators, consuming a trailing '=' for >=/<=/==
