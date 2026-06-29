@@ -230,6 +230,13 @@ pub struct DataProxy {
     /// no slicing. Round-trips through `get_data` / `set_data` so
     /// pre-#61 workbooks (which lack this key) load with an empty vec.
     pub slicers: Vec<crate::core::pivot::Slicer>,
+    /// Inline mini-charts (Phase 4.1). Each sparkline is anchored
+    /// to a single cell and renders a tiny chart inside it. Read
+    /// by the renderer after the body so they overlay on top of
+    /// the cell's text. Empty list = no sparklines. Backward-compat:
+    /// pre-4.1 workbooks don't include the key in `set_data`, so
+    /// the field stays at its default (empty).
+    pub sparklines: Vec<crate::core::sparkline::Sparkline>,
     /// Sheet protection metadata (Phase 1.3). The `enabled` flag mirrors
     /// `read_only` for the data-layer block — when protection is enabled
     /// the UI also sets `read_only = true`. `password_hash` is the
@@ -318,6 +325,7 @@ impl Default for DataProxy {
             let_bindings: Rc::new(RefCell::new(Vec::new())),
             pivots: Vec::new(),
             slicers: Vec::new(),
+            sparklines: Vec::new(),
             protection: crate::core::sheet_protection::SheetProtection::default(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
@@ -3224,6 +3232,8 @@ impl DataProxy {
             // `get_data` / `set_data`; pre-#61 workbooks omit the key
             // and load with an empty list.
             "slicers": serde_json::to_value(&self.slicers).unwrap_or_default(),
+            // Inline sparklines (Phase 4.1); absent in pre-4.1 workbooks.
+            "sparklines": serde_json::to_value(&self.sparklines).unwrap_or_default(),
             // Sheet protection metadata (Phase 1.3).
             "protection": serde_json::to_value(&self.protection).unwrap_or_default(),
             // Excel-style tables (issue #34).
@@ -3352,6 +3362,14 @@ impl DataProxy {
             // data-layer block stays consistent.
             self.protection = pr;
             self.set_read_only(self.protection.enabled);
+        }
+        if let Some(sp) = data
+            .get("sparklines")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            // Sparklines (Phase 4.1). Absent in pre-4.1 workbooks;
+            // `sparklines` stays at its default (empty).
+            self.sparklines = sp;
         }
         if let Some(ts) = data
             .get("tables")

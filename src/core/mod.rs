@@ -17,6 +17,7 @@ pub mod outline;
 pub mod pivot;
 pub mod row;
 pub mod sheet_protection;
+pub mod sparkline;
 pub mod state;
 pub mod table;
 pub mod trendline;
