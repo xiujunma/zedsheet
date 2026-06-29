@@ -65,6 +65,7 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
                 }
                 "area" => draw_axes_chart(canvas, px, py, pw, ph, &data, "area", chart.trendline),
                 "radar" => draw_radar(canvas, px, py, pw, ph, &data, chart.trendline),
+                "doughnut" => draw_doughnut(canvas, px, py, pw, ph, &data),
                 "pie" => draw_pie(canvas, px, py, pw, ph, &data),
                 _ => draw_axes_chart(canvas, px, py, pw, ph, &data, "bar", chart.trendline),
             },
@@ -563,6 +564,31 @@ fn draw_radar(
 
 /// Pie of the first series, with a label + percentage legend on the right.
 fn draw_pie(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &ChartData) {
+    draw_pie_or_doughnut(canvas, px, py, pw, ph, data, None);
+}
+
+/// Doughnut chart (Phase 2.1c) — pie with a hole. Same legend
+/// layout as pie, but each slice is a ring wedge (outer arc
+/// clockwise + inner arc counter-clockwise).
+fn draw_doughnut(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &ChartData) {
+    // Inner radius is 45% of the outer radius — matches the
+    // default Excel doughnut proportions.
+    draw_pie_or_doughnut(canvas, px, py, pw, ph, data, Some(0.45));
+}
+
+/// Shared pie / doughnut body. `inner_radius_ratio == None` is a
+/// filled pie; `Some(r)` with `0 <= r < 1` cuts a hole of radius
+/// `r * outer_radius` (doughnut). The legend on the right is
+/// identical for both.
+fn draw_pie_or_doughnut(
+    canvas: &Canvas,
+    px: f64,
+    py: f64,
+    pw: f64,
+    ph: f64,
+    data: &ChartData,
+    inner_radius_ratio: Option<f64>,
+) {
     let Some((_, values)) = data.series.first() else {
         return;
     };
@@ -572,6 +598,7 @@ fn draw_pie(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &ChartDat
     }
     let legend_w = (pw * 0.38).min(120.0);
     let r = ((pw - legend_w).min(ph) / 2.0 - 4.0).max(8.0);
+    let ir = inner_radius_ratio.map(|ratio| (r * ratio).max(1.0));
     let (cx, cy) = (px + (pw - legend_w) / 2.0, py + ph / 2.0);
 
     let mut angle = -std::f64::consts::FRAC_PI_2;
@@ -579,9 +606,25 @@ fn draw_pie(canvas: &Canvas, px: f64, py: f64, pw: f64, ph: f64, data: &ChartDat
         let sweep = v.abs() / total * std::f64::consts::TAU;
         canvas.set_fill_style(PALETTE[i % PALETTE.len()]);
         canvas.begin_path();
-        canvas.move_to(cx, cy);
-        canvas.arc(cx, cy, r, angle, angle + sweep, None);
-        canvas.close_path();
+        if let Some(ir) = ir {
+            // Ring wedge: outer arc clockwise, then line in to the
+            // inner radius at the end angle, then inner arc
+            // counter-clockwise back to the start angle, then close.
+            let start_x = cx + r * angle.cos();
+            let start_y = cy + r * angle.sin();
+            canvas.move_to(start_x, start_y);
+            canvas.arc(cx, cy, r, angle, angle + sweep, None);
+            let end_x = cx + ir * (angle + sweep).cos();
+            let end_y = cy + ir * (angle + sweep).sin();
+            canvas.line_to(end_x, end_y);
+            canvas.arc(cx, cy, ir, angle + sweep, angle, Some(true));
+            canvas.close_path();
+        } else {
+            // Solid pie slice.
+            canvas.move_to(cx, cy);
+            canvas.arc(cx, cy, r, angle, angle + sweep, None);
+            canvas.close_path();
+        }
         canvas.fill(None);
         angle += sweep;
     }

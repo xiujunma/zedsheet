@@ -38,6 +38,7 @@ pub(crate) fn chart_modal_html() -> String {
                         <option value="scatter">Scatter</option>
                         <option value="bubble">Bubble</option>
                         <option value="radar">Radar</option>
+                        <option value="doughnut">Doughnut</option>
                         <option value="pie">Pie</option>
                     </select>
                 </div>
