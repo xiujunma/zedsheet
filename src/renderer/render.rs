@@ -105,13 +105,22 @@ pub fn render_selector(
                 sel_width += area.col_map.get(&col).map_or(0f64, |(_, w)| *w);
             }
 
-            // Draw selection border
+            // Draw selection border + a light-blue fill so the box
+            // is visually distinguishable from the underlying cells
+            // (Excel-style "is this selected?" affordance). The fill
+            // uses a 30 % alpha so cell text / conditional-format
+            // backgrounds still show through.
             canvas.save();
+            canvas.set_fill_style("rgba(173, 216, 230, 0.30)");
             canvas.set_stroke_style("#0078d7");
             canvas.set_line_width(1.5);
 
             canvas.begin_path();
             canvas.rect(sel_x + 0.5, sel_y + 0.5, sel_width - 1.0, sel_height - 1.0);
+            // Winding rule \`Nonzero\` (the default) matches the
+            // browser default; \`EvenOdd\` would hole-out the
+            // rectangle since it's a single closed path.
+            canvas.fill(None);
             canvas.stroke();
 
             // Fill handle: a small square at the selection's bottom-right corner.
