@@ -206,3 +206,170 @@ pub(crate) fn hide_tooltip(tooltip: &web_sys::Element) {
         .style()
         .set_property("display", "none");
 }
+
+// ---------------------------------------------------------------------
+// Slicer panel drag/resize geometry (Phase 1.1)
+//
+// The mousemove handler reads these on every tick; they're pure so
+// they're unit-testable without a browser.
+// ---------------------------------------------------------------------
+
+/// Minimum panel dimensions in CSS pixels. Below these the chips
+/// start clipping or the close button overlaps the title.
+pub(crate) const MIN_SLICER_PANEL_W: f64 = 140.0;
+pub(crate) const MIN_SLICER_PANEL_H: f64 = 60.0;
+
+/// New panel position from a drag-start snapshot and the current pointer
+/// position. No clamping — the user can park a panel anywhere (Excel
+/// behaviour, including negative coordinates that scroll out of view).
+pub(crate) fn slicer_drag_position(
+    start_panel_x: f64,
+    start_panel_y: f64,
+    start_pointer_x: f64,
+    start_pointer_y: f64,
+    cur_x: f64,
+    cur_y: f64,
+) -> (f64, f64) {
+    (
+        start_panel_x + (cur_x - start_pointer_x),
+        start_panel_y + (cur_y - start_pointer_y),
+    )
+}
+
+/// New panel size from a drag-start snapshot and the current pointer
+/// position, clamped to the per-axis minimums. No maximum — overflow
+/// past the viewport is allowed.
+pub(crate) fn slicer_resize_size(
+    start_panel_w: f64,
+    start_panel_h: f64,
+    start_pointer_x: f64,
+    start_pointer_y: f64,
+    cur_x: f64,
+    cur_y: f64,
+    min_w: f64,
+    min_h: f64,
+) -> (f64, f64) {
+    let w = (start_panel_w + (cur_x - start_pointer_x)).max(min_w);
+    let h = (start_panel_h + (cur_y - start_pointer_y)).max(min_h);
+    (w, h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drag_translates_panel_by_pointer_delta() {
+        // Panel starts at (100, 80); pointer starts at (50, 40).
+        // Pointer moves to (60, 55) → panel moves by (+10, +15).
+        let (x, y) = slicer_drag_position(100.0, 80.0, 50.0, 40.0, 60.0, 55.0);
+        assert_eq!(x, 110.0);
+        assert_eq!(y, 95.0);
+    }
+
+    #[test]
+    fn drag_with_no_movement_returns_start() {
+        let (x, y) = slicer_drag_position(100.0, 80.0, 50.0, 40.0, 50.0, 40.0);
+        assert_eq!((x, y), (100.0, 80.0));
+    }
+
+    #[test]
+    fn drag_allows_negative_panel_position() {
+        // Dragging the panel far off the top-left shouldn't snap —
+        // Excel lets you park it wherever the cursor goes.
+        let (x, y) = slicer_drag_position(0.0, 0.0, 500.0, 500.0, -100.0, -200.0);
+        assert_eq!(x, -600.0);
+        assert_eq!(y, -700.0);
+    }
+
+    #[test]
+    fn resize_grows_panel_with_pointer_delta() {
+        // 200x180 panel, grip drag from (220, 200) to (250, 240)
+        // → +30, +40 → 230x220.
+        let (w, h) = slicer_resize_size(
+            200.0,
+            180.0,
+            220.0,
+            200.0,
+            250.0,
+            240.0,
+            MIN_SLICER_PANEL_W,
+            MIN_SLICER_PANEL_H,
+        );
+        assert_eq!(w, 230.0);
+        assert_eq!(h, 220.0);
+    }
+
+    #[test]
+    fn resize_shrinks_panel_with_negative_delta() {
+        let (w, h) = slicer_resize_size(
+            200.0,
+            180.0,
+            220.0,
+            200.0,
+            180.0,
+            160.0,
+            MIN_SLICER_PANEL_W,
+            MIN_SLICER_PANEL_H,
+        );
+        assert_eq!(w, 160.0);
+        assert_eq!(h, 140.0);
+    }
+
+    #[test]
+    fn resize_clamps_width_below_minimum() {
+        let (w, h) = slicer_resize_size(
+            200.0,
+            180.0,
+            300.0,
+            300.0,
+            100.0,
+            250.0,
+            MIN_SLICER_PANEL_W,
+            MIN_SLICER_PANEL_H,
+        );
+        assert_eq!(w, MIN_SLICER_PANEL_W);
+        // Height wasn't being resized (delta_y < 0 but still above min).
+        assert_eq!(h, 180.0 + (250.0 - 300.0));
+    }
+
+    #[test]
+    fn resize_clamps_height_below_minimum() {
+        let (w, h) = slicer_resize_size(
+            200.0,
+            180.0,
+            300.0,
+            300.0,
+            350.0,
+            100.0,
+            MIN_SLICER_PANEL_W,
+            MIN_SLICER_PANEL_H,
+        );
+        assert_eq!(w, 200.0 + (350.0 - 300.0));
+        assert_eq!(h, MIN_SLICER_PANEL_H);
+    }
+
+    #[test]
+    fn resize_clamps_both_below_minimum() {
+        let (w, h) = slicer_resize_size(
+            200.0,
+            180.0,
+            300.0,
+            300.0,
+            0.0,
+            0.0,
+            MIN_SLICER_PANEL_W,
+            MIN_SLICER_PANEL_H,
+        );
+        assert_eq!(w, MIN_SLICER_PANEL_W);
+        assert_eq!(h, MIN_SLICER_PANEL_H);
+    }
+
+    #[test]
+    fn min_constants_are_sensible() {
+        // Pin the published constants so a future tweak forces an
+        // explicit test update — these are user-visible.
+        assert_eq!(MIN_SLICER_PANEL_W, 140.0);
+        assert_eq!(MIN_SLICER_PANEL_H, 60.0);
+    }
+}
