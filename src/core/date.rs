@@ -165,7 +165,7 @@ fn parse_ymd(s: &str) -> Option<(i64, u32, u32)> {
     };
     let m = u32::try_from(m).ok()?;
     let d = u32::try_from(d).ok()?;
-    if m >= 1 && m <= 12 && d >= 1 && d <= days_in_month(y, m) {
+    if (1..=12).contains(&m) && d >= 1 && d <= days_in_month(y, m) {
         Some((y, m, d))
     } else {
         None

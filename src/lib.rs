@@ -269,10 +269,12 @@ fn demo_data() -> DataProxy {
     let mut data = DataProxy::new("sheet1");
 
     // Bold, centered, shaded header row.
-    let mut header = Style::default();
-    header.bold = true;
-    header.align = "center".to_string();
-    header.bgcolor = Some("#e8eef7".to_string());
+    let header = Style {
+        bold: true,
+        align: "center".to_string(),
+        bgcolor: Some("#e8eef7".to_string()),
+        ..Default::default()
+    };
     let header_idx = data.add_style(header);
 
     data.set_cell_text(0, 0, "Name");
@@ -288,19 +290,23 @@ fn demo_data() -> DataProxy {
     // A formula cell with a highlight style.
     data.set_cell_text(3, 0, "Total");
     data.set_cell_text(3, 1, "=SUM(B2:B3)");
-    let mut hl = Style::default();
-    hl.bgcolor = Some("#fff3cd".to_string());
-    hl.color = "#9a6700".to_string();
-    hl.bold = true;
+    let hl = Style {
+        bgcolor: Some("#fff3cd".to_string()),
+        color: "#9a6700".to_string(),
+        bold: true,
+        ..Default::default()
+    };
     let hl_idx = data.add_style(hl);
     data.set_cell_style(3, 1, hl_idx);
 
     // A currency-formatted column.
     data.set_cell_text(0, 2, "Price");
     data.set_cell_style(0, 2, header_idx);
-    let mut usd = Style::default();
-    usd.format = "usd".to_string();
-    usd.align = "right".to_string();
+    let usd = Style {
+        format: "usd".to_string(),
+        align: "right".to_string(),
+        ..Default::default()
+    };
     let usd_idx = data.add_style(usd);
     data.set_cell_text(1, 2, "1234.5");
     data.set_cell_style(1, 2, usd_idx);
@@ -308,9 +314,11 @@ fn demo_data() -> DataProxy {
     data.set_cell_style(2, 2, usd_idx);
 
     // A wrapped long-text cell (row given extra height to show the wrap).
-    let mut wrap = Style::default();
-    wrap.text_wrap = true;
-    wrap.valign = "top".to_string();
+    let wrap = Style {
+        text_wrap: true,
+        valign: "top".to_string(),
+        ..Default::default()
+    };
     let wrap_idx = data.add_style(wrap);
     data.set_cell_text(
         5,
@@ -322,10 +330,12 @@ fn demo_data() -> DataProxy {
 
     // A merged cell spanning D1:E2.
     data.set_cell_text(0, 3, "Merged region");
-    let mut mstyle = Style::default();
-    mstyle.align = "center".to_string();
-    mstyle.valign = "middle".to_string();
-    mstyle.bgcolor = Some("#d1e7dd".to_string());
+    let mstyle = Style {
+        align: "center".to_string(),
+        valign: "middle".to_string(),
+        bgcolor: Some("#d1e7dd".to_string()),
+        ..Default::default()
+    };
     let m_idx = data.add_style(mstyle);
     data.set_cell_style(0, 3, m_idx);
     data.merges.add(CellRange::new(0, 3, 1, 4));

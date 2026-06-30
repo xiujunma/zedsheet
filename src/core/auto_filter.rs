@@ -57,23 +57,13 @@ impl Sort {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AutoFilter {
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     pub ref_: Option<String>,
     pub filters: Vec<Filter>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sort: Vec<Sort>,
-}
-
-impl Default for AutoFilter {
-    fn default() -> Self {
-        AutoFilter {
-            ref_: None,
-            filters: Vec::new(),
-            sort: Vec::new(),
-        }
-    }
 }
 
 impl AutoFilter {

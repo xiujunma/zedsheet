@@ -221,15 +221,15 @@ pub fn render_border(
 ) {
     if border_type == Outside || border_type == All {
         let border_line = BorderLine {
-            left: Some((line_style.clone(), color.to_string())),
-            top: Some((line_style.clone(), color.to_string())),
-            right: Some((line_style.clone(), color.to_string())),
-            bottom: Some((line_style.clone(), color.to_string())),
+            left: Some((line_style, color.to_string())),
+            top: Some((line_style, color.to_string())),
+            right: Some((line_style, color.to_string())),
+            bottom: Some((line_style, color.to_string())),
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     } else if border_type == Left {
         let border_line = BorderLine {
-            left: Some((line_style.clone(), color.to_string())),
+            left: Some((line_style, color.to_string())),
             top: None,
             right: None,
             bottom: None,
@@ -238,7 +238,7 @@ pub fn render_border(
     } else if border_type == Top {
         let border_line = BorderLine {
             left: None,
-            top: Some((line_style.clone(), color.to_string())),
+            top: Some((line_style, color.to_string())),
             right: None,
             bottom: None,
         };
@@ -247,7 +247,7 @@ pub fn render_border(
         let border_line = BorderLine {
             left: None,
             top: None,
-            right: Some((line_style.clone(), color.to_string())),
+            right: Some((line_style, color.to_string())),
             bottom: None,
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
@@ -256,7 +256,7 @@ pub fn render_border(
             left: None,
             top: None,
             right: None,
-            bottom: Some((line_style.clone(), color.to_string())),
+            bottom: Some((line_style, color.to_string())),
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     }
@@ -270,7 +270,7 @@ pub fn render_border(
             range.each_col(
                 move |index| {
                     if index < range.end_col {
-                        let mut r1 = range.clone();
+                        let mut r1 = *range;
                         r1.end_col = index;
                         r1.start_col = index;
                         if r1.intersects(&area.range) {
@@ -297,7 +297,7 @@ pub fn render_border(
             range.each_row(
                 |index| {
                     if index < range.end_row {
-                        let mut r1 = range.clone();
+                        let mut r1 = *range;
                         r1.end_row = index;
                         r1.start_row = index;
                         if r1.intersects(&area.range) {
@@ -309,7 +309,7 @@ pub fn render_border(
                                     left: None,
                                     top: None,
                                     right: None,
-                                    bottom: Some((line_style.clone(), color.to_string())),
+                                    bottom: Some((line_style, color.to_string())),
                                 },
                                 auto_align,
                             )
@@ -341,7 +341,7 @@ pub fn render_borders(
                         &range,
                         &rect,
                         border_type,
-                        border_style.clone(),
+                        border_style,
                         &border_color,
                         None,
                     );
@@ -1203,10 +1203,10 @@ pub fn render_area(placement: Placement, canvas: &Canvas, area: &Area, renderer:
 
     let mut area_merges: Vec<Range> = vec![];
     let _area_merge_render_params: Vec<(Cell, Rect, Style)> = vec![];
-    if renderer.merges.len() > 0 {
+    if !renderer.merges.is_empty() {
         each_range(renderer.merges.clone(), |range| {
             if range.intersects(&area.range) {
-                area_merges.push(range.clone());
+                area_merges.push(range);
                 range.each(|r, c| {
                     if r > range.start_row || c > range.start_col {
                         area_merges.push(Range::new(r, c, r, c));
@@ -1238,7 +1238,7 @@ pub fn render(renderer: &TableRenderer) {
         canvas.set_fill_style(renderer.bgcolor.as_str());
         canvas.fill_rect(0f64, 0f64, width, height);
 
-        let area1 = viewport.areas.get(0).unwrap();
+        let area1 = viewport.areas.first().unwrap();
         let area2 = viewport.areas.get(1).unwrap();
         let area3 = viewport.areas.get(2).unwrap();
         let area4 = viewport.areas.get(3).unwrap();

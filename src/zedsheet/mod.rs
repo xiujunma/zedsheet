@@ -51,7 +51,6 @@ pub(crate) use events::*;
 pub(crate) use filter_menu::*;
 pub(crate) use find_replace::*;
 pub(crate) use formula_bar::*;
-pub(crate) use image_loader::*;
 pub(crate) use image_modal::*;
 pub(crate) use pivot_modal::*;
 pub(crate) use print::*;
@@ -617,7 +616,7 @@ impl ZedSheet {
                 let _ = renderer_for_pop
                     .borrow_mut()
                     .set_cell_text_at(ri, ci, &value);
-                let _ = renderer_for_pop.borrow_mut().render();
+                renderer_for_pop.borrow_mut().render();
                 let _ = pop_for_hide
                     .unchecked_ref::<web_sys::HtmlElement>()
                     .style()

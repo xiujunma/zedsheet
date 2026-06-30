@@ -1,6 +1,6 @@
 use crate::component::element::{h, Element};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SelectorState {
     pub ri: usize,      // row index
     pub ci: usize,      // col index
@@ -10,21 +10,6 @@ pub struct SelectorState {
     pub move_ci: usize, // move start col
     pub mouse_down: bool,
     pub dragging: bool,
-}
-
-impl Default for SelectorState {
-    fn default() -> Self {
-        SelectorState {
-            ri: 0,
-            ci: 0,
-            eri: 0,
-            eci: 0,
-            move_ri: 0,
-            move_ci: 0,
-            mouse_down: false,
-            dragging: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +73,7 @@ impl Selector {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EditorState {
     pub active: bool,
     pub editing: bool,
@@ -96,19 +81,6 @@ pub struct EditorState {
     pub ri: usize,
     pub ci: usize,
     pub formula: bool,
-}
-
-impl Default for EditorState {
-    fn default() -> Self {
-        EditorState {
-            active: false,
-            editing: false,
-            text: String::new(),
-            ri: 0,
-            ci: 0,
-            formula: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

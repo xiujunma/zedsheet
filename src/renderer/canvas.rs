@@ -112,7 +112,7 @@ impl Canvas {
         self.target.set_height((height * dpr).floor() as u32);
         self.ctx.scale(dpr * self.scale, dpr * self.scale).unwrap();
 
-        return self;
+        self
     }
 
     pub fn measure_text_width(&self, text: &str) -> f64 {
@@ -130,68 +130,68 @@ impl Canvas {
         // earlier subpaths (e.g. a cell's black borders) gray. Each line() is a
         // self-contained segment, so it must start its own path.
         self.begin_path().move_to(x1, y1).line_to(x2, y2).stroke();
-        return self;
+        self
     }
 
     pub fn clear_rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
         self.ctx.clear_rect(x, y, width, height);
-        return self;
+        self
     }
 
     pub fn fill_rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
         self.ctx.fill_rect(x, y, width, height);
-        return self;
+        self
     }
 
     pub fn stroke_rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
         self.ctx.stroke_rect(x, y, width, height);
-        return self;
+        self
     }
 
     pub fn fill_text(&self, text: &str, x: f64, y: f64, max_width: Option<f64>) -> &Self {
-        if max_width.is_some() {
+        if let Some(max_width) = max_width {
             self.ctx
-                .fill_text_with_max_width(text, x, y, max_width.unwrap())
+                .fill_text_with_max_width(text, x, y, max_width)
                 .unwrap();
         } else {
             self.ctx.fill_text(text, x, y).unwrap();
         }
-        return self;
+        self
     }
 
     pub fn stroke_text(&self, text: &str, x: f64, y: f64, max_width: Option<f64>) -> &Self {
-        if max_width.is_some() {
+        if let Some(max_width) = max_width {
             self.ctx
-                .stroke_text_with_max_width(text, x, y, max_width.unwrap())
+                .stroke_text_with_max_width(text, x, y, max_width)
                 .unwrap();
         } else {
             self.ctx.stroke_text(text, x, y).unwrap();
         }
-        return self;
+        self
     }
 
     pub fn get_line_dash(&self) -> Vec<f64> {
         let segments = self.ctx.get_line_dash();
-        return segments
+        segments
             .to_vec()
             .iter()
             .map(|x| x.as_f64().unwrap())
-            .collect();
+            .collect()
     }
 
-    pub fn set_line_dash(&self, segments: &Vec<f64>) -> &Self {
+    pub fn set_line_dash(&self, segments: &[f64]) -> &Self {
         // FIXME
         let segments_js_value = Float64Array::new_with_length(segments.len() as u32);
         for (i, segment) in segments.iter().enumerate() {
             segments_js_value.set_index(i as u32, *segment);
         }
         self.ctx.set_line_dash(&segments_js_value).unwrap();
-        return self;
+        self
     }
 
     pub fn create_linear_gradient(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> &Self {
         self.ctx.create_linear_gradient(x0, y0, x1, y1);
-        return self;
+        self
     }
 
     pub fn create_radial_gradient(
@@ -206,14 +206,14 @@ impl Canvas {
         self.ctx
             .create_radial_gradient(x0, y0, r0, x1, y1, r1)
             .unwrap();
-        return self;
+        self
     }
 
     pub fn create_pattern(&self, image: &ImageBitmap, repetition: &str) -> &Self {
         self.ctx
             .create_pattern_with_image_bitmap(image, repetition)
             .unwrap();
-        return self;
+        self
     }
 
     pub fn bezier_curve_to(
@@ -226,12 +226,12 @@ impl Canvas {
         y: f64,
     ) -> &Self {
         self.ctx.bezier_curve_to(cp1x, cp1y, cp2x, cp2y, x, y);
-        return self;
+        self
     }
 
     pub fn quadratic_curve_to(&self, cpx: f64, cpy: f64, x: f64, y: f64) -> &Self {
         self.ctx.quadratic_curve_to(cpx, cpy, x, y);
-        return self;
+        self
     }
 
     pub fn arc(
@@ -243,46 +243,39 @@ impl Canvas {
         end_angle: f64,
         counterclockwise: Option<bool>,
     ) -> &Self {
-        if counterclockwise.is_some() {
+        if let Some(counterclockwise) = counterclockwise {
             self.ctx
-                .arc_with_anticlockwise(
-                    x,
-                    y,
-                    radius,
-                    start_angle,
-                    end_angle,
-                    counterclockwise.unwrap(),
-                )
+                .arc_with_anticlockwise(x, y, radius, start_angle, end_angle, counterclockwise)
                 .unwrap();
         } else {
             self.ctx.arc(x, y, radius, start_angle, end_angle).unwrap();
         }
-        return self;
+        self
     }
 
     pub fn arc_to(&self, x1: f64, y1: f64, x2: f64, y2: f64, radius: f64) -> &Self {
         self.ctx.arc_to(x1, y1, x2, y2, radius).unwrap();
-        return self;
+        self
     }
 
     pub fn begin_path(&self) -> &Self {
         self.ctx.begin_path();
-        return self;
+        self
     }
 
     pub fn close_path(&self) -> &Self {
         self.ctx.close_path();
-        return self;
+        self
     }
 
     pub fn move_to(&self, x: f64, y: f64) -> &Self {
         self.ctx.move_to(x, y);
-        return self;
+        self
     }
 
     pub fn line_to(&self, x: f64, y: f64) -> &Self {
         self.ctx.line_to(x, y);
-        return self;
+        self
     }
 
     pub fn ellipse(
@@ -296,7 +289,7 @@ impl Canvas {
         end_angle: f64,
         counterclockwise: Option<bool>,
     ) -> &Self {
-        if counterclockwise.is_some() {
+        if let Some(counterclockwise) = counterclockwise {
             self.ctx
                 .ellipse_with_anticlockwise(
                     x,
@@ -306,7 +299,7 @@ impl Canvas {
                     rotation,
                     start_angle,
                     end_angle,
-                    counterclockwise.unwrap(),
+                    counterclockwise,
                 )
                 .unwrap();
         } else {
@@ -315,12 +308,12 @@ impl Canvas {
                 .unwrap();
         }
 
-        return self;
+        self
     }
 
     pub fn rect(&self, x: f64, y: f64, width: f64, height: f64) -> &Self {
         self.ctx.rect(x, y, width, height);
-        return self;
+        self
     }
 
     pub fn round_rect(&self, x: f64, y: f64, width: f64, height: f64, radius: f64) -> &Self {
@@ -331,30 +324,30 @@ impl Canvas {
             .arc_to(x, y + height, x, y, radius)
             .arc_to(x, y, x + width, y, radius)
             .close_path();
-        return self;
+        self
     }
 
     pub fn fill(&self, rule: Option<CanvasWindingRule>) -> &Self {
-        if rule.is_some() {
-            self.ctx.fill_with_canvas_winding_rule(rule.unwrap());
+        if let Some(rule) = rule {
+            self.ctx.fill_with_canvas_winding_rule(rule);
         } else {
             self.ctx.fill();
         }
-        return self;
+        self
     }
 
     pub fn stroke(&self) -> &Self {
         self.ctx.stroke();
-        return self;
+        self
     }
 
     pub fn clip(&self, rule: Option<CanvasWindingRule>) -> &Self {
-        if rule.is_some() {
-            self.ctx.clip_with_canvas_winding_rule(rule.unwrap());
+        if let Some(rule) = rule {
+            self.ctx.clip_with_canvas_winding_rule(rule);
         } else {
             self.ctx.clip();
         }
-        return self;
+        self
     }
 
     pub fn is_point_in_path(
@@ -363,47 +356,47 @@ impl Canvas {
         y: f64,
         winding_rule: Option<CanvasWindingRule>,
     ) -> bool {
-        return if winding_rule.is_some() {
+        if let Some(winding_rule) = winding_rule {
             self.ctx
-                .is_point_in_path_with_f64_and_canvas_winding_rule(x, y, winding_rule.unwrap())
+                .is_point_in_path_with_f64_and_canvas_winding_rule(x, y, winding_rule)
         } else {
             self.ctx.is_point_in_path_with_f64(x, y)
-        };
+        }
     }
 
     pub fn is_point_in_stroke(&self, x: f64, y: f64) -> bool {
-        return self.ctx.is_point_in_stroke_with_x_and_y(x, y);
+        self.ctx.is_point_in_stroke_with_x_and_y(x, y)
     }
 
     pub fn get_transform(&self) -> DomMatrix {
-        return self.ctx.get_transform().unwrap();
+        self.ctx.get_transform().unwrap()
     }
 
     pub fn rotate(&self, angle: f64) -> &Self {
         self.ctx.rotate(angle).unwrap();
-        return self;
+        self
     }
 
     pub fn scale(&self, x: f64, y: f64) -> &Self {
         self.ctx.scale(x, y).unwrap();
-        return self;
+        self
     }
 
     pub fn translate(&self, x: f64, y: f64) -> &Self {
         self.ctx.translate(x, y).unwrap();
-        return self;
+        self
     }
 
     pub fn set_transform(&self, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> &Self {
         self.ctx.set_transform(a, b, c, d, e, f).unwrap();
-        return self;
+        self
     }
 
     pub fn draw_image(&self, image: &ImageBitmap, dx: f64, dy: f64) -> &Self {
         self.ctx
             .draw_image_with_image_bitmap(image, dx, dy)
             .unwrap();
-        return self;
+        self
     }
 
     /// Draw a decoded \`HtmlImageElement\` (a \`<img>\` whose
@@ -422,33 +415,32 @@ impl Canvas {
         self.ctx
             .draw_image_with_html_image_element_and_dw_and_dh(image, dx, dy, dw, dh)
             .unwrap();
-        return self;
+        self
     }
 
     pub fn create_image_data(&self, width: f64, height: f64) -> ImageData {
-        return self
-            .ctx
+        self.ctx
             .create_image_data_with_sw_and_sh(width, height)
-            .unwrap();
+            .unwrap()
     }
 
     pub fn get_image_data(&self, sx: f64, sy: f64, sw: f64, sh: f64) -> ImageData {
-        return self.ctx.get_image_data(sx, sy, sw, sh).unwrap();
+        self.ctx.get_image_data(sx, sy, sw, sh).unwrap()
     }
 
     pub fn put_image_data(&self, image_data: ImageData, dx: f64, dy: f64) -> &Self {
         self.ctx.put_image_data(&image_data, dx, dy).unwrap();
-        return self;
+        self
     }
 
     pub fn save(&self) -> &Self {
         self.ctx.save();
-        return self;
+        self
     }
 
     pub fn restore(&self) -> &Self {
         self.ctx.restore();
-        return self;
+        self
     }
 
     // properties

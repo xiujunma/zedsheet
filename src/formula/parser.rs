@@ -176,14 +176,14 @@ pub fn infix_expr_to_suffix_expr(src: &str) -> Vec<String> {
             // String literal
             let mut s = String::new();
             loop {
-                if let Some(next) = chars.next() {
-                    if next == '"' {
-                        break;
-                    }
-                    s.push(next);
-                } else {
+                let next = chars.next();
+                let Some(next) = next else {
+                    break;
+                };
+                if next == '"' {
                     break;
                 }
+                s.push(next);
             }
             stack.push(format!("\"{}", s));
         } else if c == '-' && is_arg_start(oldc) {
@@ -219,7 +219,7 @@ pub fn infix_expr_to_suffix_expr(src: &str) -> Vec<String> {
                     if let (Some(end), Some(start)) = (stack.pop(), stack.pop()) {
                         // Range detected - push range token
                         stack.push(format!("{}:{}", start, end));
-                        stack.push(vec![top.unwrap_or_default(), "2".to_string()].join(","));
+                        stack.push([top.unwrap_or_default(), "2".to_string()].join(","));
                     }
                 } else if fn_arg_type == 1 || fn_arg_type == 3 {
                     if fn_arg_type == 3 && !fn_arg_operator.is_empty() {

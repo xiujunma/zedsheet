@@ -76,7 +76,7 @@ impl Cols {
     }
 
     pub fn get_or_new(&mut self, ci: usize) -> &mut Col {
-        self.data.entry(ci).or_insert_with(Col::default)
+        self.data.entry(ci).or_default()
     }
 
     pub fn get_width(&self, ci: usize) -> f64 {

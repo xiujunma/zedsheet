@@ -169,7 +169,7 @@ pub(crate) fn wire_sort_dialog(modal: web_sys::Element, renderer: &SharedRendere
                     if let Some((mr, mc)) = r.data.used_extent() {
                         r.data.auto_filter.ref_ = Some(
                             crate::core::cell_range::CellRange::new(
-                                if has_header { 0 } else { 0 },
+                                if has_header { 0 } else { 1 },
                                 0,
                                 mr,
                                 mc,

@@ -37,7 +37,7 @@ impl Row {
     }
 
     pub fn get_cell_or_new(&mut self, ci: usize) -> &mut Cell {
-        self.cells.entry(ci).or_insert_with(Cell::default)
+        self.cells.entry(ci).or_default()
     }
 
     pub fn set_cell(&mut self, ci: usize, cell: Cell) {

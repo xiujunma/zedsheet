@@ -399,7 +399,7 @@ pub fn draw_sparklines(canvas: &Canvas, renderer: &TableRenderer) {
             Some(d) if !d.series.is_empty() => d,
             _ => continue,
         };
-        draw_one_sparkline(canvas, &rect, &sparkline, &data);
+        draw_one_sparkline(canvas, &rect, sparkline, &data);
     }
 }
 
@@ -548,9 +548,9 @@ fn darken(hex: &str) -> String {
     let b = u8::from_str_radix(&s[4..6], 16).ok();
     match (r, g, b) {
         (Some(r), Some(g), Some(b)) => {
-            let r = (r / 2 + 32).min(255);
-            let g = (g / 2 + 32).min(255);
-            let b = (b / 2 + 32).min(255);
+            let r = r / 2 + 32;
+            let g = g / 2 + 32;
+            let b = b / 2 + 32;
             format!("#{:02x}{:02x}{:02x}", r, g, b)
         }
         _ => "#333333".to_string(),

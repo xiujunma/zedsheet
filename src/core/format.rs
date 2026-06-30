@@ -361,7 +361,7 @@ fn group_thousands(int_part: &str) -> String {
     let len = chars.len();
     let mut out = String::with_capacity(len + len / 3);
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*c);

@@ -361,7 +361,7 @@ fn subtract_range(whole: &CellRange, hole: &CellRange) -> Vec<String> {
         .collect()
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Validations {
     #[serde(rename = "_")]
     validations: Vec<Validation>,
@@ -383,15 +383,6 @@ impl Debug for Validations {
         f.debug_struct("Validations")
             .field("validations", &self.validations)
             .finish()
-    }
-}
-
-impl Default for Validations {
-    fn default() -> Self {
-        Validations {
-            validations: Vec::new(),
-            errors: HashMap::new(),
-        }
     }
 }
 

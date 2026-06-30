@@ -537,10 +537,10 @@ pub(crate) fn wire_events(
                         // dialog.
                         "-" | "Subtract" | "NumpadSubtract" => {
                             let sel = r.selection_bounds();
-                            let is_full_row = sel.1 == 0
-                                && sel.3 as usize == r.data.col_count().saturating_sub(1);
-                            let is_full_col = sel.0 == 0
-                                && sel.2 as usize == r.data.row_count().saturating_sub(1);
+                            let is_full_row =
+                                sel.1 == 0 && sel.3 == r.data.col_count().saturating_sub(1);
+                            let is_full_col =
+                                sel.0 == 0 && sel.2 == r.data.row_count().saturating_sub(1);
                             if is_full_row {
                                 r.delete_rows_at_selection();
                             } else if is_full_col {

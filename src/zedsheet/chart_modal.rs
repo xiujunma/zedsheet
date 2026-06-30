@@ -199,11 +199,11 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 .flatten()
                 .and_then(|e| e.dyn_into::<HtmlSelectElement>().ok())
                 .map(|s| s.value())
-                .and_then(|v| match v.as_str() {
-                    "linear" => Some(crate::core::trendline::Trendline::Linear),
-                    "exponential" => Some(crate::core::trendline::Trendline::Exponential),
-                    "polynomial" => Some(crate::core::trendline::Trendline::Polynomial),
-                    _ => Some(crate::core::trendline::Trendline::None),
+                .map(|v| match v.as_str() {
+                    "linear" => crate::core::trendline::Trendline::Linear,
+                    "exponential" => crate::core::trendline::Trendline::Exponential,
+                    "polynomial" => crate::core::trendline::Trendline::Polynomial,
+                    _ => crate::core::trendline::Trendline::None,
                 })
                 .unwrap_or(crate::core::trendline::Trendline::None);
             let secondary_range_str = val(".zs-chart-secondary");

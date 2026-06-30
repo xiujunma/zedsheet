@@ -10,7 +10,7 @@ pub fn border_ranges(
     area_merges: Vec<Range>,
 ) -> Vec<(Range, Rect, BorderType)> {
     let border_ref = border.reference.clone();
-    let border_type = border.border_type.clone();
+    let border_type = border.border_type;
     let border_range = Range::with(&border_ref);
     let intersect_merges = area_merges
         .iter()
@@ -20,16 +20,12 @@ pub fn border_ranges(
 
     let mut ret: Vec<(Range, Rect, BorderType)> = vec![];
 
-    if border_range.intersects(&area.range) || intersect_merges.len() > 0 {
+    if border_range.intersects(&area.range) || !intersect_merges.is_empty() {
         if intersect_merges.len() <= 0 {
-            ret.push((
-                border_range.clone(),
-                area.rect(&border_range),
-                border_type.clone(),
-            ));
+            ret.push((border_range, area.rect(&border_range), border_type));
         } else {
             for merge in &intersect_merges {
-                if border_range.within(&merge) {
+                if border_range.within(merge) {
                     if border_range.start_row == merge.start_row
                         && border_range.start_col == merge.start_col
                         && border_type != BorderType::Inside
@@ -37,8 +33,8 @@ pub fn border_ranges(
                         && border_type != BorderType::Vertical
                     {
                         ret.push((
-                            merge.clone(),
-                            area.rect(&merge),
+                            *merge,
+                            area.rect(merge),
                             if border_type == BorderType::All {
                                 BorderType::Outside
                             } else {
@@ -52,16 +48,12 @@ pub fn border_ranges(
                     || border_type == BorderType::Right
                     || border_type == BorderType::Bottom
                 {
-                    ret.push((
-                        border_range.clone(),
-                        area.rect(&border_range),
-                        border_type.clone(),
-                    ));
+                    ret.push((border_range, area.rect(&border_range), border_type));
                     break;
                 } else {
                     let imerges = intersect_merges
                         .iter()
-                        .filter(|it| (*it).clone() != merge.clone())
+                        .filter(|it| *(*it) != *merge)
                         .cloned()
                         .collect::<Vec<Range>>();
                     border_range.difference(merge).iter().for_each(|it| {
@@ -69,7 +61,7 @@ pub fn border_ranges(
                             let border_rect = area.rect(it);
                             let border = Border {
                                 reference: it.to_string(),
-                                border_type: border_type.clone(),
+                                border_type,
                                 border_line: BorderLineStyle::Thin,
                                 color: String::from(""),
                             };
@@ -81,12 +73,12 @@ pub fn border_ranges(
                             {
                                 if it.start_row < merge.start_row && it.end_row < merge.start_row {
                                     // top
-                                    ret.push((it.clone(), border_rect.clone(), BorderType::Bottom));
+                                    ret.push((*it, border_rect, BorderType::Bottom));
                                 } else if it.start_row > merge.start_row
                                     && it.end_row > merge.start_row
                                 {
                                     // bottom
-                                    ret.push((it.clone(), border_rect.clone(), BorderType::Top));
+                                    ret.push((*it, border_rect, BorderType::Top));
                                 }
                             }
 
@@ -95,11 +87,11 @@ pub fn border_ranges(
                             {
                                 if it.start_col < merge.start_col && it.end_col < merge.start_col {
                                     // left
-                                    ret.push((it.clone(), border_rect.clone(), BorderType::Right));
+                                    ret.push((*it, border_rect, BorderType::Right));
                                 }
                                 if it.start_col > merge.start_col && it.end_col > merge.start_col {
                                     // right
-                                    ret.push((it.clone(), border_rect.clone(), BorderType::Left));
+                                    ret.push((*it, border_rect, BorderType::Left));
                                 }
                             }
                         }
@@ -107,19 +99,19 @@ pub fn border_ranges(
                     if border_type == BorderType::All {
                         let border_rect = area.rect(merge);
                         if border_range.start_row == merge.start_row {
-                            ret.push((merge.clone(), border_rect.clone(), BorderType::Top));
+                            ret.push((*merge, border_rect, BorderType::Top));
                         }
 
                         if border_range.end_row == merge.end_row {
-                            ret.push((merge.clone(), border_rect.clone(), BorderType::Bottom));
+                            ret.push((*merge, border_rect, BorderType::Bottom));
                         }
 
                         if border_range.start_col == merge.start_col {
-                            ret.push((merge.clone(), border_rect.clone(), BorderType::Left));
+                            ret.push((*merge, border_rect, BorderType::Left));
                         }
 
                         if border_range.end_col == merge.end_col {
-                            ret.push((merge.clone(), border_rect.clone(), BorderType::Right));
+                            ret.push((*merge, border_rect, BorderType::Right));
                         }
                     }
                     break;

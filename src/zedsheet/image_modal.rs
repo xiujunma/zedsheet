@@ -195,7 +195,7 @@ pub(crate) fn wire_image_modal(
     });
     for sel in [".zs-image-cancel", ".zs-image-close"] {
         if let Some(el) = modal.query_selector(sel).ok().flatten() {
-            if let Some(btn) = el.dyn_into::<HtmlInputElement>().ok() {
+            if let Ok(btn) = el.dyn_into::<HtmlInputElement>() {
                 let cb = close_cb.as_ref().unchecked_ref();
                 let _ = btn.add_event_listener_with_callback("click", cb);
             }

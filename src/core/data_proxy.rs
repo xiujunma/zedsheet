@@ -348,9 +348,10 @@ impl Default for DataProxy {
 
 impl DataProxy {
     pub fn new(name: &str) -> Self {
-        let mut dp = DataProxy::default();
-        dp.name = name.to_string();
-        dp
+        DataProxy {
+            name: name.to_string(),
+            ..Default::default()
+        }
     }
 
     /// Wire the workbook-wide sheets registry used to resolve `Sheet2!A1`
@@ -451,7 +452,7 @@ impl DataProxy {
     }
 
     pub fn get_cell_or_new(&mut self, ri: usize, ci: usize) -> &mut Cell {
-        let row = self.rows.entry(ri).or_insert_with(Row::default);
+        let row = self.rows.entry(ri).or_default();
         row.get_cell_or_new(ci)
     }
 
@@ -1599,7 +1600,7 @@ impl DataProxy {
         }
         let body_span = spans[spans.len() - 1];
         let pairs = &spans[..spans.len() - 1];
-        if pairs.len() % 2 != 0 {
+        if !pairs.len().is_multiple_of(2) {
             return Err(EvalErr::Value);
         }
         self.let_bindings.borrow_mut().push(HashMap::new());
@@ -1684,7 +1685,7 @@ impl DataProxy {
             return Err(EvalErr::Value);
         }
         let mut frame: HashMap<String, Value> = HashMap::new();
-        for (p, v) in params.iter().zip(args.into_iter()) {
+        for (p, v) in params.iter().zip(args) {
             frame.insert(p.clone(), v);
         }
         eprintln!(
@@ -1693,7 +1694,7 @@ impl DataProxy {
         );
         self.let_bindings.borrow_mut().push(frame);
         let mut p = 0usize;
-        let result = self.parse_cmp(&body_tokens, &mut p, vis);
+        let result = self.parse_cmp(body_tokens, &mut p, vis);
         eprintln!("DBG call_lambda result={:?}", result);
         self.let_bindings.borrow_mut().pop();
         result
@@ -2106,7 +2107,7 @@ impl DataProxy {
             }
             "format" => Ok(Value::Text(String::new())), // not implemented
             "width" => Ok(Value::Number(
-                (self.get_col_width(ci) / self.zoom()).round() as f64,
+                (self.get_col_width(ci) / self.zoom()).round(),
             )),
             _ => Err(EvalErr::Value),
         }
@@ -2119,7 +2120,7 @@ impl DataProxy {
     ) -> Option<(usize, usize, usize, usize)> {
         match arg {
             Ok(Arg::Scalar(Value::Text(s))) => {
-                if let Ok(cr) = crate::core::cell_range::CellRange::from_str(&s) {
+                if let Ok(cr) = crate::core::cell_range::CellRange::from_str(s) {
                     Some((cr.sri, cr.sci, cr.eri, cr.eci))
                 } else {
                     None
@@ -2193,10 +2194,7 @@ impl DataProxy {
 
     pub fn set_cell(&mut self, ri: usize, ci: usize, cell: Cell) {
         self.mark_spills_dirty();
-        self.rows
-            .entry(ri)
-            .or_insert_with(Row::default)
-            .set_cell(ci, cell);
+        self.rows.entry(ri).or_default().set_cell(ci, cell);
     }
 
     pub fn get_note(&self, ri: usize, ci: usize) -> Option<String> {
@@ -2546,10 +2544,10 @@ impl DataProxy {
         } else if t.banded {
             if let Some((first, _)) = t.data_rows() {
                 // Shade odd body rows, but never over an explicit cell fill.
-                let plain = match style.bgcolor.as_deref() {
-                    None | Some("#ffffff") | Some("#fff") => true,
-                    _ => false,
-                };
+                let plain = matches!(
+                    style.bgcolor.as_deref(),
+                    None | Some("#ffffff") | Some("#fff")
+                );
                 if (ri - first) % 2 == 1 && plain {
                     style.bgcolor = Some("#d9e1f2".to_string());
                 }
@@ -2621,10 +2619,8 @@ impl DataProxy {
             }
         }
         blocks.push((bs, r1, key));
-        // Each processed block inserts one row, shifting everything below by
-        // one — `off` tracks the accumulated shift.
         let mut off = 0usize;
-        for (s0, e0, k) in blocks {
+        for (s0, e0, k) in blocks.into_iter() {
             let (s, e) = (s0 + off, e0 + off);
             self.insert_row(e + 1, 1);
             self.set_cell_text(e + 1, c0, &format!("{} Total", k));
@@ -3021,7 +3017,7 @@ impl DataProxy {
     /// screen-pixel drag must divide by `zoom()` first (the renderer's
     /// clamped setters do).
     pub fn set_row_height(&mut self, ri: usize, height: f64) {
-        let row = self.rows.entry(ri).or_insert_with(Row::default);
+        let row = self.rows.entry(ri).or_default();
         row.set_height(height);
     }
 
@@ -3944,7 +3940,7 @@ fn parse_range_expr(expr: &str) -> (usize, usize, usize, usize) {
 
 /// Shift outline groups for `n` tracks inserted at `at` (issue #30): members
 /// at/after the insertion move down, so a group straddling `at` grows.
-fn shift_groups_for_insert(groups: &mut Vec<OutlineGroup>, at: usize, n: usize) {
+fn shift_groups_for_insert(groups: &mut [OutlineGroup], at: usize, n: usize) {
     for g in groups.iter_mut() {
         if g.start >= at {
             g.start += n;
@@ -4730,7 +4726,7 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
         // SUMIFS/AVERAGEIFS reserve arg 0 for the summed range, pairs from 1.
         "COUNTIFS" | "SUMIFS" | "AVERAGEIFS" => {
             let pairs_from = if upper == "COUNTIFS" { 0 } else { 1 };
-            if args.len() <= pairs_from || (args.len() - pairs_from) % 2 != 0 {
+            if args.len() <= pairs_from || !(args.len() - pairs_from).is_multiple_of(2) {
                 return Err(EvalErr::Value);
             }
             let pairs: Vec<(Vec<Value>, Box<dyn Fn(&Value) -> bool>)> = (pairs_from..args.len())
@@ -4745,10 +4741,7 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             };
             let (mut sum, mut count) = (0.0, 0usize);
             for i in 0..n {
-                if pairs
-                    .iter()
-                    .all(|(cells, m)| cells.get(i).map_or(false, |v| m(v)))
-                {
+                if pairs.iter().all(|(cells, m)| cells.get(i).is_some_and(m)) {
                     count += 1;
                     if upper != "COUNTIFS" {
                         sum += pool.get(i).map(Value::as_number).unwrap_or(0.0);
@@ -4984,7 +4977,7 @@ fn rows_equal(a: &[Value], b: &[Value]) -> bool {
 // wasm32-unknown-unknown, so the stream is seeded with a fixed constant —
 // successive calls differ, which is all a spreadsheet needs here.
 thread_local! {
-    static RAND_STATE: std::cell::Cell<u64> = std::cell::Cell::new(0x9E37_79B9_7F4A_7C15);
+    static RAND_STATE: std::cell::Cell<u64> = const { std::cell::Cell::new(0x9E37_79B9_7F4A_7C15) };
 }
 
 /// Uniform in [0, 1).
@@ -5432,13 +5425,13 @@ fn apply_function(name: &str, fargs: &[Arg]) -> Result<Value, EvalErr> {
             args.get(5).copied().unwrap_or(0.0),
         ),
         "XNPV" => {
-            if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+            if args.len() < 3 || !(args.len() - 1).is_multiple_of(2) {
                 return Err(EvalErr::Value);
             }
             xnpv(first, &args[1..])
         }
         "XIRR" => {
-            if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+            if args.len() < 3 || !(args.len() - 1).is_multiple_of(2) {
                 return Err(EvalErr::Value);
             }
             let guess = if args.len() > 1 { second } else { 0.1 };
@@ -5613,7 +5606,7 @@ fn rank_eq(args: &[f64], value: f64) -> f64 {
 /// Population covariance.
 fn covariance_p(args: &[f64]) -> f64 {
     let n = args.len();
-    if n < 2 || n % 2 != 0 {
+    if n < 2 || !n.is_multiple_of(2) {
         return 0.0;
     }
     let half = n / 2;
@@ -5630,7 +5623,7 @@ fn covariance_p(args: &[f64]) -> f64 {
 /// Pearson correlation coefficient.
 fn correlation(args: &[f64]) -> f64 {
     let n = args.len();
-    if n < 2 || n % 2 != 0 {
+    if n < 2 || !n.is_multiple_of(2) {
         return 0.0;
     }
     let half = n / 2;

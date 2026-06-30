@@ -21,8 +21,6 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlImageElement};
 
-/// Per-thread cache: image URL → decoded `HtmlImageElement`, or
-/// `None` if the load failed.
 thread_local! {
     static CACHE: RefCell<HashMap<String, Option<HtmlImageElement>>> =
         RefCell::new(HashMap::new());
@@ -86,7 +84,7 @@ pub(crate) fn ensure_loaded(url: &str) {
             p.borrow_mut().remove(&url_owned);
         });
     }) as Box<dyn FnMut()>);
-    HtmlElement::set_onload(&*html_img, Some(onload2.as_ref().unchecked_ref()));
+    HtmlElement::set_onload(&html_img, Some(onload2.as_ref().unchecked_ref()));
     onload2.forget();
 
     let url_for_err = url.to_string();
@@ -98,7 +96,7 @@ pub(crate) fn ensure_loaded(url: &str) {
             p.borrow_mut().remove(&url_for_err);
         });
     }) as Box<dyn FnMut()>);
-    HtmlElement::set_onerror(&*html_img, Some(onerror.as_ref().unchecked_ref()));
+    HtmlElement::set_onerror(&html_img, Some(onerror.as_ref().unchecked_ref()));
     onerror.forget();
 
     html_img.set_src(url);

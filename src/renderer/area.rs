@@ -68,23 +68,23 @@ impl Area {
 
     pub fn get_row_height(&self, index: usize) -> f64 {
         let row = self.row_map.get(&index).unwrap();
-        return row.1;
+        row.1
     }
 
     pub fn get_col_width(&self, index: usize) -> f64 {
         let col = self.col_map.get(&index).unwrap();
-        return col.1;
+        col.1
     }
 
     pub fn contains_x(&self, x: f64) -> bool {
-        return x >= self.x && x <= self.x + self.width;
+        x >= self.x && x <= self.x + self.width
     }
 
     pub fn contains_y(&self, y: f64) -> bool {
-        return y >= self.y && y <= self.y + self.height;
+        y >= self.y && y <= self.y + self.height
     }
     pub fn contains(&self, x: f64, y: f64) -> bool {
-        return self.contains_x(x) && self.contains_y(y);
+        self.contains_x(x) && self.contains_y(y)
     }
 
     pub fn each_row<F>(&self, mut f: F)
@@ -146,12 +146,12 @@ impl Area {
             }
         }
 
-        return Rect {
+        Rect {
             x: 0f64,
             y,
             width: self.width,
             height,
-        };
+        }
     }
 
     pub fn rect_col(&self, start_col: usize, end_col: usize) -> Rect {
@@ -167,23 +167,23 @@ impl Area {
             }
         }
 
-        return Rect {
+        Rect {
             x,
             y: 0f64,
             width,
             height: self.height,
-        };
+        }
     }
 
     pub fn rect(&self, r: &Range) -> Rect {
         let rect_row = self.rect_row(r.start_row, r.end_row);
         let rect_col = self.rect_col(r.start_col, r.end_col);
-        return Rect {
+        Rect {
             x: rect_col.x,
             y: rect_row.y,
             width: rect_col.width,
             height: rect_row.height,
-        };
+        }
     }
 
     pub fn cell_at(&self, x: f64, y: f64) -> AreaCell {

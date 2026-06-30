@@ -17,11 +17,11 @@ pub struct TextLine {
 }
 
 pub fn text_x(align: &Align, width: f64, padding: f64) -> f64 {
-    return match align {
+    match align {
         Align::Left => padding,
         Align::Center => width / 2_f64,
         Align::Right => width - padding,
-    };
+    }
 }
 
 pub fn text_y(
@@ -31,7 +31,7 @@ pub fn text_y(
     font_height: f64,
     padding: f64,
 ) -> f64 {
-    return match align {
+    match align {
         VerticalAlign::Top => padding,
         VerticalAlign::Middle => {
             let y = height / 2_f64 - font_height / 2_f64;
@@ -43,7 +43,7 @@ pub fn text_y(
             }
         }
         VerticalAlign::Bottom => height - padding - text_height,
-    };
+    }
 }
 
 pub fn text_line(
@@ -78,7 +78,7 @@ pub fn text_line(
         tx = w
     }
 
-    return (x - tx, y - ty, x - tx + w, y - ty);
+    (x - tx, y - ty, x - tx + w, y - ty)
 }
 
 pub fn font_string(family: &str, size: f64, italic: bool, bold: bool) -> String {
@@ -103,7 +103,7 @@ pub fn cell_border_render(
     canvas.save().begin_path().translate(rect.x, rect.y);
 
     let line_rects = |index: usize, offset: f64| -> (f64, f64, f64, f64) {
-        let array = vec![
+        let array = [
             (0f64 - offset, 0f64, rect.width + offset, 0f64),
             (rect.width, 0f64, rect.width, rect.height),
             (0f64 - offset, rect.height, rect.width + offset, rect.height),
@@ -120,36 +120,33 @@ pub fn cell_border_render(
     ];
 
     for (i, it) in directions.into_iter().enumerate() {
-        match it {
-            Some(border) => {
-                let mut line_dash: Vec<f64> = vec![];
-                let mut line_width = 1f64;
+        if let Some(border) = it {
+            let mut line_dash: Vec<f64> = vec![];
+            let mut line_width = 1f64;
 
-                let style = border.0;
-                if style == BorderLineStyle::Thick {
-                    line_width = 3f64;
-                } else if style == BorderLineStyle::Medium {
-                    line_width = 2f64;
-                } else if style == BorderLineStyle::Dotted {
-                    line_dash = vec![1f64, 1f64];
-                } else if style == BorderLineStyle::Dashed {
-                    line_dash = vec![2f64, 2f64];
-                }
-
-                let mut offset = 0f64;
-
-                if auto_align.unwrap_or(false) {
-                    offset = line_width / 2f64;
-                }
-
-                let rects = line_rects(i, offset);
-                canvas
-                    .set_stroke_style(border.1.as_str())
-                    .set_line_width(line_width)
-                    .set_line_dash(&line_dash)
-                    .line(rects.0, rects.1, rects.2, rects.3);
+            let style = border.0;
+            if style == BorderLineStyle::Thick {
+                line_width = 3f64;
+            } else if style == BorderLineStyle::Medium {
+                line_width = 2f64;
+            } else if style == BorderLineStyle::Dotted {
+                line_dash = vec![1f64, 1f64];
+            } else if style == BorderLineStyle::Dashed {
+                line_dash = vec![2f64, 2f64];
             }
-            _ => {}
+
+            let mut offset = 0f64;
+
+            if auto_align.unwrap_or(false) {
+                offset = line_width / 2f64;
+            }
+
+            let rects = line_rects(i, offset);
+            canvas
+                .set_stroke_style(border.1.as_str())
+                .set_line_width(line_width)
+                .set_line_dash(&line_dash)
+                .line(rects.0, rects.1, rects.2, rects.3);
         }
     }
     canvas.restore();
@@ -172,18 +169,12 @@ pub fn cell_render<R, F>(
 
     canvas.rect(0f64, 0f64, rect.width, rect.height).clip(None);
 
-    match &style.bgcolor {
-        Some(bgcolor) => {
-            canvas.set_fill_style(bgcolor);
-        }
-        _ => {}
+    if let Some(bgcolor) = &style.bgcolor {
+        canvas.set_fill_style(bgcolor);
     }
 
-    match style.rotation {
-        Some(rotation) => {
-            canvas.rotate(rotation * (PI / 180_f64));
-        }
-        _ => {}
+    if let Some(rotation) = style.rotation {
+        canvas.rotate(rotation * (PI / 180_f64));
     }
 
     canvas.save();
@@ -212,14 +203,11 @@ pub fn cell_render<R, F>(
             )
             .set_fill_style(style.color.as_str());
 
-        let (xp, yp) = match style.padding {
-            Some(padding) => padding,
-            _ => (5f64, 5f64),
-        };
+        let (xp, yp) = style.padding.unwrap_or((5f64, 5f64));
 
-        let tx = text_x(&style.align, rect.width.clone(), xp);
+        let tx = text_x(&style.align, rect.width, xp);
         let txts = text.split("\n");
-        let inner_width = &rect.width - xp * 2_f64;
+        let inner_width = rect.width - xp * 2_f64;
         let mut ntxts = vec![];
 
         for it in txts {
@@ -267,7 +255,7 @@ pub fn cell_render<R, F>(
 
         let ty = text_y(
             style.valign.clone(),
-            rect.height.clone(),
+            rect.height,
             text_height,
             font_height,
             yp,

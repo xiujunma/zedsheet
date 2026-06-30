@@ -171,11 +171,13 @@ pub(crate) fn wire_protect_sheet_modal(
         // If the sheet is currently protected and a password hash is
         // set, the user must re-enter it to disable. (When enabling,
         // the password is a fresh set, no verification needed.)
-        if protection.enabled && !enable && protection.password_hash.is_some() {
-            if !protection.verify(&password) {
-                show_error(&modal_for_apply, "Incorrect password.");
-                return;
-            }
+        if protection.enabled
+            && !enable
+            && protection.password_hash.is_some()
+            && !protection.verify(&password)
+        {
+            show_error(&modal_for_apply, "Incorrect password.");
+            return;
         }
         let password_opt = if password.is_empty() {
             None
@@ -209,7 +211,7 @@ pub(crate) fn wire_protect_sheet_modal(
     });
     for sel in [".zs-protect-cancel", ".zs-protect-close"] {
         if let Some(el) = modal.query_selector(sel).ok().flatten() {
-            if let Some(btn) = el.dyn_into::<HtmlInputElement>().ok() {
+            if let Ok(btn) = el.dyn_into::<HtmlInputElement>() {
                 let cb = close_cb.as_ref().unchecked_ref();
                 let _ = btn.add_event_listener_with_callback("click", cb);
             }

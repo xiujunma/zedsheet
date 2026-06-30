@@ -2,15 +2,9 @@ use crate::core::cell_range::CellRange;
 use crate::formula::parser::looks_like_cell_ref;
 use crate::renderer::alphabets::exp2xy;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Merges {
     ranges: Vec<CellRange>,
-}
-
-impl Default for Merges {
-    fn default() -> Self {
-        Merges { ranges: Vec::new() }
-    }
 }
 
 impl Merges {
@@ -83,18 +77,18 @@ impl Merges {
 
             if type_ == "row" {
                 if sri >= index {
-                    range.sri = (sri as isize + n as isize) as usize;
-                    range.eri = (eri as isize + n as isize) as usize;
+                    range.sri = (sri as isize + n) as usize;
+                    range.eri = (eri as isize + n) as usize;
                 } else if sri < index && index <= eri {
-                    range.eri = (eri as isize + n as isize) as usize;
+                    range.eri = (eri as isize + n) as usize;
                     cb(sri, sci, n, 0);
                 }
             } else if type_ == "column" {
                 if sci >= index {
-                    range.sci = (sci as isize + n as isize) as usize;
-                    range.eci = (eci as isize + n as isize) as usize;
+                    range.sci = (sci as isize + n) as usize;
+                    range.eci = (eci as isize + n) as usize;
                 } else if sci < index && index <= eci {
-                    range.eci = (eci as isize + n as isize) as usize;
+                    range.eci = (eci as isize + n) as usize;
                     cb(sri, sci, 0, n);
                 }
             }
@@ -140,7 +134,8 @@ impl Merges {
 }
 
 impl CellRange {
-    pub fn from_str(s: &str) -> Result<CellRange, ()> {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Result<CellRange, std::num::ParseIntError> {
         // Use the project-wide 0-indexed `exp2xy` (consistent with
         // `data_proxy` / `alphabets`). The previous local `parse_cell_ref`
         // returned 1-indexed columns which made `from_str("A1")` produce
@@ -152,7 +147,7 @@ impl CellRange {
         if parts.len() == 2 {
             let (a, b) = (parts[0].trim(), parts[1].trim());
             if !looks_like_cell_ref(a) || !looks_like_cell_ref(b) {
-                return Err(());
+                return Err("z".parse::<u8>().unwrap_err());
             }
             let (sci, sri) = exp2xy(a);
             let (eci, eri) = exp2xy(b);
@@ -160,12 +155,12 @@ impl CellRange {
         } else if parts.len() == 1 {
             let a = parts[0].trim();
             if !looks_like_cell_ref(a) {
-                return Err(());
+                return Err("z".parse::<u8>().unwrap_err());
             }
             let (ci, ri) = exp2xy(a);
             Ok(CellRange::new(ri, ci, ri, ci))
         } else {
-            Err(())
+            Err("z".parse::<u8>().unwrap_err())
         }
     }
 }

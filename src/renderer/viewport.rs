@@ -188,14 +188,14 @@ impl Viewport {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     fn cell_at(&self, x: f64, y: f64) -> Option<ViewportCell> {
         let a2 = self.areas.get(1).unwrap();
         // let [ha1, ha21, ha23, ha3] = self.header_areas.as_slice();
 
-        let ha1 = self.header_areas.get(0).unwrap();
+        let ha1 = self.header_areas.first().unwrap();
         let ha21 = self.header_areas.get(1).unwrap();
         let ha23 = self.header_areas.get(2).unwrap();
         let ha3 = self.header_areas.get(3).unwrap();

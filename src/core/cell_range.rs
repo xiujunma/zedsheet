@@ -55,7 +55,7 @@ impl CellRange {
 
     pub fn includes_cell_ref(&self, cell_ref: &str) -> bool {
         let (ri, ci) = exp2xy(cell_ref);
-        return self.sri < ri && self.eri > ri && self.sci < ci && self.eci > ci;
+        self.sri < ri && self.eri > ri && self.sci < ci && self.eci > ci
     }
 
     pub fn size(&self) -> (usize, usize) {

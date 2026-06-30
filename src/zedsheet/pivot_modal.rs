@@ -149,13 +149,13 @@ fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]
                 let bel: Option<&web_sys::Element> = b.dyn_ref();
                 if let Some(bel) = bel {
                     if let Some(zone_attr) = bel.get_attribute("data-zone") {
-                        let active = match (zone_attr.as_str(), state.target_zone) {
+                        let active = matches!(
+                            (zone_attr.as_str(), state.target_zone),
                             ("rows", Zone::Rows)
-                            | ("cols", Zone::Columns)
-                            | ("values", Zone::Values)
-                            | ("filters", Zone::Filters) => true,
-                            _ => false,
-                        };
+                                | ("cols", Zone::Columns)
+                                | ("values", Zone::Values)
+                                | ("filters", Zone::Filters)
+                        );
                         let _ = bel
                             .unchecked_ref::<HtmlElement>()
                             .style()
@@ -208,9 +208,7 @@ fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]
 
     // Zones
     let mut zh = String::new();
-    zh.push_str(&format!(
-        "<div style=\"margin-bottom:4px;color:#999;font-size:11px;\">Rows</div>"
-    ));
+    zh.push_str("<div style=\"margin-bottom:4px;color:#999;font-size:11px;\">Rows</div>");
     if state.rows.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;margin-bottom:8px;\">(empty)</div>");
     } else {
@@ -218,9 +216,7 @@ fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]
             zh.push_str(&chip_in_zone(ci, "rows", &headers[ci]));
         }
     }
-    zh.push_str(&format!(
-        "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Columns</div>"
-    ));
+    zh.push_str("<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Columns</div>");
     if state.cols.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;margin-bottom:8px;\">(empty)</div>");
     } else {
@@ -231,9 +227,7 @@ fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]
     // Values zone (issue #59): one chip per value field, each with its
     // own agg `<select>` and a `data-value-index` so the agg-change and
     // remove handlers can target the right entry.
-    zh.push_str(&format!(
-        "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Values</div>"
-    ));
+    zh.push_str("<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Values</div>");
     if state.values.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;\">(empty)</div>");
     } else {
@@ -258,7 +252,7 @@ fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]
                 </div>",
                 ci,
                 v_idx,
-                esc(&agg.label()),
+                esc(agg.label()),
                 esc(&label),
                 v_idx,
                 sel(agg, Agg::Sum),
@@ -273,9 +267,7 @@ fn render_chips(modal: &web_sys::Element, state: &PivotState, headers: &[String]
     // Filters zone (issue #58) — same chip model as Rows/Columns. The
     // saved_values is intentionally not shown in v1; an empty list at the
     // engine layer means "All", and the default is empty.
-    zh.push_str(&format!(
-        "<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Filters</div>"
-    ));
+    zh.push_str("<div style=\"margin:6px 0 4px;color:#999;font-size:11px;\">Filters</div>");
     if state.filters.is_empty() {
         zh.push_str("<div style=\"color:#bbb;font-size:11px;margin-bottom:4px;\">(empty)</div>");
     } else {
@@ -384,7 +376,7 @@ fn read_source_headers(
     };
     let cr = match CellRange::from_str(&a1) {
         Ok(c) => c,
-        Err(()) => return vec!["?".to_string()],
+        Err(_) => return vec!["?".to_string()],
     };
     let c0 = cr.sci.min(cr.eci);
     let c1 = cr.eci.max(cr.sci);
@@ -550,7 +542,6 @@ pub(crate) fn wire_pivot_modal(
                     render_chips(&modal_for_click, &state, &headers);
                 }
             }
-            return;
         }
     });
 

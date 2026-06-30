@@ -19,7 +19,9 @@ use super::data_proxy::DataProxy;
 /// Aggregation function applied to the value column within each group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Agg {
+    #[default]
     Sum,
     /// Counts non-blank rows in the group (Excel: `COUNTA`-style).
     Count,
@@ -27,12 +29,6 @@ pub enum Agg {
     Avg,
     Min,
     Max,
-}
-
-impl Default for Agg {
-    fn default() -> Self {
-        Agg::Sum
-    }
 }
 
 impl Agg {
@@ -208,17 +204,14 @@ impl PivotTable {
     /// Validate the spec against a source `DataProxy` and return the parsed
     /// bounds of the source range. The caller is expected to have resolved
     /// `source_sheet` to a `DataProxy` before calling.
-    pub fn validate<'a>(
-        &self,
-        source: &'a DataProxy,
-    ) -> Result<(usize, usize, usize, usize), String> {
+    pub fn validate(&self, source: &DataProxy) -> Result<(usize, usize, usize, usize), String> {
         // `CellRange::from_str` handles only the A1 part; the optional
         // `Sheet1!` prefix on `source_range` has to be stripped first.
         let a1 = match self.source_range.split_once('!') {
             Some((_sheet, rest)) => rest,
             None => &self.source_range,
         };
-        let r = CellRange::from_str(a1).map_err(|()| {
+        let r = CellRange::from_str(a1).map_err(|_: std::num::ParseIntError| {
             format!(
                 "source range {:?} is not a valid A1 reference",
                 self.source_range
@@ -233,7 +226,7 @@ impl PivotTable {
         if r1 <= r0 {
             return Err("source range has no data rows".into());
         }
-        let max_field = (c1 - c0) as usize;
+        let max_field = c1 - c0;
         for ci in self.row_fields.iter().chain(self.col_fields.iter()) {
             if *ci > max_field {
                 return Err(format!("field index {ci} out of source range"));
@@ -636,15 +629,15 @@ fn parse_date_key(raw: &str, group: DateGroup) -> Option<String> {
 /// `YYYY-MM-DD`, `YYYY/MM/DD`, with optional `T…` or ` …` time suffix.
 fn parse_iso_or_slash(s: &str) -> Option<DateYmd> {
     // Strip the time portion if present.
-    let date_part = s.split(|c| c == 'T' || c == ' ').next()?;
-    let parts: Vec<&str> = date_part.split(|c| c == '-' || c == '/').collect();
+    let date_part = s.split(['T', ' ']).next()?;
+    let parts: Vec<&str> = date_part.split(['-', '/']).collect();
     if parts.len() != 3 {
         return None;
     }
     let y: i32 = parts[0].parse().ok()?;
     let m: u32 = parts[1].parse().ok()?;
     let d: u32 = parts[2].parse().ok()?;
-    if m < 1 || m > 12 || d < 1 || d > 31 {
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
     Some(DateYmd { y, m, d })
@@ -699,7 +692,7 @@ fn parse_us_eu(s: &str) -> Option<DateYmd> {
         // US-locale install, which is the common case).
         (a, b)
     };
-    if m < 1 || m > 12 || d < 1 || d > 31 {
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
     }
     Some(DateYmd { y, m, d })
@@ -800,24 +793,30 @@ pub fn materialize(
 
     // ---- Build styles once (add_style dedups) ----
     let header_style_idx = {
-        let mut s = Style::default();
-        s.bold = true;
-        s.bgcolor = Some("#e8eef7".to_string());
-        s.align = "center".to_string();
-        s.valign = "middle".to_string();
+        let s = Style {
+            bold: true,
+            bgcolor: Some("#e8eef7".to_string()),
+            align: "center".to_string(),
+            valign: "middle".to_string(),
+            ..Default::default()
+        };
         out.add_style(s)
     };
     let total_style_idx = {
-        let mut s = Style::default();
-        s.bold = true;
-        s.bgcolor = Some("#fff3cd".to_string());
-        s.align = "right".to_string();
+        let s = Style {
+            bold: true,
+            bgcolor: Some("#fff3cd".to_string()),
+            align: "right".to_string(),
+            ..Default::default()
+        };
         out.add_style(s)
     };
     let label_style_idx = {
-        let mut s = Style::default();
-        s.bold = true;
-        s.align = "left".to_string();
+        let s = Style {
+            bold: true,
+            align: "left".to_string(),
+            ..Default::default()
+        };
         out.add_style(s)
     };
     let body_style_idx = out.add_style(Style::default());

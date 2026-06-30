@@ -125,19 +125,10 @@ impl Clipboard {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct History {
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
-}
-
-impl Default for History {
-    fn default() -> Self {
-        History {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-        }
-    }
 }
 
 impl History {

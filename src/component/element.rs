@@ -433,11 +433,8 @@ impl Element {
 pub fn h(tag: &str, class_name: Option<&str>) -> Element {
     let mut el = Element::create_element(tag).unwrap();
 
-    match class_name {
-        Some(class_name) => {
-            el.set_class_name(class_name);
-        }
-        None => {}
+    if let Some(class_name) = class_name {
+        el.set_class_name(class_name);
     }
 
     el

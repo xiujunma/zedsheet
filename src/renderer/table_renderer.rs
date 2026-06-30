@@ -317,23 +317,12 @@ pub enum OutlineHit {
     ColLevel(usize),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SelectorRect {
     pub ri: usize,
     pub ci: usize,
     pub eri: usize,
     pub eci: usize,
-}
-
-impl Default for SelectorRect {
-    fn default() -> Self {
-        SelectorRect {
-            ri: 0,
-            ci: 0,
-            eri: 0,
-            eci: 0,
-        }
-    }
 }
 
 impl Default for Cell {
@@ -393,12 +382,12 @@ pub struct RowHeader {
 
 impl AreaRenderer for RowHeader {
     fn cell(&self, row_index: usize, _: usize) -> Option<Cell> {
-        return Some(Cell {
+        Some(Cell {
             value: format!("{}", row_index + 1),
             cell_type: String::from("text"),
             style: 0usize,
             formula: String::from(""),
-        });
+        })
     }
 
     fn get_merges(&self) -> Vec<String> {
@@ -406,7 +395,7 @@ impl AreaRenderer for RowHeader {
     }
 
     fn cell_render(&self, _canvas: &Canvas, _rect: &Rect, _cell: &Cell, _style: &str) -> bool {
-        return true;
+        true
     }
 }
 
@@ -419,12 +408,12 @@ pub struct ColHeader {
 
 impl AreaRenderer for ColHeader {
     fn cell(&self, _: usize, col_index: usize) -> Option<Cell> {
-        return Some(Cell {
+        Some(Cell {
             value: string_at(col_index),
             cell_type: String::from("text"),
             style: 0usize,
             formula: String::from(""),
-        });
+        })
     }
 
     fn get_merges(&self) -> Vec<String> {
@@ -440,7 +429,7 @@ impl AreaRenderer for ColHeader {
             .line_to(rect.width - 7f64, 10f64)
             .close_path()
             .fill(None);
-        return true;
+        true
     }
 }
 
@@ -652,62 +641,62 @@ impl TableRenderer {
 
     fn bgcolor(&mut self, color: String) -> &Self {
         self.bgcolor = color;
-        return self;
+        self
     }
 
     fn width(&mut self, width: f64) -> &Self {
         self.width = width;
-        return self;
+        self
     }
 
     fn height(&mut self, height: f64) -> &Self {
         self.height = height;
-        return self;
+        self
     }
 
     pub fn scale(&mut self, scale: f64) -> &Self {
         self.scale = scale;
-        return self;
+        self
     }
 
     fn rows(&mut self, rows: usize) -> &Self {
         self.rows = rows;
-        return self;
+        self
     }
 
     fn cols(&mut self, cols: usize) -> &Self {
         self.cols = cols;
-        return self;
+        self
     }
 
     fn row_height(&mut self, row_height: f64) -> &Self {
         self.row_height = row_height;
-        return self;
+        self
     }
 
     fn col_width(&mut self, col_width: f64) -> &Self {
         self.col_width = col_width;
-        return self;
+        self
     }
 
     fn start_row(&mut self, start_row: usize) -> &Self {
         self.start_row = start_row;
-        return self;
+        self
     }
 
     fn start_col(&mut self, start_col: usize) -> &Self {
         self.start_col = start_col;
-        return self;
+        self
     }
 
     fn scroll_rows(&mut self, scroll_rows: usize) -> &Self {
         self.scroll_rows = scroll_rows;
-        return self;
+        self
     }
 
     fn scroll_cols(&mut self, scroll_cols: usize) -> &Self {
         self.scroll_cols = scroll_cols;
-        return self;
+        self
     }
 
     fn cell_renderer<F>(&mut self, cell_renderer: F) -> &Self
@@ -715,7 +704,7 @@ impl TableRenderer {
         F: Fn(Canvas, Rect, Cell, String) -> bool + 'static,
     {
         self.cell_renderer = Box::new(cell_renderer);
-        return self;
+        self
     }
 
     fn formatter<F>(&mut self, formatter: F) -> &Self
@@ -723,63 +712,63 @@ impl TableRenderer {
         F: Fn(Cell, String) + 'static,
     {
         self.formatter = Box::new(formatter);
-        return self;
+        self
     }
 
     fn merges(&mut self, merges: Vec<&'static str>) -> &Self {
         self.merges = merges;
-        return self;
+        self
     }
 
     fn styles(&mut self, styles: Vec<Style>) -> &Self {
         self.styles = styles;
-        return self;
+        self
     }
 
     fn borders(&mut self, borders: Vec<Border>) -> &Self {
         self.borders = borders;
-        return self;
+        self
     }
 
     fn gridline(&mut self, gridline: Gridline) -> &Self {
         self.gridline = gridline;
-        return self;
+        self
     }
 
     fn style(&mut self, style: Style) -> &Self {
         self.style = style;
-        return self;
+        self
     }
 
     fn row_header(&mut self, row_header: RowHeader) -> &Self {
         self.row_header = row_header;
-        return self;
+        self
     }
 
     fn col_header(&mut self, col_header: ColHeader) -> &Self {
         self.col_header = col_header;
-        return self;
+        self
     }
 
     fn header_gridline(&mut self, header_gridline: Gridline) -> &Self {
         self.header_gridline = header_gridline;
-        return self;
+        self
     }
 
     fn header_style(&mut self, header_style: Style) -> &Self {
         self.header_style = header_style;
-        return self;
+        self
     }
 
     pub fn freeze(&mut self, reference: &str) -> &Self {
         let (x, y) = exp2xy(reference);
         self.freeze = (y, x);
-        return self;
+        self
     }
 
     fn freeze_gridline(&mut self, freeze_gridline: Gridline) -> &Self {
         self.freeze_gridline = freeze_gridline;
-        return self;
+        self
     }
 
     pub fn row_height_at(&self, index: usize) -> f64 {

@@ -143,7 +143,7 @@ fn populate_field_select(modal: &web_sys::Element, sheets: &Sheets, active: &Act
         return;
     };
     let src = sheets.borrow()[*active.borrow()].clone();
-    let max_col = src.row_count.max(1).min(64);
+    let max_col = src.row_count.clamp(1, 64);
     let headers = read_header_labels(&src, max_col);
     let mut html = String::new();
     for (i, h) in headers.iter().enumerate() {
@@ -400,7 +400,7 @@ pub(crate) fn render_slicer_panels(
     }
     // Reuse the same headers we showed in the modal — they're the
     // source's row 0 cell text, used as field labels.
-    let headers = read_header_labels(&src, src.row_count.max(1).min(64));
+    let headers = read_header_labels(&src, src.row_count.clamp(1, 64));
 
     for (i, slicer) in src.slicers.iter().enumerate() {
         let field_label = headers.get(slicer.field_idx).cloned().unwrap_or_default();
@@ -827,10 +827,10 @@ fn wire_slicer_panel_mousemove(sheet_el: web_sys::Element, drag: Rc<RefCell<Opti
                 let _ = style.set_property("top", &format!("{}px", ny));
                 // Stash the final geometry so the mouseup handler can
                 // commit it to the data model without re-reading the DOM.
-                drag.borrow_mut().as_mut().map(|d| {
+                if let Some(d) = drag.borrow_mut().as_mut() {
                     d.end_panel_x = nx;
                     d.end_panel_y = ny;
-                });
+                }
             }
             DragKind::SlicerResize(_) => {
                 let (nw, nh) = slicer_resize_size(
@@ -845,10 +845,10 @@ fn wire_slicer_panel_mousemove(sheet_el: web_sys::Element, drag: Rc<RefCell<Opti
                 );
                 let _ = style.set_property("width", &format!("{}px", nw));
                 let _ = style.set_property("height", &format!("{}px", nh));
-                drag.borrow_mut().as_mut().map(|d| {
+                if let Some(d) = drag.borrow_mut().as_mut() {
                     d.end_panel_w = nw;
                     d.end_panel_h = nh;
-                });
+                }
             }
             _ => {}
         }
