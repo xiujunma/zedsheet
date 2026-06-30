@@ -243,6 +243,27 @@ pub fn import_xlsx(selector: &str, bytes: &[u8]) -> Result<(), JsValue> {
     }
 }
 
+/// Replace the mounted workbook with the parsed `.ods` (all sheets;
+/// stored formulas stay live). Returns `Ok(())` on success, or throws
+/// a JS error with a human-readable reason on failure
+/// (Phase 4.4).
+///
+/// **Charts and images are dropped on import (same as xlsx):**
+/// `calamine::Ods` doesn't expose chart or image parts, so embedded
+/// charts / floating images in the source workbook are silently
+/// discarded; their underlying data still loads.
+#[wasm_bindgen]
+pub fn import_ods(selector: &str, bytes: &[u8]) -> Result<(), JsValue> {
+    match core::ods::from_ods(bytes) {
+        Ok(sheets) => {
+            let json = core::workbook::serialize(&sheets);
+            load_data(selector, &json);
+            Ok(())
+        }
+        Err(msg) => Err(JsValue::from_str(&msg)),
+    }
+}
+
 /// Sample data for the standalone demo.
 fn demo_data() -> DataProxy {
     let mut data = DataProxy::new("sheet1");

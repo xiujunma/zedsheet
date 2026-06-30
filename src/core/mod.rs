@@ -14,6 +14,7 @@ pub mod html_util;
 pub mod image;
 pub mod link;
 pub mod merges;
+pub mod ods;
 pub mod outline;
 pub mod pivot;
 pub mod row;
