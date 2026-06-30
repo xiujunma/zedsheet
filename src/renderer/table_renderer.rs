@@ -972,6 +972,47 @@ impl TableRenderer {
     }
 
     /// "Format as Table" over the current selection (issue #34).
+    /// Phase 4.5: convert every cell in the current selection
+    /// to a single-run rich-text cell. The run inherits each
+    /// cell's existing style index so the visual stays the same
+    /// after the conversion; the only change is the cell now
+    /// renders via the runs path. A no-op for an empty
+    /// selection or a read-only sheet.
+    pub fn format_selection_as_rich(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let range = self.data.selector.range.clone();
+        for r in range.sri..=range.eri {
+            for c in range.sci..=range.eci {
+                if let Some(cell) = self.data.get_cell_mut(r, c) {
+                    let style = cell.style;
+                    cell.convert_to_rich(style);
+                }
+            }
+        }
+    }
+
+    /// Phase 4.5: revert every cell in the current selection back
+    /// to the flat \`text\` / \`style\` rendering by dropping
+    /// \`runs\`. The cell text + style index are preserved (the run
+    /// text was a clone of \`text\`), so the visual is identical.
+    pub fn convert_selection_to_plain(&mut self) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let range = self.data.selector.range.clone();
+        for r in range.sri..=range.eri {
+            for c in range.sci..=range.eci {
+                if let Some(cell) = self.data.get_cell_mut(r, c) {
+                    cell.runs = None;
+                }
+            }
+        }
+    }
+
     pub fn format_selection_as_table(&mut self) {
         if self.data.is_read_only() {
             return;

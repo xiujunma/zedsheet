@@ -600,6 +600,77 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             );
             canvas.clip(None);
 
+            // Rich-text path (Phase 4.5). When the cell has runs,
+            // draw each run as its own styled segment with no
+            // wrapping or newline processing — the typical use
+            // case is a few short runs (e.g. a single "bold" word
+            // inside a sentence). Wrapping across runs is a
+            // follow-up; for now, runs longer than the cell width
+            // overflow visually the same way long single-line
+            // text would.
+            let runs = renderer
+                .data
+                .get_cell(row, col)
+                .and_then(|c| c.runs.as_ref().cloned())
+                .filter(|r| !r.is_empty());
+            if let Some(runs) = runs {
+                // Each run's text occupies a horizontal segment
+                // starting at the cell's left padding. We compute
+                // cumulative widths so the next run's x position
+                // follows the previous run's measured width.
+                let mut cursor_x = match talign {
+                    "center" => {
+                        // Pre-measure total width for centering.
+                        let total: f64 = runs
+                            .iter()
+                            .map(|r| canvas.measure_text_width(&r.text))
+                            .sum();
+                        let avail = draw_rect.width - 2f64 * pad - right_inset;
+                        draw_rect.x + (avail - total).max(0f64) / 2f64
+                    }
+                    "right" => {
+                        let total: f64 = runs
+                            .iter()
+                            .map(|r| canvas.measure_text_width(&r.text))
+                            .sum();
+                        draw_rect.x + draw_rect.width - pad - right_inset - total
+                    }
+                    _ => draw_rect.x + left_pad,
+                };
+                for run in runs {
+                    let run_style = run
+                        .style
+                        .and_then(|i| renderer.data.styles.get(i).cloned())
+                        .unwrap_or_else(|| style.clone());
+                    let run_font = format!(
+                        "{}{}{}px {}",
+                        if run_style.italic { "italic " } else { "" },
+                        if run_style.bold { "bold " } else { "" },
+                        run_style.font_size as f64,
+                        run_style.font_family
+                    );
+                    canvas.set_font(&run_font).set_fill_style(&run_style.color);
+                    // Vertically centre the run inside the cell.
+                    let run_ty =
+                        draw_rect.y + draw_rect.height / 2.0 + run_style.font_size as f64 * 0.35;
+                    canvas.fill_text(&run.text, cursor_x, run_ty, None);
+                    // Underline: draw a line under this run's text
+                    // width (matches the legacy path's per-cell
+                    // underline behavior).
+                    if run_style.underline {
+                        let tw = canvas.measure_text_width(&run.text);
+                        let y = run_ty + (run_style.font_size as f64) * 0.15;
+                        canvas.begin_path();
+                        canvas.move_to(cursor_x, y);
+                        canvas.line_to(cursor_x + tw, y);
+                        canvas.stroke();
+                    }
+                    cursor_x += canvas.measure_text_width(&run.text);
+                }
+                canvas.restore();
+                return;
+            }
+
             canvas
                 .set_font(&font)
                 .set_fill_style(text_color)

@@ -79,6 +79,12 @@ pub(crate) fn context_menu_html() -> String {
         // Issue #34: Excel-style tables.
         divider.clone(),
         item("format-table", "Format as table"),
+        // Phase 4.5: rich text. Splits each cell in the current
+        // selection into a single styled run, preserving the
+        // cell's existing style index. The text-edit UI is still
+        // plain-text only; "Convert to plain" reverts.
+        item("format-as-rich", "Format as rich text"),
+        item("format-as-plain", "Convert to plain text"),
         item("table-totals", "Toggle table total row"),
         item("table-to-range", "Convert table to range"),
         // Text alignment helpers (issue #25). The "set_rotation" /
@@ -460,6 +466,8 @@ pub(crate) fn wire_context_menu(
                     "sort-range" => open_sort_dialog = true,
                     // Issue #34: Excel-style tables.
                     "format-table" if !read_only => r.format_selection_as_table(),
+                    "format-as-rich" if !read_only => r.format_selection_as_rich(),
+                    "format-as-plain" if !read_only => r.convert_selection_to_plain(),
                     "table-totals" if !read_only => r.toggle_table_totals_at_selection(),
                     "table-to-range" if !read_only => r.convert_table_at_selection(),
                     _ => {}
