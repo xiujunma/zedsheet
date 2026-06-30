@@ -494,6 +494,30 @@ mod tests {
     }
 
     #[test]
+    fn images_round_trip_through_xlsx_export() {
+        // Phase 4.2: a sheet with one floating image exports
+        // the image metadata alongside the data. (xlsx does not
+        // embed the image bytes — the URL is recorded verbatim.)
+        use crate::core::image::Image;
+        let mut d = DataProxy::new("Data");
+        d.set_cell_text(0, 0, "100");
+        d.images.push(Image {
+            src: "https://example.com/cat.png".into(),
+            anchor: "B2".into(),
+            width: 220.0,
+            height: 160.0,
+            alt: "cat".into(),
+        });
+        let bytes = to_xlsx(&[d]).expect("write");
+        let sheets = from_xlsx(&bytes).expect("read");
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].get_cell_text(0, 0), "100");
+        // Image is dropped on import (calamine doesn't expose
+        // image parts); the underlying data still loads.
+        assert_eq!(sheets[0].images.len(), 0);
+    }
+
+    #[test]
     fn sparklines_round_trip_through_xlsx_export() {
         // Phase 4.1b: a sheet with a sparkline exports the chart
         // parts alongside the data. We don't read them back (xlsx

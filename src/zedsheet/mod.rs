@@ -30,6 +30,8 @@ mod events;
 mod filter_menu;
 mod find_replace;
 mod formula_bar;
+pub(crate) mod image_loader;
+mod image_modal;
 mod pivot_modal;
 mod print;
 mod protect_sheet_modal;
@@ -49,6 +51,8 @@ pub(crate) use events::*;
 pub(crate) use filter_menu::*;
 pub(crate) use find_replace::*;
 pub(crate) use formula_bar::*;
+pub(crate) use image_loader::*;
+pub(crate) use image_modal::*;
 pub(crate) use pivot_modal::*;
 pub(crate) use print::*;
 pub(crate) use protect_sheet_modal::*;
@@ -566,6 +570,8 @@ impl ZedSheet {
         let sort_open: OpenHandle = Rc::new(RefCell::new(None));
         // …and the Protect Sheet dialog (Phase 1.3).
         let protect_open: OpenHandle = Rc::new(RefCell::new(None));
+        // Phase 4.2: image-insert dialog.
+        let image_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -726,6 +732,7 @@ impl ZedSheet {
                 delete_open.clone(),
                 sort_open.clone(),
                 protect_open.clone(),
+                image_open.clone(),
             );
         }
         if let Some(fb) = fbar_node.clone() {
@@ -991,6 +998,37 @@ impl ZedSheet {
                     &sheets_for_open,
                     &active_for_open,
                 );
+            }));
+        }
+
+        // Image-insert dialog (Phase 4.2): mounted hidden at root,
+        // opened by the right-click context menu's "Insert Image…"
+        // item. The handler reads the URL + anchor from the modal's
+        // form fields and appends a new `core::image::Image` to the
+        // active sheet's `DataProxy.images`.
+        let mut image_modal_root = h("div", Some("zs-image-modal-root"));
+        image_modal_root.set_inner_html(image_modal_html());
+        let image_modal_node: Option<web_sys::Element> =
+            image_modal_root.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut image_modal_root);
+        if let Some(ref node) = image_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-image-modal-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_image_modal(inner.clone(), &renderer, &sheets, &active, &sync);
+            let renderer_for_open = renderer.clone();
+            let active_for_open = active.clone();
+            *image_open.borrow_mut() = Some(Rc::new(move || {
+                // Seed the anchor input with the active cell so
+                // most inserts are one click + paste-the-URL.
+                let (ar, ac) = {
+                    let r = renderer_for_open.borrow();
+                    (r.selector.ri, r.selector.ci)
+                };
+                open_image_modal(&inner, (ar, ac));
+                let _ = active_for_open; // (currently unused; reserved for sheet-scoped future work)
             }));
         }
 

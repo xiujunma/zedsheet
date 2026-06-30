@@ -58,6 +58,8 @@ pub(crate) fn context_menu_html() -> String {
         item("condfmt", "Conditional formatting…"),
         // Issue #16: charts dialog.
         item("chart", "Insert chart…"),
+        // Issue #16: image-insert dialog (Phase 4.2).
+        item("image", "Insert Image…"),
         // Issue #35: PivotTable dialog.
         item("pivot", "Insert PivotTable…"),
         // Issue #61: Slicers dialog.
@@ -111,6 +113,7 @@ pub(crate) fn wire_context_menu(
     _delete_open: OpenHandle,
     sort_open: OpenHandle,
     protect_open: OpenHandle,
+    image_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -226,6 +229,7 @@ pub(crate) fn wire_context_menu(
         let sheets = sheets.clone();
         let active = active.clone();
         let protect_open = protect_open.clone();
+        let image_open = image_open.clone();
         let mut menu_el: Element = menu_node.clone().into();
         menu_el.add_event_listener("click", move |event: web_sys::Event| {
             let Some(target) = event.target() else { return };
@@ -283,6 +287,18 @@ pub(crate) fn wire_context_menu(
                 return;
             }
 
+            // Image-insert dialog (Phase 4.2): same open-handle
+            // pattern as the chart / pivot / slicer modals.
+            if cmd == "image" {
+                if let Some(open) = image_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+                return;
+            }
             // Charts dialog (issue #16): same open-handle pattern.
             if cmd == "chart" {
                 if let Some(open) = chart_open.borrow().as_ref() {

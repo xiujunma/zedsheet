@@ -6,6 +6,7 @@ use web_sys::CanvasRenderingContext2d;
 use web_sys::CanvasWindingRule;
 use web_sys::DomMatrix;
 use web_sys::HtmlCanvasElement;
+use web_sys::HtmlImageElement;
 use web_sys::ImageBitmap;
 use web_sys::ImageData;
 use web_sys::TextMetrics;
@@ -401,6 +402,25 @@ impl Canvas {
     pub fn draw_image(&self, image: &ImageBitmap, dx: f64, dy: f64) -> &Self {
         self.ctx
             .draw_image_with_image_bitmap(image, dx, dy)
+            .unwrap();
+        return self;
+    }
+
+    /// Draw a decoded \`HtmlImageElement\` (a \`<img>\` whose
+    /// \`onload\` has fired) into the destination rect
+    /// \`(dx, dy, dw, dh)\`. The browser handles scaling. Used
+    /// by the floating-image renderer (Phase 4.2) to blit each
+    /// image at its anchor cell.
+    pub fn draw_image_html(
+        &self,
+        image: &HtmlImageElement,
+        dx: f64,
+        dy: f64,
+        dw: f64,
+        dh: f64,
+    ) -> &Self {
+        self.ctx
+            .draw_image_with_html_image_element_and_dw_and_dh(image, dx, dy, dw, dh)
             .unwrap();
         return self;
     }

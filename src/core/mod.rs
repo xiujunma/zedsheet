@@ -11,6 +11,7 @@ pub mod date;
 pub mod format;
 pub mod helper;
 pub mod html_util;
+pub mod image;
 pub mod link;
 pub mod merges;
 pub mod outline;

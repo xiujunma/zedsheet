@@ -498,6 +498,43 @@ fn draw_one_sparkline(
     }
 }
 
+/// Render every floating image anchored to a visible cell (Phase 4.2).
+/// Each image is loaded from its `src` URL once on the first frame
+/// and cached in a thread-local keyed by URL; subsequent frames
+/// re-blit the cached `HtmlImageElement` without re-fetching. The
+/// cache itself lives in \`zedsheet::image_loader\`; this function
+/// is just the "ask the loader to ensure the URL is fetched, then
+/// blit" pass.
+pub fn draw_images(canvas: &Canvas, renderer: &TableRenderer) {
+    for image in &renderer.data.images {
+        let (ac, ar) = match crate::renderer::alphabets::exp2xy(&image.anchor) {
+            (c, r) if r < renderer.body_start_row() || c < renderer.body_start_col() => continue,
+            (c, r) => (c, r),
+        };
+        let rect = renderer.cell_screen_rect(ar, ac);
+        if rect.x >= renderer.width || rect.y >= renderer.height {
+            continue;
+        }
+        let src = image.src.trim();
+        if src.is_empty() {
+            continue;
+        }
+        // Fire-and-forget: the first call kicks off the load,
+        // subsequent calls are no-ops. The image appears in the
+        // cache once \`onload\` fires.
+        crate::zedsheet::image_loader::ensure_loaded(src);
+        let Some(html_img) = crate::zedsheet::image_loader::get(src) else {
+            // In-flight or previously-failed; skip this frame.
+            continue;
+        };
+        // The image's anchor sits at the cell's top-left; width /
+        // height come from the model (defaults to a 2×1-cell block).
+        let w = image.width.max(1.0);
+        let h = image.height.max(1.0);
+        canvas.draw_image_html(&html_img, rect.x, rect.y, w, h);
+    }
+}
+
 /// Darken a hex colour string (\"#rrggbb\") by halving each channel
 /// (with a floor to keep the result legible). Used to give the
 /// trendline a darker shade than its series. Pure helper, host-tested.

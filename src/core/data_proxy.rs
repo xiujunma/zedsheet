@@ -237,6 +237,13 @@ pub struct DataProxy {
     /// pre-4.1 workbooks don't include the key in `set_data`, so
     /// the field stays at its default (empty).
     pub sparklines: Vec<crate::core::sparkline::Sparkline>,
+    /// Floating images anchored to single cells (Phase 4.2). Each
+    /// entry has its own URL + anchor + size; the renderer fetches
+    /// the URL once and blits the decoded image at the anchor.
+    /// Empty list = no images. Backward-compat: pre-4.2 workbooks
+    /// don't include the key in `set_data`, so the field stays
+    /// at its default (empty).
+    pub images: Vec<crate::core::image::Image>,
     /// Sheet protection metadata (Phase 1.3). The `enabled` flag mirrors
     /// `read_only` for the data-layer block — when protection is enabled
     /// the UI also sets `read_only = true`. `password_hash` is the
@@ -326,6 +333,7 @@ impl Default for DataProxy {
             pivots: Vec::new(),
             slicers: Vec::new(),
             sparklines: Vec::new(),
+            images: Vec::new(),
             protection: crate::core::sheet_protection::SheetProtection::default(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
@@ -3419,6 +3427,8 @@ impl DataProxy {
             "slicers": serde_json::to_value(&self.slicers).unwrap_or_default(),
             // Inline sparklines (Phase 4.1); absent in pre-4.1 workbooks.
             "sparklines": serde_json::to_value(&self.sparklines).unwrap_or_default(),
+            // Floating images (Phase 4.2); absent in pre-4.2 workbooks.
+            "images": serde_json::to_value(&self.images).unwrap_or_default(),
             // Sheet protection metadata (Phase 1.3).
             "protection": serde_json::to_value(&self.protection).unwrap_or_default(),
             // Excel-style tables (issue #34).
@@ -3555,6 +3565,22 @@ impl DataProxy {
             // Sparklines (Phase 4.1). Absent in pre-4.1 workbooks;
             // `sparklines` stays at its default (empty).
             self.sparklines = sp;
+        }
+        if let Some(imgs) = data
+            .get("images")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            // Floating images (Phase 4.2). Absent in pre-4.2
+            // workbooks; `images` stays at its default (empty).
+            self.images = imgs;
+        }
+        if let Some(imgs) = data
+            .get("images")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            // Floating images (Phase 4.2). Absent in pre-4.2
+            // workbooks; `images` stays at its default (empty).
+            self.images = imgs;
         }
         if let Some(ts) = data
             .get("tables")

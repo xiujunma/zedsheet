@@ -1195,6 +1195,11 @@ pub fn render(renderer: &TableRenderer) {
         // pass is the only safe spot — headers drawn after this
         // would cover the overlay.
         crate::renderer::chart_render::draw_sparklines(&canvas, renderer);
+        // Floating images (Phase 4.2) blit after the body but
+        // before the headers so column / row headers cover any
+        // overflow at the image's edges. Each image is loaded
+        // from its src URL once and cached for subsequent frames.
+        crate::renderer::chart_render::draw_images(&canvas, renderer);
 
         // Column headers span the frozen + body columns; row headers span the
         // frozen + body rows. area4 covers the common (no-freeze) case.
