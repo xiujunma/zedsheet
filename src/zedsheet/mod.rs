@@ -227,7 +227,14 @@ impl ZedSheet {
 
         // Toolbar dropdown menus (format / font / fontsize).
         let mut dropdown_nodes: Vec<(String, web_sys::Element, DdKind, &'static str)> = Vec::new();
-        let dropdowns: [(&str, DdKind, &'static str, &str, Vec<(&str, &str)>); 4] = [
+        type DropdownEntry = (
+            &'static str,
+            DdKind,
+            &'static str,
+            &'static str,
+            Vec<(&'static str, &'static str)>,
+        );
+        let dropdowns: [DropdownEntry; 4] = [
             (
                 "dd-format",
                 DdKind::Format,

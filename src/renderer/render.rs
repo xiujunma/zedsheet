@@ -686,7 +686,7 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                         .and_then(|i| renderer.data.styles.get(i).cloned())
                         .unwrap_or_else(|| style.clone());
                     let run_text = run.text.clone();
-                    let align_str: &str = &compute_align(run);
+
                     // Wrap when text_wrap is on AND a single-line
                     // run wouldn't fit. Word boundary is the last
                     // whitespace within the available width.
@@ -728,11 +728,7 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                             }
                         }
                     }
-                    let line_count = segments.len();
-                    let total_width: f64 =
-                        segments.iter().map(|s| canvas.measure_text_width(s)).sum();
-                    let align_str: &str = &compute_align(run);
-                    let (mut cursor_x, mut cursor_y) = match align_str {
+                    let (mut cursor_x, mut cursor_y) = match compute_align(run).as_str() {
                         "center" => {
                             let line_w = canvas.measure_text_width(
                                 segments.first().map(|s| s.as_str()).unwrap_or(""),
@@ -804,8 +800,6 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                                             // visual context; no-op)
                         }
                     }
-                    let _ = total_width; // (referenced for
-                                         // context; no-op)
                 }
                 canvas.restore();
                 return;

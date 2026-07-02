@@ -2632,7 +2632,7 @@ impl DataProxy {
         }
         blocks.push((bs, r1, key));
         let mut off = 0usize;
-        for (s0, e0, k) in blocks.into_iter() {
+        for (idx, (s0, e0, k)) in blocks.iter().enumerate() {
             let (s, e) = (s0 + off, e0 + off);
             self.insert_row(e + 1, 1);
             self.set_cell_text(e + 1, c0, &format!("{} Total", k));
@@ -2649,7 +2649,7 @@ impl DataProxy {
                 }
             }
             self.add_row_group(s, e);
-            off += 1;
+            off = idx + 1;
         }
     }
 
@@ -4741,7 +4741,8 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             if args.len() <= pairs_from || !(args.len() - pairs_from).is_multiple_of(2) {
                 return Err(EvalErr::Value);
             }
-            let pairs: Vec<(Vec<Value>, Box<dyn Fn(&Value) -> bool>)> = (pairs_from..args.len())
+            type Criterion = Box<dyn Fn(&Value) -> bool>;
+            let pairs: Vec<(Vec<Value>, Criterion)> = (pairs_from..args.len())
                 .step_by(2)
                 .map(|k| (args[k].cells(), criteria_matcher(&scalar(k + 1))))
                 .collect();
