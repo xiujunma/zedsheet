@@ -469,6 +469,18 @@ impl DataProxy {
         }
         self.mark_spills_dirty();
         let cell = self.get_cell_or_new(ri, ci);
+        // Phase 4.5b inline-edit: when the user types into the
+        // formula bar of a rich-text cell, decide whether to keep
+        // the per-run styling. If the new text matches the
+        // joined run text (case-insensitive, trim), the run
+        // structure is still meaningful. Otherwise, drop runs
+        // and re-render as plain.
+        if let Some(runs) = cell.runs.as_ref() {
+            let joined: String = runs.iter().map(|r| r.text.as_str()).collect();
+            if !joined.eq_ignore_ascii_case(text.trim()) {
+                cell.runs = None;
+            }
+        }
         cell.set_text(text);
     }
 

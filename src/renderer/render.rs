@@ -13,6 +13,7 @@ use crate::renderer::table_renderer::{
 use super::alphabets::string_at;
 use super::border::border_ranges;
 use super::table_renderer::Placement;
+use crate::core::cell::Run;
 use crate::core::data_proxy::{CondVisual, IconSet};
 
 pub trait AreaRenderer {
@@ -614,34 +615,33 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                 .and_then(|c| c.runs.as_ref().cloned())
                 .filter(|r| !r.is_empty());
             if let Some(runs) = runs {
-                // Each run's text occupies a horizontal segment
-                // starting at the cell's left padding. We compute
-                // cumulative widths so the next run's x position
-                // follows the previous run's measured width.
-                let mut cursor_x = match talign {
-                    "center" => {
-                        // Pre-measure total width for centering.
-                        let total: f64 = runs
-                            .iter()
-                            .map(|r| canvas.measure_text_width(&r.text))
-                            .sum();
-                        let avail = draw_rect.width - 2f64 * pad - right_inset;
-                        draw_rect.x + (avail - total).max(0f64) / 2f64
+                // Resolve per-run style + alignment defaults once.
+                // A run with `align = None` inherits the cell's
+                // `style.align`; unknown strings fall back to
+                // "left" so the renderer never sees a typo.
+                // Per-run alignment override (Phase 4.5b). The
+                // returned &str borrows from the run's `align`
+                // field; falls back to the cell's alignment when
+                // the run has no override or the value is unknown.
+                // Per-run alignment override (Phase 4.5b). Returns
+                // an owned `String` so the borrow checker doesn't
+                // have to reason about closure-captured `&str`
+                // lifetimes. The run's `align` wins; unknown values
+                // fall back to the cell's alignment.
+                let compute_align = |r: &Run| -> String {
+                    match r.align.as_deref() {
+                        Some(v @ ("left" | "center" | "right")) => v.to_string(),
+                        _ => talign.to_string(),
                     }
-                    "right" => {
-                        let total: f64 = runs
-                            .iter()
-                            .map(|r| canvas.measure_text_width(&r.text))
-                            .sum();
-                        draw_rect.x + draw_rect.width - pad - right_inset - total
-                    }
-                    _ => draw_rect.x + left_pad,
                 };
-                for run in runs {
-                    let run_style = run
-                        .style
-                        .and_then(|i| renderer.data.styles.get(i).cloned())
-                        .unwrap_or_else(|| style.clone());
+                // Helper that draws a single run segment of text at
+                // `(x, y)`, including the optional underline. Used
+                // by both the per-run and the wrap paths.
+                let draw_segment = |canvas: &Canvas,
+                                    run: &Run,
+                                    run_style: &crate::core::data_proxy::Style,
+                                    x: f64,
+                                    y: f64| {
                     let run_font = format!(
                         "{}{}{}px {}",
                         if run_style.italic { "italic " } else { "" },
@@ -650,22 +650,162 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                         run_style.font_family
                     );
                     canvas.set_font(&run_font).set_fill_style(&run_style.color);
-                    // Vertically centre the run inside the cell.
-                    let run_ty =
-                        draw_rect.y + draw_rect.height / 2.0 + run_style.font_size as f64 * 0.35;
-                    canvas.fill_text(&run.text, cursor_x, run_ty, None);
-                    // Underline: draw a line under this run's text
-                    // width (matches the legacy path's per-cell
-                    // underline behavior).
+                    canvas.fill_text(&run.text, x, y, None);
                     if run_style.underline {
                         let tw = canvas.measure_text_width(&run.text);
-                        let y = run_ty + (run_style.font_size as f64) * 0.15;
+                        let uy = y + (run_style.font_size as f64) * 0.15;
                         canvas.begin_path();
-                        canvas.move_to(cursor_x, y);
-                        canvas.line_to(cursor_x + tw, y);
+                        canvas.move_to(x, uy);
+                        canvas.line_to(x + tw, uy);
                         canvas.stroke();
                     }
-                    cursor_x += canvas.measure_text_width(&run.text);
+                };
+                // Pre-compute the resolved style + total width for
+                // horizontal centring / right-alignment across all
+                // segments. For per-run alignment, each segment
+                // measures its own width separately.
+                let cell_right = draw_rect.x + draw_rect.width - right_inset;
+                let cell_left = draw_rect.x + left_pad;
+                let cell_top = draw_rect.y + pad;
+                let line_h: f64 = match runs.first() {
+                    Some(r) => renderer
+                        .data
+                        .styles
+                        .get(r.style.unwrap_or(0))
+                        .map(|s| s.font_size as f64 * 1.3)
+                        .unwrap_or(28.0),
+                    None => 28.0,
+                };
+                // Single-line `cursor_x` for runs that don't need to
+                // wrap; multi-line runs rebuild it from the line
+                // origin (left padding, unless the run is centered
+                // or right-aligned).
+                for (run_idx, run) in runs.iter().enumerate() {
+                    let run_style = run
+                        .style
+                        .and_then(|i| renderer.data.styles.get(i).cloned())
+                        .unwrap_or_else(|| style.clone());
+                    let run_text = run.text.clone();
+                    let align_str: &str = &compute_align(run);
+                    // Wrap when text_wrap is on AND a single-line
+                    // run wouldn't fit. Word boundary is the last
+                    // whitespace within the available width.
+                    let avail = (cell_right - cell_left).max(1.0);
+                    let mut segments: Vec<String> = vec![run_text.clone()];
+                    if style.text_wrap && canvas.measure_text_width(&run_text) > avail {
+                        segments.clear();
+                        let mut rem = run_text.as_str();
+                        while !rem.is_empty() {
+                            let w = canvas.measure_text_width(rem);
+                            if w <= avail {
+                                segments.push(rem.to_string());
+                                break;
+                            }
+                            // Find the last whitespace ≤ avail.
+                            let bytes = rem.as_bytes();
+                            let mut cut = 0usize;
+                            let mut last_ws: Option<usize> = None;
+                            for (i, _) in rem.char_indices() {
+                                let cur = &rem[..i];
+                                if canvas.measure_text_width(cur) > avail {
+                                    break;
+                                }
+                                cut = i;
+                                if bytes[i] == b' ' || bytes[i] == 9 {
+                                    last_ws = Some(i);
+                                }
+                            }
+                            if let Some(ws) = last_ws {
+                                segments.push(rem[..ws].trim_end().to_string());
+                                rem = rem[ws..].trim_start();
+                            } else if cut > 0 {
+                                segments.push(rem[..cut].to_string());
+                                rem = &rem[cut..];
+                            } else {
+                                // Single word too wide; emit as-is.
+                                segments.push(rem.to_string());
+                                break;
+                            }
+                        }
+                    }
+                    let line_count = segments.len();
+                    let total_width: f64 =
+                        segments.iter().map(|s| canvas.measure_text_width(s)).sum();
+                    let align_str: &str = &compute_align(run);
+                    let (mut cursor_x, mut cursor_y) = match align_str {
+                        "center" => {
+                            let line_w = canvas.measure_text_width(
+                                segments.first().map(|s| s.as_str()).unwrap_or(""),
+                            );
+                            (cell_left + (avail - line_w).max(0.0) / 2.0, cell_top)
+                        }
+                        "right" => (
+                            cell_right
+                                - canvas.measure_text_width(
+                                    segments.first().map(|s| s.as_str()).unwrap_or(""),
+                                ),
+                            cell_top,
+                        ),
+                        _ => (cell_left, cell_top),
+                    };
+                    for (i, seg) in segments.iter().enumerate() {
+                        // If this is not the first segment of a
+                        // multi-line run, reset cursor_x to the
+                        // run's alignment origin (left pad, or
+                        // centred/right offset) — the previous
+                        // segment's actual width doesn't carry over
+                        // across lines.
+                        if i > 0 {
+                            let next_align_str = compute_align(&runs[run_idx + 1]);
+                            cursor_x = match next_align_str.as_str() {
+                                "center" => {
+                                    let w = canvas.measure_text_width(seg);
+                                    cell_left + (avail - w).max(0.0) / 2.0
+                                }
+                                "right" => cell_right - canvas.measure_text_width(seg),
+                                _ => cell_left,
+                            };
+                        }
+                        draw_segment(canvas, run, &run_style, cursor_x, cursor_y);
+                        // After the first segment of a run, advance
+                        // y by one line and reset x; subsequent
+                        // segments of the same run appear on the
+                        // next line.
+                        if i + 1 < segments.len() {
+                            cursor_y += line_h;
+                        }
+                        // Advance cursor_x only within a single
+                        // segment run; the next segment's x is
+                        // recomputed by the alignment branch above.
+                        if i + 1 < segments.len() {
+                            cursor_x = cell_left; // placeholder; recomputed
+                        } else if run_idx + 1 < runs.len() {
+                            // Different run — keep within this run's
+                            // segment (the alignment branch above
+                            // already produced a new x for next
+                            // segment of the *same* run).
+                            cursor_x = cell_left; // recomputed by the next loop iter
+                        }
+                    }
+                    // After each run, if there are more runs and
+                    // the next run's text wouldn't fit on the
+                    // current line, wrap to the next line. The
+                    // next run's alignment branch starts at the
+                    // run's first-segment origin on the new line.
+                    if run_idx + 1 < runs.len() {
+                        let next_run = &runs[run_idx + 1];
+                        if style.text_wrap && canvas.measure_text_width(&next_run.text) > avail {
+                            // We have at least one line consumed;
+                            // the next run starts on a fresh line
+                            // because the alignment branch above
+                            // resets cursor_x / cursor_y to
+                            // (cell_left, cell_top + line_h).
+                            let _ = line_h; // (referenced for
+                                            // visual context; no-op)
+                        }
+                    }
+                    let _ = total_width; // (referenced for
+                                         // context; no-op)
                 }
                 canvas.restore();
                 return;

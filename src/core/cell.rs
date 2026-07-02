@@ -15,6 +15,15 @@ pub struct Run {
     /// formatting the cell had before being split into runs).
     #[serde(default)]
     pub style: Option<usize>,
+    /// Per-run text alignment override (Phase 4.5b). `None`
+    /// means "inherit the cell's alignment" (the most common
+    /// case — most rich-text uses one alignment for the whole
+    /// cell). Allowed values: `"left"`, `"center"`, `"right"`.
+    /// Stored as a `String` to mirror the existing `Style::align`
+    /// field; values outside the three are treated as `None` at
+    /// render time.
+    #[serde(default)]
+    pub align: Option<String>,
 }
 
 impl Run {
@@ -22,12 +31,14 @@ impl Run {
         Self {
             text: text.to_string(),
             style: None,
+            align: None,
         }
     }
     pub fn with_style(text: &str, style: usize) -> Self {
         Self {
             text: text.to_string(),
             style: Some(style),
+            align: None,
         }
     }
 }
@@ -98,6 +109,7 @@ impl Cell {
         self.runs = Some(vec![Run {
             text: self.text.clone(),
             style,
+            align: None,
         }]);
     }
 
@@ -131,13 +143,16 @@ mod tests {
     #[test]
     fn run_serde_round_trip() {
         for style in [None, Some(0), Some(42)] {
-            let r = Run {
-                text: "hello".into(),
-                style,
-            };
-            let json = serde_json::to_value(&r).unwrap();
-            let back = serde_json::from_value(json).unwrap();
-            assert_eq!(r, back);
+            for align in [None, Some("left".to_string()), Some("right".to_string())] {
+                let r = Run {
+                    text: "hello".into(),
+                    style,
+                    align: align.clone(),
+                };
+                let json = serde_json::to_value(&r).unwrap();
+                let back = serde_json::from_value(json).unwrap();
+                assert_eq!(r, back);
+            }
         }
     }
 
@@ -201,6 +216,46 @@ mod tests {
         assert_eq!(runs[0].style, None);
         assert_eq!(runs[1].text, "bold");
         assert_eq!(runs[1].style, Some(1));
+    }
+
+    #[test]
+    fn inline_edit_keeps_runs_when_text_matches() {
+        // Phase 4.5b: when set_cell_text receives a value that
+        // matches the joined run text (case-insensitive, trimmed),
+        // the run structure is preserved. This is the "user didn't
+        // really edit" path — the formula bar put back the same
+        // text the runs already represented.
+        use crate::core::data_proxy::DataProxy;
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "hello world");
+        // Convert to a single styled run.
+        d.get_cell_mut(0, 0).unwrap().convert_to_rich(Some(0));
+        // The form bar's read-then-write-back cycle sends back
+        // the same text. Since the joined run text is "hello
+        // world" too, runs should be kept.
+        d.set_cell_text(0, 0, "  hello world  ");
+        let c = d.get_cell(0, 0).unwrap();
+        assert!(
+            c.runs.is_some(),
+            "runs preserved when text matches joined run text"
+        );
+    }
+
+    #[test]
+    fn inline_edit_drops_runs_when_text_changes() {
+        // Phase 4.5b: when the new text differs from the
+        // joined run text, runs are dropped — the user's plain
+        // text wins over the rich-text structure. Re-rendering
+        // uses the flat path with the new text.
+        use crate::core::data_proxy::DataProxy;
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "hello");
+        d.get_cell_mut(0, 0).unwrap().convert_to_rich(Some(0));
+        d.set_cell_text(0, 0, "goodbye");
+        let c = d.get_cell(0, 0).unwrap();
+        assert!(c.runs.is_none(), "runs dropped when text changes");
+        // The flat text is the new value.
+        assert_eq!(c.text, "goodbye");
     }
 
     #[test]
