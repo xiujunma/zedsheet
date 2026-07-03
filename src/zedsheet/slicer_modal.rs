@@ -911,7 +911,7 @@ mod tests {
         // Manually verify: the encoded form, dropped into
         // <span data-value="ENCODED">, would parse back to the original
         // by any browser's HTML attribute decoder.
-        assert!(format!("<span data-value=\"{}\">", encoded).len() > 0);
+        assert!(!format!("<span data-value=\"{}\">", encoded).is_empty());
 
         // Round-trip: decode the entities back and compare to the
         // input. This is the contract the chip click handler relies on.

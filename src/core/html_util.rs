@@ -67,9 +67,11 @@ mod tests {
 
     #[test]
     fn td_style_emits_only_non_default_properties() {
-        let mut s = Style::default();
-        s.bold = true;
-        s.color = "#ff0000".into();
+        let s = Style {
+            bold: true,
+            color: "#ff0000".into(),
+            ..Style::default()
+        };
         let css = td_style(&s);
         assert!(css.contains("font-weight:bold;"));
         assert!(css.contains("color:#ff0000;"));

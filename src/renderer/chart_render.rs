@@ -695,47 +695,6 @@ fn draw_combo_chart(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn darken_halves_each_channel() {
-        // Halve 0x10 → 0x08, floor to 0x08 + 32 = 0x28.
-        assert_eq!(darken("#101010"), "#282828");
-        // 0xff / 2 + 32 = 0x7f + 0x20 = 0x9f.
-        assert_eq!(darken("#ffffff"), "#9f9f9f");
-        // 0x80 / 2 + 32 = 0x40 + 0x20 = 0x60.
-        assert_eq!(darken("#808080"), "#606060");
-    }
-
-    #[test]
-    fn darken_falls_back_to_default_on_invalid_input() {
-        assert_eq!(darken("not-a-color"), "#333333");
-        assert_eq!(darken(""), "#333333");
-        assert_eq!(darken("#abc"), "#333333"); // wrong length
-    }
-
-    #[test]
-    fn with_alpha_produces_rgba() {
-        assert_eq!(with_alpha("#1e88e5", 0.25), "rgba(30,136,229,0.25)");
-        assert_eq!(with_alpha("#ffffff", 0.5), "rgba(255,255,255,0.5)");
-        assert_eq!(with_alpha("#000000", 1.0), "rgba(0,0,0,1)");
-    }
-
-    #[test]
-    fn with_alpha_clamps_alpha() {
-        assert_eq!(with_alpha("#ffffff", 2.0), "rgba(255,255,255,1)");
-        assert_eq!(with_alpha("#ffffff", -0.5), "rgba(255,255,255,0)");
-    }
-
-    #[test]
-    fn with_alpha_falls_back_on_invalid_hex() {
-        assert_eq!(with_alpha("not-a-color", 0.3), "rgba(128,128,128,0.3)");
-        assert_eq!(with_alpha("#abc", 0.3), "rgba(128,128,128,0.3)");
-    }
-}
-
 /// Radar / spider chart (Phase 2.1b). One polygon per series, with
 /// the categories evenly spaced around a circle. The polygon's
 /// vertices are placed at the angle for each category, with the
@@ -965,5 +924,46 @@ fn format_tick(v: f64) -> String {
         format!("{}", v as i64)
     } else {
         format!("{:.1}", v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn darken_halves_each_channel() {
+        // Halve 0x10 → 0x08, floor to 0x08 + 32 = 0x28.
+        assert_eq!(darken("#101010"), "#282828");
+        // 0xff / 2 + 32 = 0x7f + 0x20 = 0x9f.
+        assert_eq!(darken("#ffffff"), "#9f9f9f");
+        // 0x80 / 2 + 32 = 0x40 + 0x20 = 0x60.
+        assert_eq!(darken("#808080"), "#606060");
+    }
+
+    #[test]
+    fn darken_falls_back_to_default_on_invalid_input() {
+        assert_eq!(darken("not-a-color"), "#333333");
+        assert_eq!(darken(""), "#333333");
+        assert_eq!(darken("#abc"), "#333333"); // wrong length
+    }
+
+    #[test]
+    fn with_alpha_produces_rgba() {
+        assert_eq!(with_alpha("#1e88e5", 0.25), "rgba(30,136,229,0.25)");
+        assert_eq!(with_alpha("#ffffff", 0.5), "rgba(255,255,255,0.5)");
+        assert_eq!(with_alpha("#000000", 1.0), "rgba(0,0,0,1)");
+    }
+
+    #[test]
+    fn with_alpha_clamps_alpha() {
+        assert_eq!(with_alpha("#ffffff", 2.0), "rgba(255,255,255,1)");
+        assert_eq!(with_alpha("#ffffff", -0.5), "rgba(255,255,255,0)");
+    }
+
+    #[test]
+    fn with_alpha_falls_back_on_invalid_hex() {
+        assert_eq!(with_alpha("not-a-color", 0.3), "rgba(128,128,128,0.3)");
+        assert_eq!(with_alpha("#abc", 0.3), "rgba(128,128,128,0.3)");
     }
 }

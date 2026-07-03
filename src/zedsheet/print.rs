@@ -220,8 +220,10 @@ mod tests {
     fn print_html_applies_styles_and_cond_formats() {
         let mut d = DataProxy::new("t");
         d.set_cell_text(0, 0, "200");
-        let mut bold = Style::default();
-        bold.bold = true;
+        let bold = Style {
+            bold: true,
+            ..Style::default()
+        };
         let idx = d.add_style(bold);
         d.set_cell_style(0, 0, idx);
         d.cond_formats.push(crate::core::cond_format::CondRule {

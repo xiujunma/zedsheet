@@ -6061,13 +6061,15 @@ mod tests {
     fn add_style_distinguishes_border() {
         let mut d = DataProxy::new("t");
         let plain_idx = d.add_style(Style::default());
-        let mut bordered = Style::default();
-        bordered.border = Some(Border {
-            left: None,
-            right: None,
-            top: Some(("thin".to_string(), "#000000".to_string())),
-            bottom: None,
-        });
+        let bordered = Style {
+            border: Some(Border {
+                left: None,
+                right: None,
+                top: Some(("thin".to_string(), "#000000".to_string())),
+                bottom: None,
+            }),
+            ..Style::default()
+        };
         let bordered_idx = d.add_style(bordered);
         assert_ne!(
             plain_idx, bordered_idx,
@@ -6760,8 +6762,10 @@ mod tests {
     fn cond_format_matches_raw_value_not_formatted_display() {
         let mut d = DataProxy::new("t");
         d.set_cell_text(0, 0, "1234.5");
-        let mut usd = Style::default();
-        usd.format = "usd".to_string();
+        let usd = Style {
+            format: "usd".to_string(),
+            ..Style::default()
+        };
         let idx = d.add_style(usd);
         d.set_cell_style(0, 0, idx);
         assert_eq!(d.cell_display_value(0, 0), "$1,234.50"); // formatted
@@ -7410,10 +7414,12 @@ mod tests {
     fn style_serde_round_trip_with_new_fields() {
         // Issue #25: the new fields must serialize and deserialize so
         // xlsx-style saved data stays loadable.
-        let mut s = Style::default();
-        s.rotation = Some(45.0);
-        s.shrink_to_fit = true;
-        s.indent = 17;
+        let s = Style {
+            rotation: Some(45.0),
+            shrink_to_fit: true,
+            indent: 17,
+            ..Style::default()
+        };
         let json = serde_json::to_string(&s).unwrap();
         let back: Style = serde_json::from_str(&json).unwrap();
         assert_eq!(back.rotation, Some(45.0));
@@ -7617,8 +7623,10 @@ mod tests {
         d.cond_formats.push(rule);
         (0..5)
             .map(|r| {
-                let mut s = Style::default();
-                s.bgcolor = None;
+                let mut s = Style {
+                    bgcolor: None,
+                    ..Style::default()
+                };
                 d.apply_cond_format(r, 1, &mut s);
                 s.bgcolor
             })
@@ -8341,8 +8349,10 @@ mod tests {
         d.apply_table_style(2, 0, &mut s2);
         assert_eq!(s2.bgcolor.as_deref(), Some("#d9e1f2"));
         // An explicit fill on a banded row survives.
-        let mut s3 = Style::default();
-        s3.bgcolor = Some("#ff0000".to_string());
+        let mut s3 = Style {
+            bgcolor: Some("#ff0000".to_string()),
+            ..Style::default()
+        };
         d.apply_table_style(2, 0, &mut s3);
         assert_eq!(s3.bgcolor.as_deref(), Some("#ff0000"));
         // Outside the table: untouched.
@@ -8487,8 +8497,7 @@ mod tests {
 
     #[test]
     fn rank_eq_descending() {
-        let data = [10.0, 7.0, 8.0, 9.0]; // rank of 7 → 4th (10=1, 9=2, 8=3, 7=4)
-                                          // RANK.EQ expects [value, data...] in flattened args
+        // rank of 7 → 4th (10=1, 9=2, 8=3, 7=4); RANK.EQ expects [value, data...] in flattened args
         let all = [7.0, 10.0, 7.0, 8.0, 9.0];
         let r = rank_eq(&all, 7.0);
         assert!((r - 4.0).abs() < 0.01);

@@ -597,7 +597,7 @@ mod tests {
         // linear pattern rejects it instantly.
         let v = Validator::new("email", false, "", "");
         let evil = format!("{}!", "a.".repeat(30));
-        assert_eq!(v.validate(&evil).0, false);
+        assert!(!v.validate(&evil).0);
     }
 
     // --- numeric operators ---

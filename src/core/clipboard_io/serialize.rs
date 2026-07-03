@@ -167,8 +167,10 @@ mod tests {
     fn html_inlines_styles() {
         let mut d = DataProxy::new("t");
         d.set_cell_text(0, 0, "x");
-        let mut bold = Style::default();
-        bold.bold = true;
+        let bold = Style {
+            bold: true,
+            ..Style::default()
+        };
         let idx = d.add_style(bold);
         d.set_cell_style(0, 0, idx);
         let html = to_html(&d, &range(0, 0, 0, 0), 1);

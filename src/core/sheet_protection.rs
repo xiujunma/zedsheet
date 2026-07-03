@@ -137,15 +137,19 @@ mod tests {
 
     #[test]
     fn verify_with_correct_password_returns_true() {
-        let mut p = SheetProtection::default();
-        p.password_hash = Some(SheetProtection::hash_password("secret"));
+        let p = SheetProtection {
+            password_hash: Some(SheetProtection::hash_password("secret")),
+            ..SheetProtection::default()
+        };
         assert!(p.verify("secret"));
     }
 
     #[test]
     fn verify_with_wrong_password_returns_false() {
-        let mut p = SheetProtection::default();
-        p.password_hash = Some(SheetProtection::hash_password("secret"));
+        let p = SheetProtection {
+            password_hash: Some(SheetProtection::hash_password("secret")),
+            ..SheetProtection::default()
+        };
         assert!(!p.verify("Secret")); // case-sensitive
         assert!(!p.verify("secre"));
         assert!(!p.verify("secret ")); // trailing space

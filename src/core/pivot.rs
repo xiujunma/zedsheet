@@ -2250,7 +2250,7 @@ mod tests {
     fn slicer_composes_with_filter_field() {
         // A page-level FilterField (issue #58) AND a slicer (issue #61)
         // both apply: the row must pass both to be aggregated.
-        let (mut src, mut p) = pt_sliced("S!A1:B5", 1, Agg::Sum, 0, vec!["North", "South"]);
+        let (src, mut p) = pt_sliced("S!A1:B5", 1, Agg::Sum, 0, vec!["North", "South"]);
         // Add a filter that only allows Amount ∈ {20, 30}.
         p.filter_fields.push(FilterField {
             field_idx: 1, // Amount column
