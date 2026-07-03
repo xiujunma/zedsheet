@@ -452,16 +452,16 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
                             canvas
                                 .set_fill_style(color)
                                 .begin_path()
-                                .ellipse(
-                                    cx,
-                                    cy,
-                                    s / 2.0,
-                                    s / 2.0,
-                                    0.0,
-                                    0.0,
-                                    std::f64::consts::TAU,
-                                    None,
-                                )
+                                .ellipse(crate::renderer::canvas::EllipseArgs {
+                                    x: cx,
+                                    y: cy,
+                                    radius_x: s / 2.0,
+                                    radius_y: s / 2.0,
+                                    rotation: 0.0,
+                                    start_angle: 0.0,
+                                    end_angle: std::f64::consts::TAU,
+                                    counterclockwise: None,
+                                })
                                 .fill(None);
                         }
                         IconSet::Arrows => {

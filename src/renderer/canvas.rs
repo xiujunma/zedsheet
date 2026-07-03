@@ -87,6 +87,21 @@ pub struct Canvas {
     scale: f64,
 }
 
+/// Params for [`Canvas::ellipse`]. Bundled into a struct
+/// to keep the method under the project’s 7-arg clippy
+/// ceiling — the underlying wasm-bindgen call has 8 parameters
+/// (the optional counterclockwise flag is the 8th).
+pub struct EllipseArgs {
+    pub x: f64,
+    pub y: f64,
+    pub radius_x: f64,
+    pub radius_y: f64,
+    pub rotation: f64,
+    pub start_angle: f64,
+    pub end_angle: f64,
+    pub counterclockwise: Option<bool>,
+}
+
 impl Canvas {
     pub fn new(target: HtmlCanvasElement, scale: f64) -> Self {
         let ctx: CanvasRenderingContext2d = target
@@ -282,17 +297,17 @@ impl Canvas {
         self
     }
 
-    pub fn ellipse(
-        &self,
-        x: f64,
-        y: f64,
-        radius_x: f64,
-        radius_y: f64,
-        rotation: f64,
-        start_angle: f64,
-        end_angle: f64,
-        counterclockwise: Option<bool>,
-    ) -> &Self {
+    pub fn ellipse(&self, a: EllipseArgs) -> &Self {
+        let EllipseArgs {
+            x,
+            y,
+            radius_x,
+            radius_y,
+            rotation,
+            start_angle,
+            end_angle,
+            counterclockwise,
+        } = a;
         if let Some(counterclockwise) = counterclockwise {
             self.ctx
                 .ellipse_with_anticlockwise(
