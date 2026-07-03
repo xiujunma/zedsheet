@@ -104,6 +104,7 @@ pub(crate) fn context_menu_html() -> String {
 
 /// Wire the right-click context menu: open on canvas contextmenu, run the
 /// chosen command, and close on outside click.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_context_menu(
     canvas_el: &mut Element,
     menu_node: web_sys::Element,

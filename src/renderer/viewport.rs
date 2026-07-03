@@ -14,6 +14,7 @@ pub struct Viewport {
 }
 
 impl Viewport {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         data: DataProxy,
         freeze: (usize, usize),

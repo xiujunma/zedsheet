@@ -21,7 +21,7 @@ pub fn border_ranges(
     let mut ret: Vec<(Range, Rect, BorderType)> = vec![];
 
     if border_range.intersects(&area.range) || !intersect_merges.is_empty() {
-        if intersect_merges.len() <= 0 {
+        if intersect_merges.is_empty() {
             ret.push((border_range, area.rect(&border_range), border_type));
         } else {
             for merge in &intersect_merges {

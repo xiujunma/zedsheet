@@ -108,6 +108,7 @@ impl Editor {
         self.container = Some(container);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_edit(
         &mut self,
         ri: usize,

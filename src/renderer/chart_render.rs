@@ -126,6 +126,7 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
 ///
 /// When `trendline` is set, one fitted curve is drawn over each series
 /// after the body (Phase 1.2).
+#[allow(clippy::too_many_arguments)]
 fn draw_axes_chart(
     canvas: &Canvas,
     px: f64,
@@ -587,6 +588,7 @@ fn with_alpha(hex: &str, alpha: f64) -> String {
 /// secondary line is the second axis already, and overlaying a
 /// fitted curve on top of an axis that already has its own series
 /// is busy enough without trend lines.
+#[allow(clippy::too_many_arguments)]
 fn draw_combo_chart(
     canvas: &Canvas,
     px: f64,

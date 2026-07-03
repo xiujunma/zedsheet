@@ -210,6 +210,7 @@ pub fn render_cell_grid_line(canvas: &Canvas, gridline: &Gridline, rect: &Rect) 
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_border(
     canvas: &Canvas,
     area: &Area,
@@ -351,6 +352,7 @@ pub fn render_borders(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_scrollbar(
     canvas: &Canvas,
     x: f64,

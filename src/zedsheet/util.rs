@@ -239,6 +239,7 @@ pub(crate) fn slicer_drag_position(
 /// New panel size from a drag-start snapshot and the current pointer
 /// position, clamped to the per-axis minimums. No maximum — overflow
 /// past the viewport is allowed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn slicer_resize_size(
     start_panel_w: f64,
     start_panel_h: f64,

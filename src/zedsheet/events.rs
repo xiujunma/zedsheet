@@ -9,6 +9,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlTextAreaElement, KeyboardEvent, MouseEvent, WheelEvent};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_events(
     canvas_el: &mut Element,
     renderer: &SharedRenderer,

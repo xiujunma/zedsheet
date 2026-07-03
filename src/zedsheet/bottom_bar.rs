@@ -56,6 +56,7 @@ pub(crate) fn switch_sheet(
 /// pending edit FIRST: `commit_edit` writes through the renderer's current
 /// data, so an unreconciled commit after the swap would land the value on
 /// the wrong sheet.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_bottombar(
     menu_el: Element,
     mut add_el: Element,

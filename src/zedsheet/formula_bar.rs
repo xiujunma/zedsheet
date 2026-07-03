@@ -241,6 +241,7 @@ fn wire_autocomplete(input: &HtmlInputElement) {
 
 /// Wire the formula bar: name box navigates, the input edits the active cell,
 /// and the fx picker inserts a function template.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_formula_bar(
     fbar: web_sys::Element,
     renderer: &SharedRenderer,

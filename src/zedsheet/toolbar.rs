@@ -70,6 +70,7 @@ pub(crate) fn wire_tooltip(toolbar: web_sys::Element, tooltip: web_sys::Element)
 
 /// Delegated click handler on the toolbar: maps a button's `data-action` to a
 /// renderer mutation and re-renders. Color buttons open the palette instead.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_toolbar(
     toolbar_el: &mut Element,
     renderer: &SharedRenderer,
