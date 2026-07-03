@@ -195,16 +195,9 @@ impl Canvas {
     }
 
     pub fn set_line_dash(&self, segments: &[f64]) -> &Self {
-        // \`Float64Array::new_with_length\` + \`set_index\` is
-        // the most reliable path on every js_sys version; the
-        // \`Array::from_iter\` + \`into()\` shim needs private
-        // \`JsValue\` plumbing that's not exported on older
-        // js_sys releases.
-        let segments_js = Float64Array::new_with_length(segments.len() as u32);
-        for (i, segment) in segments.iter().enumerate() {
-            segments_js.set_index(i as u32, *segment);
-        }
-        self.ctx.set_line_dash(&segments_js).unwrap();
+        self.ctx
+            .set_line_dash(&Float64Array::from(segments))
+            .unwrap();
         self
     }
 
