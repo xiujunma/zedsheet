@@ -14,9 +14,7 @@ use crate::core::auto_filter::Sort;
 use crate::core::cell::Cell as DataCell;
 use crate::core::cell_range::CellRange;
 use crate::core::clipboard_io::ParsedGrid;
-use crate::core::data_proxy::{
-    ActiveSheet, Border as CellBorder, DataProxy, SheetsRegistry, Style as CellStyle,
-};
+use crate::core::data_proxy::{ActiveSheet, DataProxy, SheetsRegistry, Style as CellStyle};
 
 /// A snapshot of cells held for copy/cut/paste.
 #[derive(Clone)]
@@ -233,6 +231,8 @@ pub enum BorderLineStyle {
     Thick,
     Dashed,
     Dotted,
+    /// Two parallel lines instead of one. Excel calls this "double".
+    Double,
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -243,11 +243,14 @@ pub enum Placement {
     Body,
 }
 
+#[derive(Default)]
 pub struct BorderLine {
     pub(crate) left: Option<(BorderLineStyle, String)>,
     pub(crate) top: Option<(BorderLineStyle, String)>,
     pub(crate) right: Option<(BorderLineStyle, String)>,
     pub(crate) bottom: Option<(BorderLineStyle, String)>,
+    pub(crate) diagonal_up: Option<(BorderLineStyle, String)>,
+    pub(crate) diagonal_down: Option<(BorderLineStyle, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1849,7 +1852,8 @@ impl TableRenderer {
     }
 
     /// Apply borders to the selection. `mode` is one of:
-    /// all | outer | none | top | bottom | left | right.
+    /// all | outer | none | top | bottom | left | right
+    /// | diagonal-up | diagonal-down.
     /// With multi-range selection (issue #19), iterates every range; the
     /// `outer` mode draws each range's OWN perimeter (not the union bbox), so
     /// disjoint ranges each get a complete outer border.
@@ -1873,12 +1877,7 @@ impl TableRenderer {
                     if mode == "none" {
                         style.border = None;
                     } else {
-                        let mut b = style.border.clone().unwrap_or(CellBorder {
-                            left: None,
-                            right: None,
-                            top: None,
-                            bottom: None,
-                        });
+                        let mut b = style.border.clone().unwrap_or_default();
                         let want_top =
                             mode == "all" || mode == "top" || (mode == "outer" && ri == r0);
                         let want_bottom =
@@ -1899,10 +1898,18 @@ impl TableRenderer {
                         if want_right {
                             b.right = line.clone();
                         }
+                        if mode == "diagonal-up" {
+                            b.diagonal_up = line.clone();
+                        }
+                        if mode == "diagonal-down" {
+                            b.diagonal_down = line.clone();
+                        }
                         let empty = b.top.is_none()
                             && b.bottom.is_none()
                             && b.left.is_none()
-                            && b.right.is_none();
+                            && b.right.is_none()
+                            && b.diagonal_up.is_none()
+                            && b.diagonal_down.is_none();
                         style.border = if empty { None } else { Some(b) };
                     }
                     let idx = self.data.add_style(style);

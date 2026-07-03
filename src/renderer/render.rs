@@ -227,38 +227,31 @@ pub fn render_border(
             top: Some((line_style, color.to_string())),
             right: Some((line_style, color.to_string())),
             bottom: Some((line_style, color.to_string())),
+            ..BorderLine::default()
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     } else if border_type == Left {
         let border_line = BorderLine {
             left: Some((line_style, color.to_string())),
-            top: None,
-            right: None,
-            bottom: None,
+            ..BorderLine::default()
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     } else if border_type == Top {
         let border_line = BorderLine {
-            left: None,
             top: Some((line_style, color.to_string())),
-            right: None,
-            bottom: None,
+            ..BorderLine::default()
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     } else if border_type == Right {
         let border_line = BorderLine {
-            left: None,
-            top: None,
             right: Some((line_style, color.to_string())),
-            bottom: None,
+            ..BorderLine::default()
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     } else if border_type == Bottom {
         let border_line = BorderLine {
-            left: None,
-            top: None,
-            right: None,
             bottom: Some((line_style, color.to_string())),
+            ..BorderLine::default()
         };
         cell_border_render(canvas, border_rect, &border_line, auto_align);
     }
@@ -281,10 +274,8 @@ pub fn render_border(
                                 canvas,
                                 &rect,
                                 &BorderLine {
-                                    left: None,
-                                    top: None,
                                     right: Some((line_style, color.to_string())),
-                                    bottom: None,
+                                    ..BorderLine::default()
                                 },
                                 auto_align,
                             )
@@ -308,10 +299,8 @@ pub fn render_border(
                                 canvas,
                                 &rect,
                                 &BorderLine {
-                                    left: None,
-                                    top: None,
-                                    right: None,
                                     bottom: Some((line_style, color.to_string())),
+                                    ..BorderLine::default()
                                 },
                                 auto_align,
                             )
@@ -885,6 +874,9 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             draw_border_side(canvas, &b.bottom, x0, y1, x1, y1);
             draw_border_side(canvas, &b.left, x0, y0, x0, y1);
             draw_border_side(canvas, &b.right, x1, y0, x1, y1);
+            // Diagonals are independent of the four edges.
+            draw_border_diagonal(canvas, &b.diagonal_up, x0, y0, x1, y1, true);
+            draw_border_diagonal(canvas, &b.diagonal_down, x0, y1, x1, y0, false);
         }
 
         // Note marker: a small red triangle in the cell's top-right corner.
@@ -966,14 +958,64 @@ fn draw_border_side(
     y1: f64,
 ) {
     if let Some((style, color)) = side {
-        let w = match style.as_str() {
-            "medium" => 2.0,
-            "thick" => 3.0,
-            _ => 1.0, // thin / unknown
+        let (w, dash) = match style.as_str() {
+            "medium" => (2.0, vec![]),
+            "thick" => (3.0, vec![]),
+            "dotted" => (1.0, vec![1.0, 1.0]),
+            "dashed" => (1.0, vec![2.0, 2.0]),
+            "double" => (1.0, vec![]),
+            _ => (1.0, vec![]), // thin / unknown
         };
         canvas.set_stroke_style(color.as_str());
         canvas.set_line_width(w);
-        canvas.line(x0, y0, x1, y1);
+        canvas.set_line_dash(&dash);
+        if style == "double" {
+            // Two parallel hairlines straddling the line. Determine
+            // which axis to offset along by checking if the segment
+            // is horizontal or vertical.
+            let gap = 2.0_f64;
+            if (y1 - y0).abs() < 0.5 {
+                // horizontal
+                canvas.line(x0, y0 - gap / 2.0, x1, y1 - gap / 2.0);
+                canvas.line(x0, y0 + gap / 2.0, x1, y1 + gap / 2.0);
+            } else if (x1 - x0).abs() < 0.5 {
+                // vertical
+                canvas.line(x0 - gap / 2.0, y0, x1 - gap / 2.0, y1);
+                canvas.line(x0 + gap / 2.0, y0, x1 + gap / 2.0, y1);
+            } else {
+                canvas.line(x0, y0, x1, y1);
+            }
+        } else {
+            canvas.line(x0, y0, x1, y1);
+        }
+    }
+}
+
+fn draw_border_diagonal(
+    canvas: &Canvas,
+    diag: &Option<(String, String)>,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    upward: bool,
+) {
+    if let Some((style, color)) = diag {
+        let (w, dash) = match style.as_str() {
+            "medium" => (2.0, vec![]),
+            "thick" => (3.0, vec![]),
+            "dotted" => (1.0, vec![1.0, 1.0]),
+            "dashed" => (1.0, vec![2.0, 2.0]),
+            _ => (1.0, vec![]),
+        };
+        canvas.set_stroke_style(color.as_str());
+        canvas.set_line_width(w);
+        canvas.set_line_dash(&dash);
+        if upward {
+            canvas.line(x0, y0, x1, y1);
+        } else {
+            canvas.line(x0, y1, x1, y0);
+        }
     }
 }
 

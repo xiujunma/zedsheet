@@ -88,12 +88,23 @@ pub enum IconSet {
     Traffic,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Border {
     pub left: Option<(String, String)>,
     pub right: Option<(String, String)>,
     pub top: Option<(String, String)>,
     pub bottom: Option<(String, String)>,
+    /// Diagonal line from top-left to bottom-right of the cell.
+    /// `None` means no diagonal. Same `(style, color)` tuple shape as
+    /// the four edges so the existing JSON wire format stays a flat
+    /// map. `skip_serializing_if` keeps pre-1.x workbooks identical on
+    /// round-trip — a cell with only a top border serializes the same
+    /// bytes before and after this change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagonal_up: Option<(String, String)>,
+    /// Diagonal line from bottom-left to top-right of the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagonal_down: Option<(String, String)>,
 }
 
 impl Default for Style {
@@ -6063,10 +6074,8 @@ mod tests {
         let plain_idx = d.add_style(Style::default());
         let bordered = Style {
             border: Some(Border {
-                left: None,
-                right: None,
                 top: Some(("thin".to_string(), "#000000".to_string())),
-                bottom: None,
+                ..Border::default()
             }),
             ..Style::default()
         };
@@ -6088,12 +6097,7 @@ mod tests {
         d.set_cell_style(0, 0, idx0);
 
         let mut style = d.get_cell_style(0, 0);
-        let mut b = style.border.clone().unwrap_or(Border {
-            left: None,
-            right: None,
-            top: None,
-            bottom: None,
-        });
+        let mut b = style.border.clone().unwrap_or_default();
         b.top = Some(("thin".to_string(), "#000000".to_string()));
         style.border = Some(b);
         let idx = d.add_style(style);
@@ -6103,6 +6107,57 @@ mod tests {
             d.get_cell_style(0, 0).border.and_then(|b| b.top).is_some(),
             "top border must persist after style interning"
         );
+    }
+
+    #[test]
+    fn border_diagonals_round_trip_through_serde() {
+        // Set a border with both diagonals + a top edge, serialize
+        // it, deserialize it back, and confirm everything came
+        // through. This pins the wire format for the new fields.
+        let original = Border {
+            top: Some(("medium".to_string(), "#ff0000".to_string())),
+            diagonal_up: Some(("double".to_string(), "#0000ff".to_string())),
+            diagonal_down: Some(("dashed".to_string(), "#00ff00".to_string())),
+            ..Border::default()
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        // Both diagonals must be in the JSON even though the four
+        // edges default to None.
+        assert!(json.contains("diagonal_up"), "json was: {json}");
+        assert!(json.contains("diagonal_down"), "json was: {json}");
+        let back: Border = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn border_pre_1_x_workbook_loads_with_no_diagonals() {
+        // A JSON blob with the pre-1.4 schema (no diagonal fields) must
+        // still load — the `#[serde(default)]` on the new fields
+        // fills them with None. This is the backward-compat pin.
+        let legacy = r##"{
+            "left": null,
+            "right": null,
+            "top":   ["thin", "#000000"],
+            "bottom": null
+        }"##;
+        let b: Border = serde_json::from_str(legacy).unwrap();
+        assert!(b.diagonal_up.is_none());
+        assert!(b.diagonal_down.is_none());
+        assert!(b.top.is_some());
+    }
+
+    #[test]
+    fn border_default_serializes_to_no_diagonals() {
+        // A border with only a single edge must NOT emit the
+        // diagonal fields at all (skip_serializing_if = "Option::is_none").
+        // Pre-1.4 readers and diff-based test fixtures rely on this.
+        let b = Border {
+            top: Some(("thin".to_string(), "#000000".to_string())),
+            ..Border::default()
+        };
+        let json = serde_json::to_string(&b).unwrap();
+        assert!(!json.contains("diagonal_up"));
+        assert!(!json.contains("diagonal_down"));
     }
 
     // --- Hide / unhide + cell shift (issue #14) ---

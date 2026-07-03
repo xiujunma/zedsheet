@@ -121,35 +121,108 @@ pub fn cell_border_render(
 
     for (i, it) in directions.into_iter().enumerate() {
         if let Some(border) = it {
-            let mut line_dash: Vec<f64> = vec![];
-            let mut line_width = 1f64;
-
-            let style = border.0;
-            if style == BorderLineStyle::Thick {
-                line_width = 3f64;
-            } else if style == BorderLineStyle::Medium {
-                line_width = 2f64;
-            } else if style == BorderLineStyle::Dotted {
-                line_dash = vec![1f64, 1f64];
-            } else if style == BorderLineStyle::Dashed {
-                line_dash = vec![2f64, 2f64];
-            }
-
             let mut offset = 0f64;
 
             if auto_align.unwrap_or(false) {
-                offset = line_width / 2f64;
+                offset = line_params(border.0).0 / 2f64;
             }
 
             let rects = line_rects(i, offset);
-            canvas
-                .set_stroke_style(border.1.as_str())
-                .set_line_width(line_width)
-                .set_line_dash(&line_dash)
-                .line(rects.0, rects.1, rects.2, rects.3);
+            // Double draws two parallel lines instead of one.
+            if border.0 == BorderLineStyle::Double {
+                let (w, dash) = line_params(BorderLineStyle::Thin);
+                canvas
+                    .set_stroke_style(border.1.as_str())
+                    .set_line_width(w)
+                    .set_line_dash(&dash);
+                let gap = 2.0_f64;
+                match i {
+                    0 => {
+                        // top: draw a hair above and below
+                        canvas.line(rects.0, 0.0 - gap / 2.0, rects.2, 0.0 - gap / 2.0);
+                        canvas.line(rects.0, 0.0 + gap / 2.0, rects.2, 0.0 + gap / 2.0);
+                    }
+                    1 => {
+                        // right
+                        canvas.line(
+                            rect.width - gap / 2.0,
+                            rects.1,
+                            rect.width - gap / 2.0,
+                            rects.3,
+                        );
+                        canvas.line(
+                            rect.width + gap / 2.0,
+                            rects.1,
+                            rect.width + gap / 2.0,
+                            rects.3,
+                        );
+                    }
+                    2 => {
+                        // bottom
+                        canvas.line(
+                            rects.0,
+                            rect.height - gap / 2.0,
+                            rects.2,
+                            rect.height - gap / 2.0,
+                        );
+                        canvas.line(
+                            rects.0,
+                            rect.height + gap / 2.0,
+                            rects.2,
+                            rect.height + gap / 2.0,
+                        );
+                    }
+                    _ => {
+                        // left
+                        canvas.line(0.0 - gap / 2.0, rects.1, 0.0 - gap / 2.0, rects.3);
+                        canvas.line(0.0 + gap / 2.0, rects.1, 0.0 + gap / 2.0, rects.3);
+                    }
+                }
+            } else {
+                let (line_width, line_dash) = line_params(border.0);
+                canvas
+                    .set_stroke_style(border.1.as_str())
+                    .set_line_width(line_width)
+                    .set_line_dash(&line_dash)
+                    .line(rects.0, rects.1, rects.2, rects.3);
+            }
         }
     }
+
+    // Diagonal lines run from corner to corner regardless of the four
+    // edges. `up` = top-left → bottom-right; `down` = bottom-left → top-right.
+    if let Some(border) = &border_line.diagonal_up {
+        let (w, dash) = line_params(border.0);
+        canvas
+            .set_stroke_style(border.1.as_str())
+            .set_line_width(w)
+            .set_line_dash(&dash)
+            .line(0.0, 0.0, rect.width, rect.height);
+    }
+    if let Some(border) = &border_line.diagonal_down {
+        let (w, dash) = line_params(border.0);
+        canvas
+            .set_stroke_style(border.1.as_str())
+            .set_line_width(w)
+            .set_line_dash(&dash)
+            .line(0.0, rect.height, rect.width, 0.0);
+    }
+
     canvas.restore();
+}
+
+/// Map a [`BorderLineStyle`] to (line_width, line_dash). The dashed and
+/// dotted styles are tiny: 1-2px gaps that read as such at default zoom.
+fn line_params(style: BorderLineStyle) -> (f64, Vec<f64>) {
+    match style {
+        BorderLineStyle::Thin => (1.0, vec![]),
+        BorderLineStyle::Medium => (2.0, vec![]),
+        BorderLineStyle::Thick => (3.0, vec![]),
+        BorderLineStyle::Dotted => (1.0, vec![1.0, 1.0]),
+        BorderLineStyle::Dashed => (1.0, vec![2.0, 2.0]),
+        // Double is handled by the caller drawing two parallel lines.
+        BorderLineStyle::Double => (1.0, vec![]),
+    }
 }
 
 pub fn cell_render<R, F>(

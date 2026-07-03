@@ -258,6 +258,8 @@ pub(crate) fn border_menu_html() -> String {
         ("bottom", "border-bottom", "Bottom"),
         ("left", "border-left", "Left"),
         ("right", "border-right", "Right"),
+        ("diagonal-up", "border-diag-up", "Diagonal up ↗"),
+        ("diagonal-down", "border-diag-down", "Diagonal down ↘"),
         ("none", "border-none", "None"),
     ];
     let mut s = String::new();
