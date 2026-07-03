@@ -477,6 +477,7 @@ mod tests {
             width: 360.0,
             height: 220.0,
             trendline: crate::core::trendline::Trendline::Linear,
+            y_axis_format: None,
             secondary_range: None,
         });
         let bytes = to_xlsx(&[d]).expect("write");
@@ -564,6 +565,7 @@ mod tests {
             width: 360.0,
             height: 220.0,
             trendline: crate::core::trendline::Trendline::None,
+            y_axis_format: None,
             secondary_range: None,
         });
         let bytes = to_xlsx(&[d]).expect("write");

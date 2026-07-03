@@ -61,6 +61,10 @@ pub(crate) fn chart_modal_html() -> String {
                     <span style="color:#999;font-size:11px;">plots on a right-side axis</span>
                 </div>
                 <div style="{row}">
+                    <label style="{label}">Y-axis format</label>
+                    <input class="zs-chart-yaxis-format" style="flex:1;padding:3px;" placeholder="(optional) 0.00 / $0.00 / 0% / #,##0"/>
+                </div>
+                <div style="{row}">
                     <label style="{label}">Title</label>
                     <input class="zs-chart-title" style="flex:1;padding:3px;" placeholder="(optional)"/>
                 </div>
@@ -155,6 +159,14 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 .map(|i| i.value().trim().to_string())
                 .unwrap_or_default()
         };
+        let optional = |sel: &str| -> Option<String> {
+            let v = val(sel);
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        };
 
         if elx
             .closest(".zs-chart-close, .zs-chart-done")
@@ -222,6 +234,7 @@ pub(crate) fn wire_chart_modal(modal: web_sys::Element, renderer: &SharedRendere
                 width: 360.0,
                 height: 220.0,
                 trendline,
+                y_axis_format: optional(".zs-chart-yaxis-format"),
                 secondary_range,
             };
             // Reject inputs that could never draw, so the dialog gives

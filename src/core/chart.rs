@@ -36,6 +36,13 @@ pub struct Chart {
     /// loading with `Trendline::None`.
     #[serde(default)]
     pub trendline: Trendline,
+    /// Optional Y-axis tick-label format string. Excel-like:
+    /// `0` (integer), `0.00` (2 decimals), `#,##0` (thousands separator),
+    /// `$0.00` (currency), `0%` (percent). `None` (or empty) keeps the
+    /// default pretty-printer. `#[serde(default)]` keeps pre-1.4
+    /// workbooks loading with `None`.
+    #[serde(default)]
+    pub y_axis_format: Option<String>,
     /// Optional secondary-axis data range (Phase 2.2). When `Some`,
     /// the renderer draws a right-hand Y axis scaled to this range's
     /// values, and the secondary range's series are drawn as a line
@@ -294,6 +301,7 @@ mod tests {
             width: 360.0,
             height: 220.0,
             trendline: Trendline::Linear,
+            y_axis_format: None,
             secondary_range: None,
         };
         let json = serde_json::to_value(&c).unwrap();
@@ -312,6 +320,7 @@ mod tests {
         });
         let back: Chart = serde_json::from_value(legacy).unwrap();
         assert_eq!(back.secondary_range, None);
+        assert_eq!(back.y_axis_format, None);
     }
 
     #[test]
@@ -324,11 +333,40 @@ mod tests {
             width: 360.0,
             height: 220.0,
             trendline: Trendline::None,
+            y_axis_format: None,
             secondary_range: Some("D1:E4".into()),
         };
         let json = serde_json::to_value(&c).unwrap();
         let back: Chart = serde_json::from_value(json).unwrap();
         assert_eq!(back.secondary_range, Some("D1:E4".to_string()));
+    }
+
+    #[test]
+    fn y_axis_format_round_trips() {
+        let c = Chart {
+            kind: "bar".into(),
+            range: "A1:B4".into(),
+            title: "Revenue".into(),
+            anchor: "F2".into(),
+            width: 360.0,
+            height: 220.0,
+            trendline: Trendline::None,
+            y_axis_format: Some("$#,##0.00".into()),
+            secondary_range: None,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("y_axis_format"));
+        let back: Chart = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.y_axis_format.as_deref(), Some("$#,##0.00"));
+        // Backward-compat: a pre-1.4 workbook without `y_axis_format` loads
+        // with None — `#[serde(default)]` on the new field.
+        let legacy = serde_json::json!({
+            "kind": "bar",
+            "range": "A1:B4",
+            "anchor": "F2",
+        });
+        let back: Chart = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.y_axis_format, None);
     }
 
     #[test]

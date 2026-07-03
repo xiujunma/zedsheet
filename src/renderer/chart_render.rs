@@ -68,12 +68,30 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
                     .as_deref()
                     .and_then(|sr| extract_secondary_chart_data(&renderer.data, sr, &data.labels));
                 if let Some(secondary) = combo {
-                    draw_combo_chart(canvas, px, py, pw, ph, &data, &secondary, chart.trendline);
+                    draw_combo_chart(
+                        canvas,
+                        px,
+                        py,
+                        pw,
+                        ph,
+                        &data,
+                        &secondary,
+                        chart.trendline,
+                        chart.y_axis_format.as_deref(),
+                    );
                 } else {
                     match chart.kind.as_str() {
-                        "line" => {
-                            draw_axes_chart(canvas, px, py, pw, ph, &data, "line", chart.trendline)
-                        }
+                        "line" => draw_axes_chart(
+                            canvas,
+                            px,
+                            py,
+                            pw,
+                            ph,
+                            &data,
+                            "line",
+                            chart.trendline,
+                            chart.y_axis_format.as_deref(),
+                        ),
                         "scatter" => draw_axes_chart(
                             canvas,
                             px,
@@ -83,6 +101,7 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
                             &data,
                             "scatter",
                             chart.trendline,
+                            chart.y_axis_format.as_deref(),
                         ),
                         "bubble" => draw_axes_chart(
                             canvas,
@@ -93,14 +112,33 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
                             &data,
                             "bubble",
                             chart.trendline,
+                            chart.y_axis_format.as_deref(),
                         ),
-                        "area" => {
-                            draw_axes_chart(canvas, px, py, pw, ph, &data, "area", chart.trendline)
-                        }
+                        "area" => draw_axes_chart(
+                            canvas,
+                            px,
+                            py,
+                            pw,
+                            ph,
+                            &data,
+                            "area",
+                            chart.trendline,
+                            chart.y_axis_format.as_deref(),
+                        ),
                         "radar" => draw_radar(canvas, px, py, pw, ph, &data, chart.trendline),
                         "doughnut" => draw_doughnut(canvas, px, py, pw, ph, &data),
                         "pie" => draw_pie(canvas, px, py, pw, ph, &data),
-                        _ => draw_axes_chart(canvas, px, py, pw, ph, &data, "bar", chart.trendline),
+                        _ => draw_axes_chart(
+                            canvas,
+                            px,
+                            py,
+                            pw,
+                            ph,
+                            &data,
+                            "bar",
+                            chart.trendline,
+                            chart.y_axis_format.as_deref(),
+                        ),
                     }
                 }
             }
@@ -125,7 +163,8 @@ pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
 ///   - `"area"`    → like line, but the area under the curve is filled
 ///
 /// When `trendline` is set, one fitted curve is drawn over each series
-/// after the body (Phase 1.2).
+/// after the body (Phase 1.2). `y_axis_format` is an optional Excel-like
+/// number-format string applied to every Y-axis tick label.
 #[allow(clippy::too_many_arguments)]
 fn draw_axes_chart(
     canvas: &Canvas,
@@ -136,6 +175,7 @@ fn draw_axes_chart(
     data: &ChartData,
     mode: &str,
     trendline: Trendline,
+    y_axis_format: Option<&str>,
 ) {
     let all: Vec<f64> = data
         .series
@@ -167,7 +207,7 @@ fn draw_axes_chart(
         canvas.set_stroke_style("#e4e7ea");
         canvas.line(px, gy, px + pw, gy);
         canvas.set_fill_style("#777777");
-        canvas.fill_text(&format_tick(v), px - 5.0, gy + 3.0, None);
+        canvas.fill_text(&format_axis(v, y_axis_format), px - 5.0, gy + 3.0, None);
     }
 
     let n = data.labels.len();
@@ -598,6 +638,7 @@ fn draw_combo_chart(
     primary: &ChartData,
     secondary: &ChartData,
     _trendline: Trendline,
+    y_axis_format: Option<&str>,
 ) {
     // Left Y axis (primary).
     let primary_max = primary
@@ -633,7 +674,7 @@ fn draw_combo_chart(
         canvas.set_stroke_style("#e4e7ea");
         canvas.line(px, gy, px + pxw, gy);
         canvas.set_fill_style("#777777");
-        canvas.fill_text(&format_tick(v), px - 5.0, gy + 3.0, None);
+        canvas.fill_text(&format_axis(v, y_axis_format), px - 5.0, gy + 3.0, None);
     }
     // Right Y labels.
     canvas.set_text_align("left");
@@ -641,7 +682,12 @@ fn draw_combo_chart(
         let v = ymin_r + span_r * i as f64 / ticks as f64;
         let gy = py + ph - (v - ymin_r) / span_r * ph;
         canvas.set_fill_style("#777777");
-        canvas.fill_text(&format_tick(v), px + pxw + 5.0, gy + 3.0, None);
+        canvas.fill_text(
+            &format_axis(v, y_axis_format),
+            px + pxw + 5.0,
+            gy + 3.0,
+            None,
+        );
     }
 
     let n = primary.labels.len();
@@ -927,6 +973,72 @@ fn format_tick(v: f64) -> String {
     }
 }
 
+/// Format a tick value according to a small Excel-like number format. The
+/// accepted patterns are:
+/// * `0` — integer with no decimals
+/// * `0.NN` — fixed decimals (the number of N's sets the precision)
+/// * `#,##0` / `#,##0.NN` — thousands separator
+/// * `$0.NN` / `$#,##0.NN` — currency prefix
+/// * `0%` / `0.NN%` — percent (multiplies by 100, appends `%`)
+///
+/// Unknown patterns fall through to the default `format_tick` so a typo
+/// in the format string still renders something readable.
+fn format_axis(v: f64, format: Option<&str>) -> String {
+    let Some(fmt) = format else {
+        return format_tick(v);
+    };
+    let fmt = fmt.trim();
+    if fmt.is_empty() {
+        return format_tick(v);
+    }
+    let percent = fmt.ends_with('%');
+    let body = if percent { &fmt[..fmt.len() - 1] } else { fmt };
+    let currency = body.starts_with('$');
+    let body = if currency { &body[1..] } else { body };
+    // body now looks like "0", "0.00", "#,##0", "#,##0.00"
+    let (int_part, dec_part) = match body.split_once('.') {
+        Some((i, d)) => (i, Some(d)),
+        None => (body, None),
+    };
+    let decimals = dec_part.map(|d| d.len()).unwrap_or(0);
+    let thousands = int_part.contains(',');
+    let raw = if percent { v * 100.0 } else { v };
+    let abs_str = format!("{:.*}", decimals, raw.abs());
+    let (int_str, frac_str) = match abs_str.split_once('.') {
+        Some((i, f)) => (i.to_string(), Some(f.to_string())),
+        None => (abs_str, None),
+    };
+    let with_commas = if thousands {
+        let bytes = int_str.as_bytes();
+        let mut out = String::new();
+        for (i, c) in bytes.iter().rev().enumerate() {
+            if i > 0 && i % 3 == 0 {
+                out.push(',');
+            }
+            out.push(*c as char);
+        }
+        out.chars().rev().collect()
+    } else {
+        int_str
+    };
+    let mut s = String::new();
+    if raw < 0.0 {
+        s.push('-');
+    }
+    if currency {
+        s.push('$');
+    }
+    s.push_str(&with_commas);
+    if let Some(f) = frac_str {
+        s.push('.');
+        s.push_str(&f);
+    }
+    if percent {
+        s.push('%');
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,5 +1077,57 @@ mod tests {
     fn with_alpha_falls_back_on_invalid_hex() {
         assert_eq!(with_alpha("not-a-color", 0.3), "rgba(128,128,128,0.3)");
         assert_eq!(with_alpha("#abc", 0.3), "rgba(128,128,128,0.3)");
+    }
+
+    #[test]
+    fn format_axis_none_or_empty_falls_back_to_default() {
+        // The default pretty-printer must be reached when the format is
+        // unset, empty, or whitespace — the modal sends "" from an
+        // untouched field.
+        assert_eq!(format_axis(1234.0, None), format_tick(1234.0));
+        assert_eq!(format_axis(1234.0, Some("")), format_tick(1234.0));
+        assert_eq!(format_axis(1234.0, Some("   ")), format_tick(1234.0));
+    }
+
+    #[test]
+    fn format_axis_decimals_and_integer() {
+        assert_eq!(format_axis(3.0, Some("0")), "3");
+        assert_eq!(format_axis(1234.5678, Some("0.00")), "1234.57");
+        assert_eq!(format_axis(3.1, Some("0.000")), "3.100");
+        // Default pretty-printer: integer when the value is integral, one
+        // decimal otherwise.
+        assert_eq!(format_axis(std::f64::consts::FRAC_PI_2, None), "1.6");
+    }
+
+    #[test]
+    fn format_axis_thousands_separator() {
+        assert_eq!(format_axis(1234.0, Some("#,##0")), "1,234");
+        assert_eq!(format_axis(1234567.0, Some("#,##0")), "1,234,567");
+        assert_eq!(format_axis(1234.5, Some("#,##0.00")), "1,234.50");
+    }
+
+    #[test]
+    fn format_axis_currency_prefix() {
+        assert_eq!(format_axis(3.5, Some("$0.00")), "$3.50");
+        assert_eq!(format_axis(1234.0, Some("$#,##0")), "$1,234");
+        // Negative values get the minus before the currency sign.
+        assert_eq!(format_axis(-3.5, Some("$0.00")), "-$3.50");
+    }
+
+    #[test]
+    fn format_axis_percent_multiplies_by_100() {
+        // 0.25 reads as 25% (a fraction-of-whole input is the
+        // spreadsheet convention for percent data).
+        assert_eq!(format_axis(0.25, Some("0%")), "25%");
+        assert_eq!(format_axis(0.1234, Some("0.00%")), "12.34%");
+        // Currency + percent is supported too.
+        assert_eq!(format_axis(0.5, Some("$0.00%")), "$50.00%");
+    }
+
+    #[test]
+    fn format_axis_unknown_pattern_falls_back() {
+        // Garbage that doesn't parse as a number format must not crash;
+        // the renderer should still show a readable number.
+        let _ = format_axis(42.0, Some("definitely not a format"));
     }
 }
