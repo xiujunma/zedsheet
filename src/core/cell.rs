@@ -1,5 +1,27 @@
 use serde::{Deserialize, Serialize};
 
+/// One comment in a cell's thread (issue #22 follow-on). The
+/// `parent_id` field indexes the parent comment in the same
+/// `comments` Vec; `None` means top-level, `Some(n)` means a reply
+/// to comments\[n\]. `resolved` is a per-thread flag (the head
+/// comment owns the thread state). `author` and `timestamp_ms` are
+/// the host-supplied attribution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Comment {
+    pub author: String,
+    pub text: String,
+    pub timestamp_ms: u64,
+    /// `Some(n)` for a reply to comments\[n\]; `None` for the
+    /// top-level comment that opens the thread.
+    #[serde(default)]
+    pub parent_id: Option<usize>,
+    /// When `true`, the thread is closed (no further replies
+    /// accepted in the UI). Only meaningful on the top-level
+    /// comment; replies mirror the head's value when read.
+    #[serde(default)]
+    pub resolved: bool,
+}
+
 /// One styled run of text inside a cell (Phase 4.5: rich text).
 /// A cell with \`runs.is_some()\` renders run-by-run; a cell with
 /// \`runs.is_none()\` falls back to the legacy flat
@@ -51,9 +73,18 @@ pub struct Cell {
     pub merge: Option<(usize, usize)>, // (row_span, col_span)
     pub editable: bool,
     pub cell_type: String,
-    /// An attached comment/note, if any.
+    /// An attached comment/note, if any. Single-author legacy form
+    /// (issue #22). For multi-author threads see `comments`.
     #[serde(default)]
     pub note: Option<String>,
+    /// Comment thread attached to this cell (issue #22 follow-on).
+    /// Each entry is a single comment; the first entry's `parent_id`
+    /// is `None` and subsequent replies carry a non-None id. The
+    /// `resolved` flag marks the whole thread closed. `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]` keeps pre-#22
+    /// workbooks round-tripping unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<Vec<Comment>>,
     /// A hyperlink target (normalized URL), if any.
     #[serde(default)]
     pub link: Option<String>,
@@ -77,6 +108,7 @@ impl Default for Cell {
             editable: true,
             cell_type: String::from("text"),
             note: None,
+            comments: None,
             link: None,
             runs: None,
         }

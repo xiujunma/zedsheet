@@ -2289,6 +2289,65 @@ impl DataProxy {
         self.get_cell_or_new(ri, ci).note = note;
     }
 
+    /// Read the comment thread on a cell, if any (issue #22
+    /// follow-on). The returned Vec is a defensive copy — mutate
+    /// via `add_comment` / `resolve_thread` to change it. The first
+    /// entry is the top-level comment, subsequent entries are
+    /// replies (in `parent_id` order, depth-first).
+    pub fn get_comments(&self, ri: usize, ci: usize) -> Option<Vec<crate::core::cell::Comment>> {
+        self.get_cell(ri, ci).and_then(|c| c.comments.clone())
+    }
+
+    /// Append a comment to the thread on a cell (issue #22
+    /// follow-on). The first call opens the thread; subsequent
+    /// calls add replies. `parent_id = None` opens a new top-level
+    /// thread; `Some(n)` replies to the nth existing comment. The
+    /// timestamp defaults to the host-supplied `now`; pass
+    /// `Date.now()` from JS. Returns the index of the new entry.
+    pub fn add_comment(
+        &mut self,
+        ri: usize,
+        ci: usize,
+        author: &str,
+        text: &str,
+        parent_id: Option<usize>,
+        timestamp_ms: u64,
+    ) -> usize {
+        let cell = self.get_cell_or_new(ri, ci);
+        let comments = cell.comments.get_or_insert_with(Vec::new);
+        let new_id = comments.len();
+        comments.push(crate::core::cell::Comment {
+            author: author.to_string(),
+            text: text.to_string(),
+            timestamp_ms,
+            parent_id,
+            resolved: false,
+        });
+        new_id
+    }
+
+    /// Mark the thread on a cell as resolved (or re-open it). Only
+    /// the top-level comment (index 0) carries the authoritative
+    /// `resolved` value; replies mirror it when read.
+    pub fn resolve_thread(&mut self, ri: usize, ci: usize, resolved: bool) {
+        if let Some(cell) = self.get_cell_mut(ri, ci) {
+            if let Some(comments) = cell.comments.as_mut() {
+                if let Some(head) = comments.first_mut() {
+                    head.resolved = resolved;
+                }
+            }
+        }
+    }
+
+    /// True if the cell has any comment thread (Phase 4.2
+    /// follow-on). Backed by the same red-triangle indicator as
+    /// `get_note(...).is_some()`.
+    pub fn has_comments(&self, ri: usize, ci: usize) -> bool {
+        self.get_cell(ri, ci)
+            .map(|c| c.comments.as_ref().map(|v| !v.is_empty()).unwrap_or(false))
+            .unwrap_or(false)
+    }
+
     pub fn get_link(&self, ri: usize, ci: usize) -> Option<String> {
         self.get_cell(ri, ci).and_then(|c| c.link.clone())
     }
@@ -9258,5 +9317,63 @@ mod tests {
         // Round-trip emits no `page_breaks` key.
         let back = serde_json::to_string(&ps).unwrap();
         assert!(!back.contains("page_breaks"));
+    }
+
+    // --- Comment threads (issue #22 follow-on) ---
+
+    #[test]
+    fn comment_thread_opens_replies_resolves() {
+        // Open a thread, add a reply, resolve, re-open, and confirm
+        // every state along the way (Phase 4.2 follow-on). The
+        // legacy single-author `note` field stays separate and
+        // untouched by this API.
+        let mut d = DataProxy::new("t");
+        // Pre-state: no thread.
+        assert!(!d.has_comments(0, 0));
+        // First add opens the thread at index 0.
+        let head = d.add_comment(0, 0, "alice", "first", None, 100);
+        assert_eq!(head, 0);
+        assert!(d.has_comments(0, 0));
+        // Reply links to the head.
+        let reply = d.add_comment(0, 0, "bob", "second", Some(0), 200);
+        assert_eq!(reply, 1);
+        let comments = d.get_comments(0, 0).unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].author, "alice");
+        assert_eq!(comments[0].parent_id, None);
+        assert!(!comments[0].resolved);
+        assert_eq!(comments[1].author, "bob");
+        assert_eq!(comments[1].parent_id, Some(0));
+        // Resolve sets the head's flag; replies mirror.
+        d.resolve_thread(0, 0, true);
+        let comments = d.get_comments(0, 0).unwrap();
+        assert!(comments[0].resolved);
+        // Re-open clears the head's flag.
+        d.resolve_thread(0, 0, false);
+        let comments = d.get_comments(0, 0).unwrap();
+        assert!(!comments[0].resolved);
+    }
+
+    #[test]
+    fn cell_round_trips_with_comment_thread() {
+        // A cell with a thread serializes the comments field; a
+        // pre-thread workbook (no `comments` key) loads with None.
+        // skip_serializing_if keeps the wire format clean for the
+        // common no-thread case.
+        let mut d = DataProxy::new("t");
+        d.add_comment(0, 0, "u", "msg", None, 1);
+        // The comments field appears when present.
+        let json = d.get_data();
+        let mut back = d.clone();
+        back.set_data(json);
+        let comments = back.get_comments(0, 0).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].text, "msg");
+        // No thread on a fresh cell → no `comments` key in JSON.
+        let d2 = DataProxy::new("t2");
+        let json2 = d2.get_data();
+        let mut back2 = d2;
+        back2.set_data(json2);
+        assert!(back2.get_comments(0, 0).is_none());
     }
 }
