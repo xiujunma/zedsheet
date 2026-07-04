@@ -474,10 +474,13 @@ pub fn render_cells(canvas: &Canvas, area: &Area, renderer: &TableRenderer) {
             }
         }
 
-        // Conditional-format visuals (issue #29): a data bar painted under the
-        // text, or an icon at the cell's left edge. Resolved independently of
-        // the style rules so a bar can stack with a color rule.
-        if let Some(visual) = renderer.data.cond_visual(row, col) {
+        // Conditional-format visuals (issue #29 + follow-on): a data bar
+        // painted under the text, or an icon at the cell's left edge.
+        // Resolved independently of the style rules so a bar can stack
+        // with a color rule; a bar AND an icon rule can also stack on
+        // the same cell — `cond_visuals` returns all matching rules
+        // and we draw bars first, then icons on top.
+        for visual in renderer.data.cond_visuals(row, col) {
             match visual {
                 CondVisual::Bar { frac, color } => {
                     let bw = (draw_rect.width - 2.0).max(0.0) * frac.clamp(0.0, 1.0);

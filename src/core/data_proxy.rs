@@ -866,10 +866,14 @@ impl DataProxy {
         }
     }
 
-    /// The render-time conditional-format visual for a cell (issue #29): an
-    /// in-cell data bar or an icon. Resolved independently of the style rules
-    /// so a data bar can stack with a color rule. First covering rule wins.
-    pub fn cond_visual(&self, ri: usize, ci: usize) -> Option<CondVisual> {
+    /// The render-time conditional-format visuals for a cell (issue #29
+    /// follow-on): a list of in-cell data bars + icons. Returns ALL
+    /// matching visuals so a bar AND an icon rule can stack on the
+    /// same cell — the renderer iterates the list and draws bars
+    /// first, then icons on top. `cond_visual` is the single-result
+    /// convenience for callers that only need the first match.
+    pub fn cond_visuals(&self, ri: usize, ci: usize) -> Vec<CondVisual> {
+        let mut out = Vec::new();
         for rule in &self.cond_formats {
             if rule.op != "databar" && rule.op != "icons" {
                 continue;
@@ -899,24 +903,31 @@ impl DataProxy {
                     .clone()
                     .filter(|c| !c.is_empty())
                     .unwrap_or_else(|| "#638ec6".to_string()); // Excel's default blue
-                return Some(CondVisual::Bar { frac, color });
+                out.push(CondVisual::Bar { frac, color });
+            } else {
+                // Icon zone by thirds of the range's numeric span.
+                let zone = if t < 1.0 / 3.0 {
+                    0
+                } else if t < 2.0 / 3.0 {
+                    1
+                } else {
+                    2
+                };
+                let set = if rule.v1.trim().eq_ignore_ascii_case("traffic") {
+                    IconSet::Traffic
+                } else {
+                    IconSet::Arrows
+                };
+                out.push(CondVisual::Icon { set, zone });
             }
-            // Icon zone by thirds of the range's numeric span.
-            let zone = if t < 1.0 / 3.0 {
-                0
-            } else if t < 2.0 / 3.0 {
-                1
-            } else {
-                2
-            };
-            let set = if rule.v1.trim().eq_ignore_ascii_case("traffic") {
-                IconSet::Traffic
-            } else {
-                IconSet::Arrows
-            };
-            return Some(CondVisual::Icon { set, zone });
         }
-        None
+        out
+    }
+
+    /// Convenience: the first cond-format visual for a cell, or
+    /// `None`. Kept for callers that only need a single visual.
+    pub fn cond_visual(&self, ri: usize, ci: usize) -> Option<CondVisual> {
+        self.cond_visuals(ri, ci).into_iter().next()
     }
 
     /// Resolve a cell to a formula value (issue #2). Error values propagate;
@@ -7868,6 +7879,43 @@ mod tests {
             Some("#ff0000"),
             "style rule applies alongside icons"
         );
+    }
+
+    #[test]
+    fn data_bar_and_icon_set_stack_on_the_same_cell() {
+        // Both a databar rule and an icons rule on the same range →
+        // cond_visuals returns BOTH (a bar, then an icon). The
+        // renderer draws the bar first, then the icon on top, so a
+        // single cell can carry both glyphs (issue #29 follow-on).
+        let mut d = DataProxy::new("t");
+        for (r, v) in [(0, "10"), (1, "20"), (2, "30")] {
+            d.set_cell_text(r, 1, v);
+        }
+        let mut bar = cf_rule("databar", "");
+        bar.bgcolor = Some("#638ec6".into());
+        d.cond_formats.push(bar);
+        let mut icons = cf_rule("icons", "traffic");
+        icons.range = "B1:B3".into();
+        d.cond_formats.push(icons);
+
+        let visuals = d.cond_visuals(1, 1);
+        // First visual is the bar; second is the icon (renderer
+        // order: bars before icons so the icon isn't painted over).
+        assert_eq!(visuals.len(), 2, "expected 2 stacked visuals");
+        match &visuals[0] {
+            CondVisual::Bar { frac, .. } => {
+                assert!(frac > &0.05, "mid bar should be > min sliver");
+                assert!(frac < &1.0, "mid bar should be < full");
+            }
+            v => panic!("expected bar first, got {v:?}"),
+        }
+        match &visuals[1] {
+            CondVisual::Icon { set, .. } => assert_eq!(*set, IconSet::Traffic),
+            v => panic!("expected icon second, got {v:?}"),
+        }
+        // cond_visual (single) still returns the first match for
+        // any existing caller that only wants one.
+        assert!(matches!(d.cond_visual(1, 1), Some(CondVisual::Bar { .. })));
     }
 
     // --- Outline groups + SUBTOTAL (issue #30) ---
