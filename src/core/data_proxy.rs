@@ -4966,6 +4966,17 @@ fn apply_special_function(upper: &str, args: &[Arg]) -> Result<Option<Value>, Ev
             Value::Text(label)
         }
 
+        // WEBSERVICE(url) / IMPORTXML(url, xpath): these need network
+        // access, which the wasm sandbox does not allow (no
+        // synchronous fetch). They're registered so the parser
+        // doesn't emit #NAME?; the runtime surfaces #VALUE! to
+        // signal "not available in this build". A host that needs
+        // these can implement them in JS via on_change + a fetch
+        // and write the result back into the sheet.
+        "WEBSERVICE" | "IMPORTXML" | "IMPORTHTML" | "IMPORTRANGE" | "IMPORTDATA" => {
+            return Err(EvalErr::Value)
+        }
+
         // IF / IFS / CHOOSE are short-circuit and handled upstream in
         // eval_expr's Token::Function arm (see eval_lazy, issue #38), so they
         // never reach this eager dispatch.
@@ -8742,6 +8753,23 @@ mod tests {
         d.set_cell_text(0, 1, "=HYPERLINK(\"https://example.com\")");
         assert_eq!(d.cell_display_value(0, 0), "Click");
         assert_eq!(d.cell_display_value(0, 1), "https://example.com");
+    }
+
+    #[test]
+    fn webservice_family_returns_value_error() {
+        // WEBSERVICE / IMPORTXML / IMPORTHTML / IMPORTRANGE /
+        // IMPORTDATA all need network access that's blocked in the
+        // wasm sandbox. They're registered so the parser doesn't
+        // emit #NAME?; the runtime surfaces #VALUE! to signal
+        // "not available in this build" (BACKLOG §1). A host
+        // that needs them can implement them in JS via on_change.
+        for name in ["WEBSERVICE", "IMPORTXML", "IMPORTHTML", "IMPORTDATA"] {
+            let mut d = DataProxy::new("t");
+            d.set_cell_text(0, 0, &format!("={name}(\"https://example.com\")"));
+            // The cell shows the error literal, not #NAME?.
+            let s = d.cell_display_value(0, 0);
+            assert!(s.contains("#VALUE") || s == "#VALUE!", "{name} -> {s}");
+        }
     }
 
     #[test]
