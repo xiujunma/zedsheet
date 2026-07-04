@@ -72,6 +72,16 @@ pub struct Cell {
     pub style: Option<usize>,
     pub merge: Option<(usize, usize)>, // (row_span, col_span)
     pub editable: bool,
+    /// When `true`, formatting changes (bold, color, borders, etc.)
+    /// are blocked even on a writable sheet. Independent from
+    /// `editable` so a cell can be value-locked but format-editable
+    /// (e.g. a "constant reference" cell that should be
+    /// highlighted but not overwritten) or value-editable but
+    /// format-locked (e.g. an "input" cell whose visual style is
+    /// controlled by a fixed template). Default `false` keeps
+    /// pre-permission workbooks round-trip unchanged.
+    #[serde(default)]
+    pub format_locked: bool,
     pub cell_type: String,
     /// An attached comment/note, if any. Single-author legacy form
     /// (issue #22). For multi-author threads see `comments`.
@@ -111,6 +121,7 @@ impl Default for Cell {
             comments: None,
             link: None,
             runs: None,
+            format_locked: false,
         }
     }
 }

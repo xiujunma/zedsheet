@@ -478,6 +478,31 @@ impl DataProxy {
         cell.editable = editable;
     }
 
+    /// `true` when a formatting change to `(ri, ci)` is allowed (Phase
+    /// 4.2 follow-on). Combines the sheet-wide read-only flag with
+    /// the cell's own `format_locked` flag: a cell with no explicit
+    /// value defaults to format-editable, matching the
+    /// `Cell::default()` shape. Independent of `is_cell_editable` —
+    /// a cell can allow formatting without allowing value edits
+    /// (or vice versa).
+    pub fn is_cell_format_editable(&self, ri: usize, ci: usize) -> bool {
+        if *self.read_only.borrow() {
+            return false;
+        }
+        self.get_cell(ri, ci)
+            .map(|c| !c.format_locked)
+            .unwrap_or(true)
+    }
+
+    /// Toggle the per-cell `format_locked` flag (Phase 4.2
+    /// follow-on). Setting `true` blocks formatting changes even
+    /// when the cell is value-editable; setting `false` re-allows
+    /// them.
+    pub fn set_cell_format_locked(&mut self, ri: usize, ci: usize, locked: bool) {
+        let cell = self.get_cell_or_new(ri, ci);
+        cell.format_locked = locked;
+    }
+
     /// Look up a sheet by name (case-insensitive) in the workbook registry.
     /// Returns `None` if no registry is wired or no sheet with that name
     /// exists, which the evaluator surfaces as `#REF!`.
@@ -7574,6 +7599,31 @@ mod tests {
         assert!(!d.is_cell_editable(0, 0));
         // A brand-new cell is locked too.
         assert!(!d.is_cell_editable(5, 5));
+    }
+
+    #[test]
+    fn format_locked_independent_of_editable() {
+        // Phase 4.2 follow-on: a cell with format_locked blocks
+        // style updates but still allows value edits; a cell with
+        // editable=false blocks value edits but still allows
+        // formatting. The two flags are independent.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "x");
+        // Default: both flags off.
+        assert!(d.is_cell_editable(0, 0));
+        assert!(d.is_cell_format_editable(0, 0));
+        // Lock just the format; values still editable.
+        d.set_cell_format_locked(0, 0, true);
+        assert!(d.is_cell_editable(0, 0));
+        assert!(!d.is_cell_format_editable(0, 0));
+        // Lock just the value; formatting still editable.
+        d.set_cell_editable(0, 0, false);
+        d.set_cell_format_locked(0, 0, false);
+        assert!(!d.is_cell_editable(0, 0));
+        assert!(d.is_cell_format_editable(0, 0));
+        // Sheet-wide read_only beats both flags.
+        d.set_read_only(true);
+        assert!(!d.is_cell_format_editable(0, 0));
     }
 
     #[test]

@@ -1821,6 +1821,13 @@ impl TableRenderer {
             v
         };
         for (ri, ci) in cells {
+            // Per-cell format-lock (Phase 4.2 follow-on): a cell
+            // can be value-editable but format-locked, so the
+            // sheet-wide read-only check is necessary but not
+            // sufficient. Honor the per-cell flag here.
+            if !self.data.is_cell_format_editable(ri, ci) {
+                continue;
+            }
             let mut style = self.data.get_cell_style(ri, ci);
             f(&mut style);
             let idx = self.data.add_style(style);
