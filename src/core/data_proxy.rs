@@ -155,6 +155,26 @@ pub struct PageSetup {
     /// Column range to repeat at left of each page, e.g. "A:B"
     #[serde(default)]
     pub repeat_cols: Option<String>,
+    /// Manual page breaks (Phase 5.1). Each break is a tuple of
+    /// (row_break, col_break) where exactly one is `Some` and the
+    /// other is `None`: a row break ends the current page after
+    /// that row, a col break ends the current page after that
+    /// column. Sorted, deduped, and round-tripped through serde
+    /// with `#[serde(default)]` so pre-1.5 workbooks load with an
+    /// empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_breaks: Vec<PageBreak>,
+}
+
+/// One manual page break (Phase 5.1). Stored as `(row, col)` with
+/// exactly one side `Some` — a row break ends the current page
+/// after that row; a col break ends the current page after that
+/// column. The wrapper tuple (not two fields on PageSetup) keeps
+/// the JSON a flat array of small structs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageBreak {
+    pub row: Option<usize>,
+    pub col: Option<usize>,
 }
 
 fn default_orientation() -> String {
@@ -180,6 +200,7 @@ impl Default for PageSetup {
             print_area: None,
             repeat_rows: None,
             repeat_cols: None,
+            page_breaks: Vec::new(),
         }
     }
 }
@@ -9012,5 +9033,54 @@ mod tests {
         // i=1,j=1 → 10+1+9=20; i=1,j=2 → 10+2+9=21;
         // i=2,j=1 → 20+1+9=30; i=2,j=2 → 20+2+9=31.
         assert_eq!(d.cell_display_value(2, 0), "20");
+    }
+
+    // --- Page breaks (Phase 5.1) ---
+
+    #[test]
+    fn page_setup_default_has_empty_page_breaks() {
+        // The default constructor must yield an empty list — no
+        // breaks pre-seeded.
+        assert!(PageSetup::default().page_breaks.is_empty());
+    }
+
+    #[test]
+    fn page_break_serde_roundtrip() {
+        // Set two breaks (one row, one col), serialize, deserialize,
+        // and confirm both came back in the same shape.
+        let mut ps = PageSetup::default();
+        ps.page_breaks.push(PageBreak {
+            row: Some(5),
+            col: None,
+        });
+        ps.page_breaks.push(PageBreak {
+            row: None,
+            col: Some(3),
+        });
+        let json = serde_json::to_string(&ps).unwrap();
+        assert!(json.contains("page_breaks"));
+        let back: PageSetup = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.page_breaks.len(), 2);
+        assert_eq!(back.page_breaks[0].row, Some(5));
+        assert_eq!(back.page_breaks[1].col, Some(3));
+    }
+
+    #[test]
+    fn page_setup_pre_5_1_workbook_loads_with_empty_breaks() {
+        // A pre-1.5 workbook JSON that lacks `page_breaks` must still
+        // load — `#[serde(default)]` fills the field with an empty
+        // Vec. The skip_serializing_if on the empty case keeps
+        // backward-compat round-trips identical.
+        let legacy = r##"{
+            "orientation": "portrait",
+            "paper_size": "letter",
+            "margins": [0.75, 0.75, 0.75, 0.75],
+            "scale": 100
+        }"##;
+        let ps: PageSetup = serde_json::from_str(legacy).unwrap();
+        assert!(ps.page_breaks.is_empty());
+        // Round-trip emits no `page_breaks` key.
+        let back = serde_json::to_string(&ps).unwrap();
+        assert!(!back.contains("page_breaks"));
     }
 }

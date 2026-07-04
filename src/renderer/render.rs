@@ -201,6 +201,63 @@ pub fn render_spill_outlines(
     }
 }
 
+/// Render every manual page break (Phase 5.1) as a blue dashed line
+/// across the body. The line is drawn at the bottom of the broken
+/// row, or the right of the broken column, so the user can see
+/// exactly which page each cell will land on. The breaks are
+/// always-on markers (not gated by a "Page Break Preview" toggle) so
+/// the user can find them after dragging-and-dropping — Excel does
+/// the same.
+pub fn render_page_breaks(
+    canvas: &Canvas,
+    viewport: &crate::renderer::viewport::Viewport,
+    renderer: &TableRenderer,
+) {
+    let breaks = &renderer.data.page_setup.page_breaks;
+    if breaks.is_empty() {
+        return;
+    }
+    canvas.save();
+    canvas.set_stroke_style("#1e88e5");
+    canvas.set_line_width(1.5);
+    canvas.set_line_dash(&[4.0, 3.0]);
+    for area in &viewport.areas {
+        if area.range.start_row >= area.range.end_row || area.range.start_col >= area.range.end_col
+        {
+            continue;
+        }
+        for pb in breaks {
+            // Row break: horizontal line at the bottom of `row`.
+            if let Some(r) = pb.row {
+                if r < area.range.start_row || r + 1 >= area.range.end_row {
+                    continue;
+                }
+                let mut y = area.y;
+                for row in area.range.start_row..=(r + 1) {
+                    if let Some((_, h)) = area.row_map.get(&row) {
+                        y += h;
+                    }
+                }
+                canvas.line(area.x, y, area.x + area.width, y);
+            }
+            // Col break: vertical line at the right of `col`.
+            if let Some(c) = pb.col {
+                if c < area.range.start_col || c + 1 >= area.range.end_col {
+                    continue;
+                }
+                let mut x = area.x;
+                for col in area.range.start_col..=(c + 1) {
+                    if let Some((_, w)) = area.col_map.get(&col) {
+                        x += w;
+                    }
+                }
+                canvas.line(x, area.y, x, area.y + area.height);
+            }
+        }
+    }
+    canvas.restore();
+}
+
 pub fn render_cell_grid_line(canvas: &Canvas, gridline: &Gridline, rect: &Rect) {
     render_lines(canvas, gridline, || {
         canvas
@@ -1478,6 +1535,11 @@ pub fn render(renderer: &TableRenderer) {
 
         // Spill-range outlines (issue #33), under the selection rectangle.
         render_spill_outlines(&canvas, viewport, renderer);
+
+        // Manual page breaks (Phase 5.1): a blue dashed line that
+        // marks where the print page splits. Drawn under the
+        // selection so a selected break still gets a clear outline.
+        render_page_breaks(&canvas, viewport, renderer);
 
         // Selection rectangle.
         let selector = renderer.get_selector();

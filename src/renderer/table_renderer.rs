@@ -14,7 +14,9 @@ use crate::core::auto_filter::Sort;
 use crate::core::cell::Cell as DataCell;
 use crate::core::cell_range::CellRange;
 use crate::core::clipboard_io::ParsedGrid;
-use crate::core::data_proxy::{ActiveSheet, DataProxy, SheetsRegistry, Style as CellStyle};
+use crate::core::data_proxy::{
+    ActiveSheet, DataProxy, PageBreak, SheetsRegistry, Style as CellStyle,
+};
 
 /// A snapshot of cells held for copy/cut/paste.
 #[derive(Clone)]
@@ -1673,6 +1675,63 @@ impl TableRenderer {
     /// Set the view zoom (clamped to 10–400%). View-only: no undo snapshot.
     pub fn set_zoom(&mut self, zoom: f64) {
         self.data.set_zoom(zoom);
+    }
+
+    /// Insert a manual row page break (Phase 5.1) after `row`. The
+    /// break ends the printed page after the given row, so cells in
+    /// `row + 1` and below start on the next page. Idempotent:
+    /// calling twice on the same row is a no-op.
+    pub fn insert_row_page_break(&mut self, row: usize) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let pb = PageBreak {
+            row: Some(row),
+            col: None,
+        };
+        if !self.data.page_setup.page_breaks.contains(&pb) {
+            self.data.page_setup.page_breaks.push(pb);
+            self.data
+                .page_setup
+                .page_breaks
+                .sort_by_key(|b| b.row.unwrap_or(0));
+        }
+    }
+
+    /// Insert a manual column page break after `col`. Idempotent.
+    pub fn insert_col_page_break(&mut self, col: usize) {
+        if self.data.is_read_only() {
+            return;
+        }
+        self.snapshot();
+        let pb = PageBreak {
+            row: None,
+            col: Some(col),
+        };
+        if !self.data.page_setup.page_breaks.contains(&pb) {
+            self.data.page_setup.page_breaks.push(pb);
+            self.data
+                .page_setup
+                .page_breaks
+                .sort_by_key(|b| b.col.unwrap_or(0));
+        }
+    }
+
+    /// Remove any page break at `row` or `col`. A single break is
+    /// either-or (row vs col), so this covers both with one call
+    /// from the UI. No-op when nothing matches.
+    pub fn remove_page_break(&mut self, row: usize, col: usize) {
+        if self.data.is_read_only() {
+            return;
+        }
+        let before = self.data.page_setup.page_breaks.len();
+        self.data.page_setup.page_breaks.retain(|b| {
+            b.row.map(|r| r != row).unwrap_or(true) && b.col.map(|c| c != col).unwrap_or(true)
+        });
+        if self.data.page_setup.page_breaks.len() != before {
+            self.snapshot();
+        }
     }
 
     pub fn data_clone(&self) -> DataProxy {

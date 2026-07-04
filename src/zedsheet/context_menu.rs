@@ -98,6 +98,15 @@ pub(crate) fn context_menu_html() -> String {
         item("shrink-toggle", "Shrink to fit"),
         item("indent-inc", "Increase indent"),
         item("indent-dec", "Decrease indent"),
+        // Phase 5.1: manual page breaks. "Insert Row Break" and
+        // "Insert Column Break" mark where the printed page ends;
+        // "Remove Page Break" clears the one that runs through the
+        // active cell. The break line itself is always visible in
+        // the grid as a blue dashed line.
+        divider.clone(),
+        item("page-break-row", "Insert row page break"),
+        item("page-break-col", "Insert column page break"),
+        item("page-break-remove", "Remove page break"),
     ]
     .join("")
 }
@@ -471,6 +480,23 @@ pub(crate) fn wire_context_menu(
                     "format-as-plain" if !read_only => r.convert_selection_to_plain(),
                     "table-totals" if !read_only => r.toggle_table_totals_at_selection(),
                     "table-to-range" if !read_only => r.convert_table_at_selection(),
+                    // Phase 5.1: manual page breaks. A row break lands
+                    // ABOVE the active cell (cells in `ri` are the last
+                    // row of the current page; `ri+1` starts the next
+                    // page). Same convention for col breaks.
+                    "page-break-row" if !read_only => {
+                        let ri = r.data.selector.ri;
+                        r.insert_row_page_break(ri);
+                    }
+                    "page-break-col" if !read_only => {
+                        let ci = r.data.selector.ci;
+                        r.insert_col_page_break(ci);
+                    }
+                    "page-break-remove" if !read_only => {
+                        let ri = r.data.selector.ri;
+                        let ci = r.data.selector.ci;
+                        r.remove_page_break(ri, ci);
+                    }
                     _ => {}
                 }
                 r.render();
