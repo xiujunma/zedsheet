@@ -14,9 +14,23 @@
 
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::JsValue;
+use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlElement, HtmlInputElement};
 
 use super::*;
+
+/// External bindings for the async clipboard API. The browser
+/// only exposes `navigator.clipboard.readText()` behind a Promise
+/// (Phase 4.2 follow-up: read a blob from the clipboard is a
+/// larger lift using `read()` + ClipboardItem); `readText()` covers
+/// the most common case where the user copies an image URL first
+/// and then wants to paste it.
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = navigator, catch)]
+    async fn clipboardReadText() -> Result<JsValue, JsValue>;
+}
 
 const ROOT_CLASS: &str = "zs-image-modal-root";
 
@@ -41,6 +55,7 @@ pub(crate) fn image_modal_html() -> String {
                 <div style="{row}">
                     <label style="{label}">URL</label>
                     <input class="zs-image-url" type="text" style="flex:1;padding:3px;" placeholder="https://example.com/cat.png"/>
+                    <button class="zs-image-paste" style="padding:3px 8px;cursor:pointer;" title="Paste a URL from the clipboard">Paste</button>
                 </div>
                 <div style="{row}">
                     <label style="{label}">Anchor</label>
@@ -187,6 +202,52 @@ pub(crate) fn wire_image_modal(
         let _ = btn.add_event_listener_with_callback("click", cb);
     }
     apply_cb.forget();
+
+    // Paste from clipboard: read the clipboard as text and drop it
+    // into the URL input (Phase 4.2 follow-up). The user copies
+    // an image URL, then opens the dialog and clicks Paste — no
+    // manual typing. The async read lives in `spawn_local` so the
+    // click handler returns immediately; the future writes back
+    // into the same input element. Errors (permission denied, no
+    // text on the clipboard) surface as inline error text.
+    let paste_modal = modal.clone();
+    let paste_cb = Closure::<dyn FnMut()>::new(move || {
+        let modal_for_paste = paste_modal.clone();
+        spawn_local(async move {
+            match clipboardReadText().await {
+                Ok(value) => {
+                    let s = value.as_string().unwrap_or_default();
+                    let trimmed = s.trim().to_string();
+                    if let Some(input) = modal_for_paste
+                        .query_selector(".zs-image-url")
+                        .ok()
+                        .flatten()
+                        .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
+                    {
+                        if !trimmed.is_empty() {
+                            input.set_value(&trimmed);
+                        }
+                    }
+                }
+                Err(_) => {
+                    show_image_error(
+                        &modal_for_paste,
+                        "Couldn't read the clipboard. Copy an image URL first.",
+                    );
+                }
+            }
+        });
+    });
+    if let Some(btn) = modal
+        .query_selector(".zs-image-paste")
+        .ok()
+        .flatten()
+        .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
+    {
+        let cb = paste_cb.as_ref().unchecked_ref();
+        let _ = btn.add_event_listener_with_callback("click", cb);
+    }
+    paste_cb.forget();
 
     // Cancel / close: just hide.
     let modal_for_close = modal.clone();
