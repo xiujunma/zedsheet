@@ -17,6 +17,7 @@ use crate::core::clipboard_io::ParsedGrid;
 use crate::core::data_proxy::{
     ActiveSheet, DataProxy, PageBreak, SheetsRegistry, Style as CellStyle,
 };
+use crate::core::sparkline::{Sparkline, SparklineKind};
 
 /// A snapshot of cells held for copy/cut/paste.
 #[derive(Clone)]
@@ -1730,6 +1731,45 @@ impl TableRenderer {
             b.row.map(|r| r != row).unwrap_or(true) && b.col.map(|c| c != col).unwrap_or(true)
         });
         if self.data.page_setup.page_breaks.len() != before {
+            self.snapshot();
+        }
+    }
+
+    /// Add a sparkline (Phase 4.1b/5.2). The new entry is appended
+    /// to `DataProxy.sparklines`; rendering reads from there on the
+    /// next frame. Snapshots for undo (issue #62). No-op on a
+    /// read-only sheet or when `range` / `anchor` is empty.
+    pub fn add_sparkline(
+        &mut self,
+        kind: SparklineKind,
+        range: String,
+        anchor: String,
+        color: String,
+    ) {
+        if self.data.is_read_only() || range.is_empty() || anchor.is_empty() {
+            return;
+        }
+        self.snapshot();
+        self.data.sparklines.push(Sparkline {
+            kind,
+            range,
+            anchor,
+            color,
+            width: 120.0,
+            height: 20.0,
+        });
+    }
+
+    /// Remove the sparkline whose anchor matches `anchor`. Snapshots
+    /// for undo. No-op when no entry matches or on a read-only
+    /// sheet.
+    pub fn remove_sparkline(&mut self, anchor: &str) {
+        if self.data.is_read_only() || anchor.is_empty() {
+            return;
+        }
+        let before = self.data.sparklines.len();
+        self.data.sparklines.retain(|s| s.anchor != anchor);
+        if self.data.sparklines.len() != before {
             self.snapshot();
         }
     }

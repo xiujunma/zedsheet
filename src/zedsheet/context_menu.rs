@@ -60,6 +60,8 @@ pub(crate) fn context_menu_html() -> String {
         item("chart", "Insert chart…"),
         // Issue #16: image-insert dialog (Phase 4.2).
         item("image", "Insert Image…"),
+        // Phase 4.1b/5.2: sparkline-insert dialog.
+        item("sparkline", "Insert Sparkline…"),
         // Issue #35: PivotTable dialog.
         item("pivot", "Insert PivotTable…"),
         // Issue #61: Slicers dialog.
@@ -130,6 +132,7 @@ pub(crate) fn wire_context_menu(
     sort_open: OpenHandle,
     protect_open: OpenHandle,
     image_open: OpenHandle,
+    sparkline_open: OpenHandle,
 ) {
     // Open on right-click, after selecting the cell under the cursor.
     {
@@ -307,6 +310,17 @@ pub(crate) fn wire_context_menu(
             // pattern as the chart / pivot / slicer modals.
             if cmd == "image" {
                 if let Some(open) = image_open.borrow().as_ref() {
+                    open();
+                }
+                let _ = menu_for_click
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+                return;
+            }
+            // Sparkline-insert dialog (Phase 4.1b/5.2).
+            if cmd == "sparkline" {
+                if let Some(open) = sparkline_open.borrow().as_ref() {
                     open();
                 }
                 let _ = menu_for_click

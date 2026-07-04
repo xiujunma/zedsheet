@@ -37,6 +37,7 @@ mod print;
 mod protect_sheet_modal;
 mod slicer_modal;
 mod sort_dialog;
+mod sparkline_modal;
 mod system_clipboard;
 mod toolbar;
 mod util;
@@ -57,6 +58,7 @@ pub(crate) use print::*;
 pub(crate) use protect_sheet_modal::*;
 pub(crate) use slicer_modal::*;
 pub(crate) use sort_dialog::*;
+pub(crate) use sparkline_modal::*;
 pub(crate) use toolbar::*;
 pub(crate) use util::*;
 
@@ -578,6 +580,8 @@ impl ZedSheet {
         let protect_open: OpenHandle = Rc::new(RefCell::new(None));
         // Phase 4.2: image-insert dialog.
         let image_open: OpenHandle = Rc::new(RefCell::new(None));
+        // Phase 4.1b/5.2: sparkline-insert dialog.
+        let sparkline_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -739,6 +743,7 @@ impl ZedSheet {
                 sort_open.clone(),
                 protect_open.clone(),
                 image_open.clone(),
+                sparkline_open.clone(),
             );
         }
         if let Some(fb) = fbar_node.clone() {
@@ -1035,6 +1040,34 @@ impl ZedSheet {
                 };
                 open_image_modal(&inner, (ar, ac));
                 let _ = active_for_open; // (currently unused; reserved for sheet-scoped future work)
+            }));
+        }
+
+        // Sparkline-insert dialog (Phase 4.1b/5.2). The Apply
+        // handler appends a new `Sparkline` to
+        // `DataProxy.sparklines`. The renderer draws it on the next
+        // frame inside the host cell.
+        let mut sparkline_modal_root = h("div", Some("zs-sparkline-modal-root"));
+        sparkline_modal_root.set_inner_html(sparkline_modal_html());
+        let sparkline_modal_node: Option<web_sys::Element> = sparkline_modal_root
+            .el
+            .clone()
+            .and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut sparkline_modal_root);
+        if let Some(ref node) = sparkline_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-sparkline-modal-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_sparkline_modal(inner.clone(), &renderer, &sync);
+            let renderer_for_open = renderer.clone();
+            *sparkline_open.borrow_mut() = Some(Rc::new(move || {
+                let (ar, ac) = {
+                    let r = renderer_for_open.borrow();
+                    (r.selector.ri, r.selector.ci)
+                };
+                open_sparkline_modal(&inner, (ar, ac));
             }));
         }
 
