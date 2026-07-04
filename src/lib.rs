@@ -189,6 +189,39 @@ pub fn on_change(selector: &str, callback: js_sys::Function) {
     persist::set_on_change(selector, Some(callback));
 }
 
+/// Return the recent-files list (Phase 5.4) for this mount, newest
+/// first. Each entry is `{ name, json, timestamp_ms }`; the host can
+/// restore one with `load_data(selector, entry.json)`. The list is
+/// stored in `localStorage` and capped at 10 entries per mount. The
+/// host is responsible for *pushing* entries — typically after a
+/// file load or save.
+#[wasm_bindgen]
+pub fn get_recent_files(selector: &str) -> js_sys::Array {
+    let list = persist::get_recent_files(selector);
+    let arr = js_sys::Array::new_with_length(list.len() as u32);
+    for (i, f) in list.iter().enumerate() {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &"name".into(), &f.name.clone().into());
+        let _ = js_sys::Reflect::set(&obj, &"json".into(), &f.json.clone().into());
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &"timestamp_ms".into(),
+            &JsValue::from_f64(f.timestamp_ms as f64),
+        );
+        arr.set(i as u32, obj.into());
+    }
+    arr
+}
+
+/// Append a file to the recent-files list (Phase 5.4). If a file
+/// with the same `name` already exists, it moves to the front
+/// (newest). Pass `Date.now()` from JS for `timestamp_ms`. No-op on
+/// empty names or unavailable localStorage.
+#[wasm_bindgen]
+pub fn push_recent_file(selector: &str, name: &str, json: &str, timestamp_ms: f64) {
+    persist::push_recent_file(selector, name, json, timestamp_ms.max(0.0) as u64);
+}
+
 /// Export the mounted workbook's ACTIVE sheet as CSV (CSV is single-sheet).
 /// Formula cells export their computed values. `None` for an unmounted
 /// selector (issue #15).
