@@ -1548,6 +1548,14 @@ pub fn render(renderer: &TableRenderer) {
         let selector = renderer.get_selector();
         render_selector(&canvas, &selector, viewport, renderer);
 
+        // Paste preview (issue #3 BACKLOG): when the in-app clipboard
+        // holds a snapshot, draw a dashed outline at the active cell
+        // sized to the snapshot's dimensions. Tells the user exactly
+        // where Ctrl+V will land. Drawn on top of the selection so
+        // the user can see both at once. Cleared on the next
+        // successful paste (the clipboard is consumed).
+        render_paste_preview(&canvas, viewport, renderer);
+
         // Scrollbars (only when content exceeds the viewport).
         let total_row_height: f64 = (0..renderer.data.row_count())
             .map(|i| renderer.row_height_at(i))
@@ -1612,4 +1620,78 @@ pub fn render(renderer: &TableRenderer) {
             );
         }
     }
+}
+
+/// Render the paste preview (issue #3 BACKLOG): a dashed outline at
+/// the active cell whose top-left matches the active cell and whose
+/// shape mirrors the in-app clipboard's source dimensions. Visible
+/// only when the clipboard has a snapshot. The outline is rendered
+/// per area and clamped to the viewport.
+pub fn render_paste_preview(
+    canvas: &Canvas,
+    viewport: &crate::renderer::viewport::Viewport,
+    renderer: &TableRenderer,
+) {
+    let Some(clip) = &renderer.clipboard else {
+        return;
+    };
+    // The source dimensions (inclusive range in cells).
+    let src_h = clip.r1.saturating_sub(clip.r0) + 1;
+    let src_w = clip.c1.saturating_sub(clip.c0) + 1;
+    if src_h == 0 || src_w == 0 {
+        return;
+    }
+    // Destination starts at the active cell.
+    let (ar, ac) = (renderer.selector.ri, renderer.selector.ci);
+    let dr1 = ar + src_h - 1;
+    let dc1 = ac + src_w - 1;
+    canvas.save();
+    canvas.set_stroke_style("#0078d7");
+    canvas.set_line_width(1.5);
+    canvas.set_line_dash(&[5.0, 3.0]);
+    for area in &viewport.areas {
+        if area.range.start_row >= area.range.end_row || area.range.start_col >= area.range.end_col
+        {
+            continue;
+        }
+        // Skip the area entirely if the destination range doesn't
+        // touch it (avoids drawing a stray outline in the wrong
+        // viewport when the user is scrolled to a different region).
+        let area_last_row = area.range.end_row - 1;
+        let area_last_col = area.range.end_col - 1;
+        if dr1 < area.range.start_row
+            || ar > area_last_row
+            || dc1 < area.range.start_col
+            || ac > area_last_col
+        {
+            continue;
+        }
+        // Walk rows/cols to compute the rect, mirroring the
+        // render_selector pattern.
+        let min_r = ar.max(area.range.start_row);
+        let max_r = dr1.min(area_last_row);
+        let min_c = ac.max(area.range.start_col);
+        let max_c = dc1.min(area_last_col);
+        let mut x = area.x;
+        let mut y = area.y;
+        let mut width = 0f64;
+        let mut height = 0f64;
+        for row in min_r..=max_r {
+            if row == min_r {
+                y += area.row_map.get(&row).map_or(0f64, |(yy, _)| *yy);
+            }
+            height += area.row_map.get(&row).map_or(0f64, |(_, h)| *h);
+        }
+        for col in min_c..=max_c {
+            if col == min_c {
+                x += area.col_map.get(&col).map_or(0f64, |(xx, _)| *xx);
+            }
+            width += area.col_map.get(&col).map_or(0f64, |(_, w)| *w);
+        }
+        canvas.begin_path();
+        canvas.rect(x + 0.5, y + 0.5, width - 1.0, height - 1.0);
+        canvas.stroke();
+        break;
+    }
+    canvas.restore();
 }
