@@ -17,6 +17,7 @@ mod component;
 mod config;
 pub mod core;
 mod formula;
+mod idb_persist;
 mod persist;
 mod renderer;
 mod zedsheet;
@@ -232,6 +233,42 @@ pub fn push_recent_file(selector: &str, name: &str, json: &str, timestamp_ms: f6
 #[wasm_bindgen]
 pub fn set_custom_shortcut(selector: &str, combo: &str, callback: Option<js_sys::Function>) {
     persist::set_custom_shortcut(selector, combo, callback);
+}
+
+/// Enable IndexedDB-backed auto-save (Phase 5.7 / BACKLOG §4).
+/// The host passes its own `save_fn` / `load_fn` callbacks that
+/// do the actual IDB work — the engine just remembers the
+/// config, debounces, and dedupes writes. `load_fn` returns a
+/// Promise of the saved value (or undefined when absent).
+/// `save_fn` returns a Promise that resolves when the write
+/// completes. After the host's save resolves, it MUST call
+/// `idb_persist_done` so the engine can reset the dedup
+/// baseline and the next real change fires a save.
+#[wasm_bindgen]
+pub fn enable_idb_persist(
+    selector: &str,
+    db_name: &str,
+    store_name: &str,
+    debounce_ms: u32,
+    save_fn: js_sys::Function,
+    load_fn: js_sys::Function,
+) {
+    idb_persist::enable_idb_persist(selector, db_name, store_name, debounce_ms, save_fn, load_fn);
+}
+
+/// Host callback — call from your `save_fn`'s `.then` to
+/// confirm the IDB write completed. Without this, the engine
+/// would think every change is "still pending" and never
+/// re-fire.
+#[wasm_bindgen]
+pub fn idb_persist_done(selector: &str, json: &str) {
+    idb_persist::idb_persist_done(selector, json);
+}
+
+/// Disable IDB persistence for a mount.
+#[wasm_bindgen]
+pub fn disable_idb_persist(selector: &str) {
+    idb_persist::disable_idb_persist(selector);
 }
 
 /// Export the mounted workbook's ACTIVE sheet as CSV (CSV is single-sheet).

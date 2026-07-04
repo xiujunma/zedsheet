@@ -188,6 +188,12 @@ pub fn note_change(selector: &str, json: &str) {
         return;
     }
     write_storage(selector, json);
+    // Phase 5.7: also fire the host's debounced IDB writer if
+    // they registered one via `enable_idb_persist`. The IDB
+    // path runs in parallel with localStorage; the host's
+    // `idb_persist_done` call resets the IDB-side dedup so
+    // the next real change fires a save.
+    crate::idb_persist::maybe_save_to_idb(selector, json);
     if let Some(cb) = callback {
         let _ = cb.call1(&JsValue::NULL, &JsValue::from_str(json));
     }
