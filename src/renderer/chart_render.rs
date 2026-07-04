@@ -1039,6 +1039,64 @@ fn format_axis(v: f64, format: Option<&str>) -> String {
     s
 }
 
+/// Render every drawing-layer shape (Phase 6). Each shape's anchor
+/// cell drives its top-left position; the size / color / text
+/// come from the model. The clip is the visible viewport, so a
+/// shape anchored far from the scroll position is correctly
+/// culled. Drawn after the body / charts / images but before the
+/// headers, so a shape that overflows its anchor cell is
+/// partially covered by the column / row headers at the edge
+/// (matching the existing chart / image behavior).
+pub fn draw_shapes(canvas: &Canvas, renderer: &TableRenderer) {
+    for shape in &renderer.data.shapes {
+        let (ac, ar) = match crate::renderer::alphabets::exp2xy(&shape.anchor) {
+            (c, r) if r < renderer.body_start_row() || c < renderer.body_start_col() => continue,
+            (c, r) => (c, r),
+        };
+        let rect = renderer.cell_screen_rect(ar, ac);
+        if rect.x >= renderer.width || rect.y >= renderer.height {
+            continue;
+        }
+        let (x, y) = (rect.x, rect.y);
+        let w = shape.width.max(1.0);
+        let h = shape.height.max(1.0);
+        let color = shape.effective_color();
+        let fill = shape.effective_fill();
+        canvas.save();
+        canvas.set_line_width(1.5);
+        match shape.kind {
+            crate::core::shape::ShapeKind::Rect => {
+                canvas.set_stroke_style(&color);
+                canvas.begin_path();
+                canvas.rect(x + 0.5, y + 0.5, w - 1.0, h - 1.0);
+                canvas.stroke();
+            }
+            crate::core::shape::ShapeKind::Line => {
+                canvas.set_stroke_style(&color);
+                canvas.begin_path();
+                canvas.move_to(x, y);
+                canvas.line_to(x + w, y + h);
+                canvas.stroke();
+            }
+            crate::core::shape::ShapeKind::Text => {
+                canvas.set_fill_style(&fill);
+                canvas.fill_rect(x, y, w, h);
+                canvas.set_stroke_style(&color);
+                canvas.begin_path();
+                canvas.rect(x + 0.5, y + 0.5, w - 1.0, h - 1.0);
+                canvas.stroke();
+                if !shape.text.is_empty() {
+                    canvas.set_fill_style(&color);
+                    canvas.set_font("12px Arial, sans-serif");
+                    canvas.set_text_align("left");
+                    canvas.fill_text(&shape.text, x + 6.0, y + 16.0, Some(w - 12.0));
+                }
+            }
+        }
+        canvas.restore();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

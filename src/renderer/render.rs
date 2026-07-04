@@ -1509,6 +1509,11 @@ pub fn render(renderer: &TableRenderer) {
         // overflow at the image's edges. Each image is loaded
         // from its src URL once and cached for subsequent frames.
         crate::renderer::chart_render::draw_images(&canvas, renderer);
+        // Drawing-layer shapes (Phase 6): rectangles / lines / text
+        // boxes anchored to a cell. Drawn after images so any
+        // shape defined later in the list overlays earlier
+        // ones (mirrors Excel's z-order).
+        crate::renderer::chart_render::draw_shapes(&canvas, renderer);
 
         // Column headers span the frozen + body columns; row headers span the
         // frozen + body rows. area4 covers the common (no-freeze) case.

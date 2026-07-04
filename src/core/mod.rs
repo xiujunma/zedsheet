@@ -18,6 +18,7 @@ pub mod ods;
 pub mod outline;
 pub mod pivot;
 pub mod row;
+pub mod shape;
 pub mod sheet_protection;
 pub mod sparkline;
 pub mod state;

@@ -1774,6 +1774,31 @@ impl TableRenderer {
         }
     }
 
+    /// Append a shape (Phase 6) to the active sheet. The new
+    /// entry is drawn on the next frame. Snapshots for undo
+    /// (issue #62). No-op on a read-only sheet or with an empty
+    /// anchor.
+    pub fn add_shape(&mut self, shape: crate::core::shape::Shape) {
+        if self.data.is_read_only() || shape.anchor.is_empty() {
+            return;
+        }
+        self.snapshot();
+        self.data.shapes.push(shape);
+    }
+
+    /// Remove the shape at `index` (Phase 6). Snapshots for undo
+    /// when an entry was actually removed.
+    pub fn remove_shape(&mut self, index: usize) {
+        if self.data.is_read_only() {
+            return;
+        }
+        if index >= self.data.shapes.len() {
+            return;
+        }
+        self.snapshot();
+        self.data.shapes.remove(index);
+    }
+
     pub fn data_clone(&self) -> DataProxy {
         let mut d = self.data.clone();
         // Mirror the live selection into the snapshot so get_data() exposes the

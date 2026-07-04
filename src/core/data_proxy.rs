@@ -285,6 +285,13 @@ pub struct DataProxy {
     /// don't include the key in `set_data`, so the field stays
     /// at its default (empty).
     pub images: Vec<crate::core::image::Image>,
+    /// Drawing-layer shapes (Phase 6). Each entry is a floating
+    /// rectangle / line / text box anchored to a single cell;
+    /// the renderer blits them on top of the body, scrolling with
+    /// the underlying cells. Backward-compat: pre-6 workbooks
+    /// don't include the key in `set_data`, so the field stays
+    /// at its default (empty).
+    pub shapes: Vec<crate::core::shape::Shape>,
     /// Sheet protection metadata (Phase 1.3). The `enabled` flag mirrors
     /// `read_only` for the data-layer block — when protection is enabled
     /// the UI also sets `read_only = true`. `password_hash` is the
@@ -380,6 +387,7 @@ impl Default for DataProxy {
             slicers: Vec::new(),
             sparklines: Vec::new(),
             images: Vec::new(),
+            shapes: Vec::new(),
             protection: crate::core::sheet_protection::SheetProtection::default(),
             sheets: None,
             read_only: Rc::new(RefCell::new(false)),
@@ -3628,6 +3636,8 @@ impl DataProxy {
             "sparklines": serde_json::to_value(&self.sparklines).unwrap_or_default(),
             // Floating images (Phase 4.2); absent in pre-4.2 workbooks.
             "images": serde_json::to_value(&self.images).unwrap_or_default(),
+            // Drawing-layer shapes (Phase 6). Absent in pre-6 workbooks.
+            "shapes": serde_json::to_value(&self.shapes).unwrap_or_default(),
             // Sheet protection metadata (Phase 1.3).
             "protection": serde_json::to_value(&self.protection).unwrap_or_default(),
             // Excel-style tables (issue #34).
@@ -3780,6 +3790,14 @@ impl DataProxy {
             // Floating images (Phase 4.2). Absent in pre-4.2
             // workbooks; `images` stays at its default (empty).
             self.images = imgs;
+        }
+        if let Some(shapes) = data
+            .get("shapes")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        {
+            // Drawing-layer shapes (Phase 6). Absent in pre-6
+            // workbooks; `shapes` stays at its default (empty).
+            self.shapes = shapes;
         }
         if let Some(ts) = data
             .get("tables")
@@ -9425,5 +9443,57 @@ mod tests {
         let mut back2 = d2;
         back2.set_data(json2);
         assert!(back2.get_comments(0, 0).is_none());
+    }
+
+    // --- Drawing-layer shapes (Phase 6) ---
+
+    #[test]
+    fn shape_round_trips_through_get_set_data() {
+        // Three shapes — one of each kind — serialize through
+        // get_data and come back identical on set_data. The
+        // pre-6 workbook path (no "shapes" key in the JSON) loads
+        // with an empty list, so old saved files don't gain
+        // shapes out of nowhere.
+        let mut d = DataProxy::new("t");
+        d.shapes.push(crate::core::shape::Shape {
+            kind: crate::core::shape::ShapeKind::Rect,
+            anchor: "B2".into(),
+            width: 100.0,
+            height: 60.0,
+            color: "#1e88e5".into(),
+            fill: String::new(),
+            text: String::new(),
+        });
+        d.shapes.push(crate::core::shape::Shape {
+            kind: crate::core::shape::ShapeKind::Line,
+            anchor: "D4".into(),
+            width: 80.0,
+            height: 40.0,
+            color: String::new(),
+            fill: String::new(),
+            text: String::new(),
+        });
+        d.shapes.push(crate::core::shape::Shape {
+            kind: crate::core::shape::ShapeKind::Text,
+            anchor: "F6".into(),
+            width: 200.0,
+            height: 80.0,
+            color: "#222222".into(),
+            fill: "#fffbe6".into(),
+            text: "Note".into(),
+        });
+        let json = d.get_data();
+        let mut back = DataProxy::new("t");
+        back.set_data(json);
+        assert_eq!(back.shapes.len(), 3);
+        assert_eq!(back.shapes[0].anchor, "B2");
+        assert_eq!(back.shapes[1].kind, crate::core::shape::ShapeKind::Line);
+        assert_eq!(back.shapes[2].text, "Note");
+
+        // No "shapes" key in the JSON → empty list.
+        let legacy = serde_json::json!({});
+        let mut legacy_back = DataProxy::new("t");
+        legacy_back.set_data(legacy);
+        assert!(legacy_back.shapes.is_empty());
     }
 }
