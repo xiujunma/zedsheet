@@ -122,10 +122,24 @@ pub(crate) fn wire_toolbar(
             return;
         }
 
-        // Print renders the sheet into a hidden iframe and opens the native
-        // print dialog (issue #17).
+        // Print renders the active sheet into a hidden iframe and
+        // opens the native print dialog (issue #17). The "print all"
+        // action is a separate button / data-action that walks the
+        // whole registry (Phase 5.3) — same iframe, multi-sheet
+        // document with a `page-break-before` between sheets.
         if action == "print" {
-            open_print(&renderer);
+            let active_idx = *active.borrow();
+            let single = sheets.borrow();
+            let sheet = single
+                .get(active_idx)
+                .cloned()
+                .unwrap_or_else(|| renderer.borrow().data.clone());
+            open_print(&[sheet]);
+            return;
+        }
+        if action == "print-all" {
+            let snapshot: Vec<DataProxy> = sheets.borrow().clone();
+            open_print(&snapshot);
             return;
         }
 

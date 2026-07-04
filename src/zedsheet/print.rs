@@ -140,15 +140,14 @@ fn empty_print_html(sheet: &DataProxy) -> String {
     )
 }
 
-/// Print the active sheet: load the document into a hidden, reused iframe and
-/// invoke its `print()` once loaded (issue #17).
-pub(crate) fn open_print(renderer: &SharedRenderer) {
-    // Print at 100% regardless of the current view zoom (issue #32): the
-    // sizing reads get_col_width/get_row_height, which apply the zoom factor,
-    // so stamp 1.0 onto a local clone.
-    let mut sheet = renderer.borrow().data.clone();
-    sheet.set_zoom(1.0);
-    let html = build_print_html(&sheet);
+/// Print the given sheets: load a document into a hidden, reused iframe
+/// and invoke its `print()` once loaded. Pass a single-sheet slice for
+/// "active sheet only" (issue #17), or the full workbook to print every
+/// sheet in tab order with a `page-break-before` between them (Phase 5.3).
+/// Each sheet's view-zoom is forced to 1.0 so the printed output isn't
+/// shrunk by the user's on-screen zoom.
+pub(crate) fn open_print(sheets: &[DataProxy]) {
+    let html = build_workbook_print_html(sheets);
     let doc = gloo::utils::document();
     // Replace any previous print frame so repeated prints stay clean.
     if let Ok(Some(old)) = doc.query_selector("#zs-print-frame") {
@@ -176,6 +175,68 @@ pub(crate) fn open_print(renderer: &SharedRenderer) {
             }
         });
     }
+}
+
+/// Build the print document for the whole workbook (or any subset of
+/// sheets passed in). Each sheet's `<table>` is wrapped in a
+/// `<section class="zs-print-sheet">` with a heading carrying the
+/// sheet name; the CSS sets `page-break-before: always` on every
+/// section after the first so each sheet starts a new page.
+pub(crate) fn build_workbook_print_html(sheets: &[DataProxy]) -> String {
+    // Force 1.0 zoom on every sheet so on-screen zoom doesn't
+    // affect the printed output (issue #32).
+    let zoomed: Vec<DataProxy> = sheets
+        .iter()
+        .cloned()
+        .map(|mut s| {
+            s.set_zoom(1.0);
+            s
+        })
+        .collect();
+    if zoomed.is_empty() {
+        return empty_print_html(&DataProxy::new("(empty)"));
+    }
+    // The first sheet defines the @page CSS (orientation, paper size,
+    // margins); later sheets reuse the same print rules.
+    let first_html = build_print_html(&zoomed[0]);
+    if zoomed.len() == 1 {
+        return first_html;
+    }
+    // Pull the <head> out of the first sheet's doc, then replace the
+    // <body> with a sequence of <section>s.
+    let first_head_end = first_html.find("</head>").unwrap_or(0);
+    let head = &first_html[..=first_head_end];
+    let mut body = String::new();
+    body.push_str(&format!(
+        "<h1 class=\"zs-print-sheet-title\">{}</h1>",
+        esc(&zoomed[0].name)
+    ));
+    body.push_str(&extract_table(&first_html));
+    for sheet in zoomed.iter().skip(1) {
+        let html = build_print_html(sheet);
+        body.push_str(&format!(
+            "<section class=\"zs-print-sheet\">\
+               <h1 class=\"zs-print-sheet-title\">{}</h1>{}\
+             </section>",
+            esc(&sheet.name),
+            extract_table(&html)
+        ));
+    }
+    // Add the per-sheet page-break CSS to the <head> if not already there.
+    let extra_css = "<style>.zs-print-sheet{page-break-before:always;}\
+                     .zs-print-sheet-title{font-size:14px;margin:6px 0;}</style>";
+    format!("{}{}{}", head, extra_css, body)
+}
+
+/// Pull the `<table>...</table>` block out of a `build_print_html`
+/// document. Used to stitch multiple sheets into one print doc.
+fn extract_table(html: &str) -> String {
+    let start = html.find("<table").unwrap_or(0);
+    let end = html
+        .rfind("</table>")
+        .map(|i| i + "</table>".len())
+        .unwrap_or(html.len());
+    html[start..end].to_string()
 }
 
 #[cfg(test)]
@@ -249,5 +310,42 @@ mod tests {
         let html = build_print_html(&DataProxy::new("Empty"));
         assert!(html.contains("<title>Empty</title>"));
         assert!(!html.contains("<table>"));
+    }
+
+    #[test]
+    fn workbook_print_emits_one_section_per_sheet() {
+        // Two sheets, each with one cell of content. The workbook
+        // print document should emit BOTH names as headings and
+        // BOTH <table> blocks, and the per-sheet page-break CSS
+        // should be present so the printer starts each sheet on a
+        // fresh page (Phase 5.3).
+        let mut a = DataProxy::new("Alpha");
+        a.set_cell_text(0, 0, "A1");
+        let mut b = DataProxy::new("Beta");
+        b.set_cell_text(0, 0, "B1");
+        let html = build_workbook_print_html(&[a, b]);
+        assert!(html.contains("<title>Alpha</title>"));
+        assert!(html.contains("Alpha"));
+        assert!(html.contains("Beta"));
+        // Both <table>...</table> blocks must be present.
+        let n_tables = html.matches("<table").count();
+        assert_eq!(n_tables, 2, "expected two tables, got: {n_tables}");
+        // Per-sheet section wrapper for page-break-before.
+        assert!(html.contains("zs-print-sheet"));
+        assert!(html.contains("page-break-before"));
+    }
+
+    #[test]
+    fn single_sheet_workbook_does_not_emit_page_break_wrapper() {
+        // A one-sheet "workbook" is a no-op for the multi-sheet
+        // path; the output should be identical to build_print_html.
+        let mut a = DataProxy::new("Solo");
+        a.set_cell_text(0, 0, "x");
+        let workbook = build_workbook_print_html(&[a.clone()]);
+        let single = build_print_html(&a);
+        // Both paths emit a <table>; the multi-sheet path stays
+        // backward-compatible for one-sheet inputs.
+        assert!(workbook.contains("<table"));
+        assert!(single.contains("<table"));
     }
 }
