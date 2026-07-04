@@ -249,6 +249,15 @@ pub struct DataProxy {
     /// Named ranges (sheet-scoped): UPPERCASE name → range expression like
     /// `"B2:B3"` or `"B2"`. Resolved by the evaluator and the name box.
     pub named_ranges: HashMap<String, String>,
+    /// Workbook-wide named ranges (Phase 5.5). Shared across every
+    /// `DataProxy` in the workbook via `Rc`, so defining a name on
+    /// one sheet makes it visible from any other sheet's
+    /// `get_named_range` lookup. The sheet's own `named_ranges` is
+    /// checked first (and shadows a workbook name with the same key).
+    /// Not persisted in `get_data` / `set_data` — the workbook-wide
+    /// map is reconstructed at mount time by re-linking every
+    /// `DataProxy` to the same Rc.
+    pub workbook_named_ranges: Rc<RefCell<HashMap<String, String>>>,
     /// PivotTables defined on this sheet (issue #35). A pivot is the recipe
     /// (source range, row/col/value fields, aggregation, output sheet name);
     /// the materialized output lives on a separate `DataProxy` that's a
@@ -361,6 +370,11 @@ impl Default for DataProxy {
             charts: Vec::new(),
             tables: Vec::new(),
             named_ranges: HashMap::new(),
+            // Each fresh DataProxy starts with its OWN workbook
+            // map; the SheetsRegistry caller is expected to
+            // re-link every DataProxy to a shared Rc after
+            // building the registry (see zedsheet/mod.rs).
+            workbook_named_ranges: Rc::new(RefCell::new(HashMap::new())),
             let_bindings: Rc::new(RefCell::new(Vec::new())),
             pivots: Vec::new(),
             slicers: Vec::new(),
@@ -395,6 +409,21 @@ impl DataProxy {
         // Downgrade to a Weak so this back-reference doesn't keep the workbook
         // (which contains this very DataProxy) alive — see the field docs.
         self.sheets = Some(Rc::downgrade(sheets));
+    }
+
+    /// Adopt the same shared `Rc` that the rest of the registry
+    /// uses for the workbook-wide named-ranges map (Phase 5.5).
+    /// The caller is responsible for extracting the Rc from a
+    /// wired sibling (so the method itself doesn't need to
+    /// borrow the registry — a borrow-conflict source when the
+    /// caller is already iterating the registry mutably).
+    pub fn link_workbook_named_ranges(
+        &mut self,
+        source: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, String>>>,
+    ) {
+        if !std::rc::Rc::ptr_eq(&source, &self.workbook_named_ranges) {
+            self.workbook_named_ranges = source;
+        }
     }
 
     /// Put the sheet in read-only mode. While `true`, the editor refuses to
@@ -2268,7 +2297,7 @@ impl DataProxy {
         self.get_cell_or_new(ri, ci).link = link;
     }
 
-    // --- Named ranges (issue #21) ---
+    // --- Named ranges (issue #21 + Phase 5.5) ---
 
     /// Define (or replace) a sheet-scoped named range. Names are case-insensitive.
     pub fn set_named_range(&mut self, name: &str, range_expr: &str) {
@@ -2278,8 +2307,43 @@ impl DataProxy {
     }
 
     /// The range expression for a name (e.g. `"B2:B3"`), if defined.
+    /// Lookup order: the active sheet's own `named_ranges` first,
+    /// then the shared workbook-wide map. The sheet map shadows a
+    /// workbook name with the same key.
     pub fn get_named_range(&self, name: &str) -> Option<String> {
-        self.named_ranges.get(&name.to_uppercase()).cloned()
+        let upper = name.to_uppercase();
+        if let Some(s) = self.named_ranges.get(&upper) {
+            return Some(s.clone());
+        }
+        self.workbook_named_ranges.borrow().get(&upper).cloned()
+    }
+
+    /// Define (or replace) a workbook-wide named range (Phase 5.5).
+    /// The new entry is visible from every sheet's `get_named_range`
+    /// lookup. Stored in the shared `Rc` map so a single define
+    /// propagates across the whole registry.
+    pub fn set_workbook_named_range(&self, name: &str, range_expr: &str) {
+        self.workbook_named_ranges
+            .borrow_mut()
+            .insert(name.to_uppercase(), range_expr.to_string());
+    }
+
+    /// Remove a workbook-wide name; returns whether it existed.
+    pub fn remove_workbook_named_range(&self, name: &str) -> bool {
+        self.workbook_named_ranges
+            .borrow_mut()
+            .remove(&name.to_uppercase())
+            .is_some()
+    }
+
+    /// Iterate every workbook-wide name (Phase 5.5). Returned as a
+    /// `Vec<(name, expr)>` for the host API / name-box UI.
+    pub fn workbook_named_ranges(&self) -> Vec<(String, String)> {
+        self.workbook_named_ranges
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Remove a named range; returns whether it existed.
@@ -7667,6 +7731,42 @@ mod tests {
         assert_eq!(d.get_named_range("testRange").as_deref(), Some("F1:F5"));
         d.set_cell_text(10, 0, "=SUM(testRange)");
         assert_eq!(d.cell_display_value(10, 0), "105");
+    }
+
+    #[test]
+    fn workbook_named_range_visible_across_sheets() {
+        // Two DataProxies sharing the same `workbook_named_ranges`
+        // Rc — a name defined on sheet A resolves from sheet B's
+        // `get_named_range` (Phase 5.5). The sheet's own
+        // `named_ranges` map stays separate, so each sheet can
+        // still have its own private names too.
+        let mut a = DataProxy::new("Alpha");
+        let mut b = DataProxy::new("Beta");
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+            String,
+            String,
+        >::new()));
+        a.workbook_named_ranges = std::rc::Rc::clone(&shared);
+        b.workbook_named_ranges = std::rc::Rc::clone(&shared);
+        // Define on sheet A.
+        a.set_workbook_named_range("WB", "A1:A3");
+        // Sheet B sees the same workbook map.
+        assert_eq!(b.get_named_range("WB").as_deref(), Some("A1:A3"));
+        // Sheet B's own map is still independent.
+        b.set_named_range("PRIVATE", "B1");
+        assert_eq!(b.get_named_range("PRIVATE").as_deref(), Some("B1"));
+        assert_eq!(a.get_named_range("PRIVATE"), None);
+        // Sheet-scoped shadows a workbook name with the same key.
+        a.set_named_range("WB", "Z1");
+        assert_eq!(a.get_named_range("WB").as_deref(), Some("Z1"));
+        // Workbook map unchanged; sheet B still sees the workbook value.
+        assert_eq!(b.get_named_range("WB").as_deref(), Some("A1:A3"));
+        // Remove from the workbook map; both sheets fall back to
+        // "not defined" (sheet A's local override still wins, but
+        // the workbook shadow is gone).
+        a.remove_workbook_named_range("WB");
+        assert_eq!(a.get_named_range("WB").as_deref(), Some("Z1"));
+        assert_eq!(b.get_named_range("WB"), None);
     }
 
     // View zoom (issue #32): get_row_height/get_col_width are the single

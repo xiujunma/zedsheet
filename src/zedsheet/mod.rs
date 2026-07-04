@@ -429,18 +429,24 @@ impl ZedSheet {
 
         // All sheets live here; the renderer holds a copy of the active one.
         let sheets: Sheets = Rc::new(RefCell::new(vec![data.clone()]));
-        // Wire the workbook-wide sheets registry on every DataProxy so
-        // cross-sheet formulas (`Sheet2!A1`, issue #4) can resolve against
-        // the named sheet. Each DataProxy gets the same `Rc<RefCell<Vec<…>>>`
-        // so the registry is shared across clones and sheet operations.
+        // Phase 5.5: workbook-wide named ranges. One Rc<RefCell<…>>
+        // shared across every DataProxy in the registry so a name
+        // defined on one sheet is visible from any other sheet's
+        // `get_named_range` lookup. Built before the per-sheet
+        // set_sheets pass so the wire-up covers the workbook map too.
+        let workbook_names: std::rc::Rc<
+            std::cell::RefCell<std::collections::HashMap<String, String>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(Default::default()));
         for d in sheets.borrow_mut().iter_mut() {
             d.set_sheets(&sheets);
+            d.workbook_named_ranges = std::rc::Rc::clone(&workbook_names);
         }
         // The renderer's own DataProxy is the *original* `data`, not the
         // clone inside the Vec — wire it too so the active-sheet evaluator
         // can see peers. (Clones of a wired DataProxy copy the Weak, so
         // subsequent sheet switches stay wired automatically.)
         data.set_sheets(&sheets);
+        data.workbook_named_ranges = std::rc::Rc::clone(&workbook_names);
         let active: ActiveSheet = Rc::new(RefCell::new(0));
 
         let mut renderer = TableRenderer::new(canvas, width, height, data);

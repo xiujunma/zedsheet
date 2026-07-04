@@ -2543,6 +2543,15 @@ impl TableRenderer {
         let mut out_sheet = crate::core::pivot::materialize(&pt, &result, &headers, &output_name);
         out_sheet.set_read_only(true);
         out_sheet.set_sheets(sheets);
+        // Phase 5.5: adopt the workbook-wide named-ranges map from
+        // an already-wired sibling so the new output sheet can
+        // resolve workbook names too.
+        let workbook_names = sheets
+            .borrow()
+            .first()
+            .map(|d| std::rc::Rc::clone(&d.workbook_named_ranges))
+            .unwrap_or_default();
+        out_sheet.link_workbook_named_ranges(workbook_names);
         // 4. Install: spec on the source, output appended/replaced. The spec
         //    must land on the REGISTRY's source entry, not on the renderer's
         //    transient self.data, which is replaced with the output below —
@@ -2621,6 +2630,12 @@ impl TableRenderer {
             crate::core::pivot::materialize(&pt, &result, &headers, &pt.output_sheet);
         new_sheet.set_read_only(true);
         new_sheet.set_sheets(sheets);
+        let workbook_names = sheets
+            .borrow()
+            .first()
+            .map(|d| std::rc::Rc::clone(&d.workbook_named_ranges))
+            .unwrap_or_default();
+        new_sheet.link_workbook_named_ranges(workbook_names);
         sheets.borrow_mut()[cur] = new_sheet;
         self.set_data(sheets.borrow()[cur].clone());
         self.render();
@@ -2674,6 +2689,12 @@ impl TableRenderer {
             let mut out = crate::core::pivot::materialize(pt, &result, &headers, &pt.output_sheet);
             out.set_read_only(true);
             out.set_sheets(sheets);
+            let workbook_names = sheets
+                .borrow()
+                .first()
+                .map(|d| std::rc::Rc::clone(&d.workbook_named_ranges))
+                .unwrap_or_default();
+            out.link_workbook_named_ranges(workbook_names);
             updates.push((pt.output_sheet.clone(), out));
         }
 
@@ -3326,6 +3347,11 @@ mod tests {
             d.set_sheets(&sheets);
         }
         src.set_sheets(&sheets);
+        // Phase 5.5: with a single sheet, the lone DataProxy
+        // already owns its Rc — the link is a no-op when the
+        // pointers are already equal.
+        let workbook_names = std::rc::Rc::clone(&src.workbook_named_ranges);
+        src.link_workbook_named_ranges(workbook_names);
         (src, sheets)
     }
 
@@ -3425,6 +3451,13 @@ mod tests {
             d.set_sheets(&sheets);
         }
         src.set_sheets(&sheets);
+        // Phase 5.5: link the workbook-wide named-ranges map across
+        // all sheets so workbook names defined on `src` are visible
+        // from the stale sheet too.
+        let workbook_names = std::rc::Rc::clone(&src.workbook_named_ranges);
+        for d in sheets.borrow_mut().iter_mut() {
+            d.link_workbook_named_ranges(std::rc::Rc::clone(&workbook_names));
+        }
 
         let pt = pt_for(
             "Sales!A1:B3",
