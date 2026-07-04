@@ -148,11 +148,17 @@ fn render_rules_list(modal: &web_sys::Element, renderer: &SharedRenderer) {
             "<div style=\"display:flex;align-items:center;gap:8px;padding:3px 0;\">\
                <span style=\"display:inline-block;width:14px;height:14px;border:1px solid #ccc;background:{};flex:none;\"></span>\
                <span style=\"flex:1;\">{} · {}</span>\
+               <button data-cfmove=\"{}\" data-cfdir=\"up\" title=\"Move up\" style=\"padding:1px 6px;cursor:pointer;{};\">↑</button>\
+               <button data-cfmove=\"{}\" data-cfdir=\"down\" title=\"Move down\" style=\"padding:1px 6px;cursor:pointer;{};\">↓</button>\
                <button data-cfdel=\"{}\" style=\"padding:1px 8px;cursor:pointer;\">Delete</button>\
              </div>",
             esc(&swatch),
             esc(&r.range),
             what,
+            i,
+            if i == 0 { "display:none;" } else { "" },
+            i,
+            if i + 1 == rules.len() { "display:none;" } else { "" },
             i
         ));
     }
@@ -320,6 +326,33 @@ pub(crate) fn wire_cond_format_modal(
                 }
                 sync();
                 render_rules_list(&modal_node, &renderer);
+            }
+            return;
+        }
+
+        // Per-rule ↑ / ↓ reorders (issue #29 follow-on). The first
+        // matching rule wins during evaluation, so the order is
+        // user-visible. Up arrow hides on row 0; down arrow hides on
+        // the last row, but the boundary check is also in
+        // `move_cond_rule` for safety.
+        if let Some(mv) = elx.closest("[data-cfmove]").ok().flatten() {
+            let idx = mv.get_attribute("data-cfmove").and_then(|v| v.parse().ok());
+            let dir = mv.get_attribute("data-cfdir");
+            if let (Some(i), Some(d)) = (idx, dir.as_deref()) {
+                let signed = match d {
+                    "up" => -1,
+                    "down" => 1,
+                    _ => 0,
+                };
+                if signed != 0 {
+                    {
+                        let mut r = renderer.borrow_mut();
+                        r.move_cond_rule(i, signed);
+                        r.render();
+                    }
+                    sync();
+                    render_rules_list(&modal_node, &renderer);
+                }
             }
             return;
         }

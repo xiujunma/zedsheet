@@ -2461,6 +2461,27 @@ impl TableRenderer {
         self.data.cond_formats.remove(idx);
     }
 
+    /// Move the rule at `idx` up or down by one position. `dir` is
+    /// `+1` for down, `-1` for up. No-op at the boundaries or when
+    /// the index is out of range. The reorder affects evaluation
+    /// order (the first rule that matches a cell wins), so this
+    /// matters in practice. Snapshots for undo.
+    pub fn move_cond_rule(&mut self, idx: usize, dir: i32) {
+        if self.data.is_read_only() || dir == 0 {
+            return;
+        }
+        let new_idx = match dir.signum() {
+            1 => idx + 1,
+            -1 => idx.checked_sub(1).unwrap_or(usize::MAX),
+            _ => return,
+        };
+        if new_idx >= self.data.cond_formats.len() {
+            return;
+        }
+        self.snapshot();
+        self.data.cond_formats.swap(idx, new_idx);
+    }
+
     /// Append a chart (issue #16).
     pub fn add_chart(&mut self, chart: crate::core::chart::Chart) {
         if self.data.is_read_only() {
