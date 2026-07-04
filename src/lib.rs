@@ -222,6 +222,18 @@ pub fn push_recent_file(selector: &str, name: &str, json: &str, timestamp_ms: f6
     persist::push_recent_file(selector, name, json, timestamp_ms.max(0.0) as u64);
 }
 
+/// Register a custom keyboard shortcut (Phase 5.6). `combo` is a
+/// modifier-then-key string like `"Ctrl+Shift+K"` (modifier order
+/// is normalised, key letter is case-insensitive). The callback is
+/// invoked with no arguments when the user presses the combo. Pass
+/// `null` (or `undefined`) as the callback to clear a registration.
+/// The host is responsible for handling the action; the engine
+/// just calls back into JS.
+#[wasm_bindgen]
+pub fn set_custom_shortcut(selector: &str, combo: &str, callback: Option<js_sys::Function>) {
+    persist::set_custom_shortcut(selector, combo, callback);
+}
+
 /// Export the mounted workbook's ACTIVE sheet as CSV (CSV is single-sheet).
 /// Formula cells export their computed values. `None` for an unmounted
 /// selector (issue #15).

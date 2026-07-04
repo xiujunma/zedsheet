@@ -25,6 +25,7 @@ pub(crate) fn wire_events(
     sync: &SyncFn,
     delete_open: OpenHandle,
     drag: Rc<RefCell<Option<DragState>>>,
+    mount_selector: &str,
 ) {
     let dragging = Rc::new(RefCell::new(false));
 
@@ -486,6 +487,7 @@ pub(crate) fn wire_events(
         let editor_error = editor_error_node.clone();
         let sync = sync.clone();
         let delete_open = delete_open.clone();
+        let mount_selector = mount_selector.to_string();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
             if editing.borrow().is_some() {
                 return; // cell editor handles its own keys while editing
@@ -499,6 +501,21 @@ pub(crate) fn wire_events(
             }
             let ke: KeyboardEvent = event.dyn_into().unwrap();
             let key = ke.key();
+
+            // Phase 5.6: host-registered custom shortcuts take
+            // precedence over the built-ins. The combo is built in
+            // the same way the host wrote it (case-insensitive on
+            // the key letter) and the caller's callback fires
+            // before the engine does anything. We DO `prevent_default`
+            // so the browser doesn't also trigger built-in shortcuts
+            // that share a chord.
+            if let Some(cb) =
+                crate::persist::get_custom_shortcut(&mount_selector, &combo_string(&ke))
+            {
+                let _ = cb.call0(&wasm_bindgen::JsValue::NULL);
+                ke.prevent_default();
+                return;
+            }
 
             // Ctrl/Cmd shortcuts: style toggles + undo/redo. Copy/cut/paste are
             // handled by the native clipboard events in `system_clipboard` so
@@ -881,6 +898,29 @@ fn is_typing_to_edit_key(key: &str, ctrl: bool, meta: bool, alt: bool) -> bool {
         return false;
     }
     key.chars().count() == 1
+}
+
+/// Build a normalised chord string from a keyboard event, matching
+/// the format the host uses in `set_custom_shortcut`:
+/// "Ctrl+Shift+K" / "Alt+Enter" / "K" (no modifiers). Modifier
+/// order is fixed (Ctrl, Alt, Shift) so the host's order doesn't
+/// matter. Empty key strings return an empty chord (never matches).
+fn combo_string(ke: &KeyboardEvent) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if ke.ctrl_key() || ke.meta_key() {
+        parts.push("ctrl".to_string());
+    }
+    if ke.alt_key() {
+        parts.push("alt".to_string());
+    }
+    if ke.shift_key() {
+        parts.push("shift".to_string());
+    }
+    let key = ke.key();
+    if !key.is_empty() {
+        parts.push(key);
+    }
+    parts.join("+")
 }
 
 #[cfg(test)]

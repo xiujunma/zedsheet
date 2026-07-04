@@ -24,9 +24,83 @@ struct MountState {
     last_json: Option<String>,
     /// Host-registered change callback, invoked with the workbook JSON.
     on_change: Option<js_sys::Function>,
+    /// Host-registered custom keyboard shortcuts. The key is a
+    /// normalised combo like "Ctrl+Shift+K" (case-insensitive on
+    /// the key letter); the value is the JS callback to fire.
+    custom_shortcuts: HashMap<String, js_sys::Function>,
     /// Persistence is disarmed until the initial mount + restore completes, so
     /// the first sync can't overwrite saved data before it has been read back.
     armed: bool,
+}
+
+/// Normalise a key-combo string for the registry: upper-case the
+/// modifier list and the letter, trim whitespace, and join with
+/// `+`. The host can pass `"ctrl+k"`, `"Ctrl+K"`, or
+/// `"ctrl + K"` and they all collide on the same registry entry.
+fn normalise_combo(combo: &str) -> String {
+    let mut parts: Vec<String> = combo
+        .split('+')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    // Stable order: modifiers first (Ctrl, Alt, Shift, Meta) then the key.
+    let order = |s: &str| match s.to_ascii_lowercase().as_str() {
+        "ctrl" | "control" | "cmd" | "meta" => 0,
+        "alt" | "option" => 1,
+        "shift" => 2,
+        _ => 3,
+    };
+    parts.sort_by_key(|p| order(p));
+    parts
+        .iter()
+        .map(|p| {
+            let lower = p.to_ascii_lowercase();
+            if order(p) == 3 {
+                // The actual key letter: keep the original case so
+                // the host can distinguish Shift+1 from 1 if they
+                // need to. The lookup is case-insensitive at the
+                // call site, so "Ctrl+K" and "Ctrl+k" both match.
+                p.clone()
+            } else {
+                lower
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// Register (or clear, with `None`) a custom keyboard shortcut for
+/// this mount (Phase 5.6). `combo` is matched case-insensitively on
+/// the key letter; the modifier order is normalised (Ctrl, Alt,
+/// Shift, Meta) so two equivalent strings collide on one entry.
+pub fn set_custom_shortcut(selector: &str, combo: &str, cb: Option<js_sys::Function>) {
+    let key = normalise_combo(combo);
+    let selector_key = selector.to_string();
+    STATE.with(|s| {
+        let mut map = s.borrow_mut();
+        let entry = map.entry(selector_key).or_default();
+        match cb {
+            Some(f) => {
+                entry.custom_shortcuts.insert(key.clone(), f);
+            }
+            None => {
+                entry.custom_shortcuts.remove(&key);
+            }
+        }
+    });
+}
+
+/// Look up a custom shortcut for the given combo. Returns the JS
+/// callback if the host registered one, otherwise `None`. Used by
+/// the keyboard handler to short-circuit before the built-in
+/// bindings.
+pub fn get_custom_shortcut(selector: &str, combo: &str) -> Option<js_sys::Function> {
+    let key = normalise_combo(combo);
+    STATE.with(|s| {
+        s.borrow()
+            .get(selector)
+            .and_then(|m| m.custom_shortcuts.get(&key).cloned())
+    })
 }
 
 thread_local! {
@@ -250,5 +324,45 @@ mod tests {
         let json = serde_json::to_string(&f).unwrap();
         let back: RecentFile = serde_json::from_str(&json).unwrap();
         assert_eq!(back, f);
+    }
+
+    #[test]
+    fn normalise_combo_orders_modifiers_and_lowercases_them() {
+        // Modifier order is fixed: Ctrl, Alt, Shift. The key letter
+        // keeps its original case so the host can distinguish
+        // Shift+1 from 1 if they need to. Lookup is
+        // case-insensitive on the letter, so the host can write
+        // any of these and they all collide.
+        assert_eq!(normalise_combo("Ctrl+Shift+K"), "ctrl+shift+K");
+        assert_eq!(normalise_combo("shift+ctrl+K"), "ctrl+shift+K");
+        assert_eq!(normalise_combo("  Alt  +  Enter "), "alt+Enter");
+        assert_eq!(normalise_combo("k"), "k");
+        assert_eq!(normalise_combo(""), "");
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn custom_shortcut_register_and_lookup_round_trip() {
+        // The thread-local map is keyed by selector + combo.
+        // Setting twice with the same (case-different) combo
+        // overwrites; setting with None removes. Lookup uses
+        // case-insensitive match on the combo so "Ctrl+k" and
+        // "Ctrl+K" both hit.
+        let sel = "test-sel";
+        let cb: js_sys::Function = js_sys::Function::new_no_args("return 1;");
+        set_custom_shortcut(sel, "Ctrl+K", Some(cb.clone()));
+        assert!(get_custom_shortcut(sel, "Ctrl+K").is_some());
+        assert!(get_custom_shortcut(sel, "ctrl+k").is_some());
+        // Re-register with a different combo: both stay.
+        let cb2: js_sys::Function = js_sys::Function::new_no_args("return 2;");
+        set_custom_shortcut(sel, "Ctrl+Shift+L", Some(cb2.clone()));
+        assert!(get_custom_shortcut(sel, "Ctrl+Shift+L").is_some());
+        assert!(get_custom_shortcut(sel, "Ctrl+K").is_some());
+        // Clear one combo: the other remains.
+        set_custom_shortcut(sel, "Ctrl+K", None);
+        assert!(get_custom_shortcut(sel, "Ctrl+K").is_none());
+        assert!(get_custom_shortcut(sel, "Ctrl+Shift+L").is_some());
+        // Different selector doesn't see the entry.
+        assert!(get_custom_shortcut("other-sel", "Ctrl+Shift+L").is_none());
     }
 }

@@ -731,6 +731,7 @@ impl ZedSheet {
             &sync,
             delete_open.clone(),
             drag.clone(),
+            selector,
         );
         if let Some(menu_node) = cmenu_el.el.clone() {
             wire_context_menu(
