@@ -35,6 +35,7 @@ mod image_modal;
 mod pivot_modal;
 mod print;
 mod protect_sheet_modal;
+mod shape_modal;
 mod slicer_modal;
 mod sort_dialog;
 mod sparkline_modal;
@@ -56,6 +57,7 @@ pub(crate) use image_modal::*;
 pub(crate) use pivot_modal::*;
 pub(crate) use print::*;
 pub(crate) use protect_sheet_modal::*;
+pub(crate) use shape_modal::*;
 pub(crate) use slicer_modal::*;
 pub(crate) use sort_dialog::*;
 pub(crate) use sparkline_modal::*;
@@ -588,6 +590,8 @@ impl ZedSheet {
         let image_open: OpenHandle = Rc::new(RefCell::new(None));
         // Phase 4.1b/5.2: sparkline-insert dialog.
         let sparkline_open: OpenHandle = Rc::new(RefCell::new(None));
+        // Phase 6: shape-insert dialog.
+        let shape_open: OpenHandle = Rc::new(RefCell::new(None));
 
         // List-validity popover (issue #9): a single <ul> reused across
         // cells. Mounted hidden; the canvas mousedown handler (wired by
@@ -751,6 +755,7 @@ impl ZedSheet {
                 protect_open.clone(),
                 image_open.clone(),
                 sparkline_open.clone(),
+                shape_open.clone(),
             );
         }
         if let Some(fb) = fbar_node.clone() {
@@ -1075,6 +1080,32 @@ impl ZedSheet {
                     (r.selector.ri, r.selector.ci)
                 };
                 open_sparkline_modal(&inner, (ar, ac));
+            }));
+        }
+
+        // Phase 6: shape-insert dialog. Mirrors the sparkline
+        // modal — a single dialog with a Kind selector + Anchor +
+        // width / height / color / text. The Apply handler
+        // appends a new Shape to DataProxy.shapes.
+        let mut shape_modal_root = h("div", Some("zs-shape-modal-root"));
+        shape_modal_root.set_inner_html(shape_modal_html());
+        let shape_modal_node: Option<web_sys::Element> =
+            shape_modal_root.el.clone().and_then(|e| e.dyn_into().ok());
+        root.append_child(&mut shape_modal_root);
+        if let Some(ref node) = shape_modal_node {
+            let inner: web_sys::Element = node
+                .query_selector(".zs-shape-modal-root")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| node.clone());
+            wire_shape_modal(inner.clone(), &renderer, &sync);
+            let renderer_for_open = renderer.clone();
+            *shape_open.borrow_mut() = Some(Rc::new(move || {
+                let (ar, ac) = {
+                    let r = renderer_for_open.borrow();
+                    (r.selector.ri, r.selector.ci)
+                };
+                open_shape_modal(&inner, (ar, ac));
             }));
         }
 
