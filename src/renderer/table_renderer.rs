@@ -2941,7 +2941,10 @@ impl TableRenderer {
     }
 
     /// Apply the fill from the recorded source into the (drag-extended) selection,
-    /// copying values/formats and continuing numeric series. Undoable.
+    /// copying values + formats. Every newly-included cell in the destination
+    /// gets the value of its source twin via a 2-D modular offset — so a
+    /// diagonal drag (down + right) fills both directions at once, not
+    /// whichever single axis had the larger delta. Undoable.
     pub fn apply_fill(&mut self) {
         let Some((sr0, sc0, sr1, sc1)) = self.fill_source.take() else {
             return;
@@ -2951,51 +2954,36 @@ impl TableRenderer {
             return;
         }
         let (_, _, tr1, tc1) = self.selection_bounds();
-        let down = tr1 as isize - sr1 as isize;
-        let right = tc1 as isize - sc1 as isize;
-        if down <= 0 && right <= 0 {
-            return; // dragged back inside the source — nothing to fill
+        // The drag must have moved past the source on at least one
+        // axis. Going back inside the source means the user
+        // cancelled the drag.
+        if tr1 <= sr1 && tc1 <= sc1 {
+            return;
         }
         self.snapshot();
-        if down >= right {
-            let n = down as usize;
-            for c in sc0..=sc1 {
-                let source: Vec<String> =
-                    (sr0..=sr1).map(|r| self.data.get_cell_text(r, c)).collect();
-                let styles: Vec<Option<usize>> = (sr0..=sr1)
-                    .map(|r| self.data.get_cell(r, c).and_then(|cell| cell.style))
-                    .collect();
-                let filled = crate::core::data_proxy::fill_line(&source, n, true);
-                let slen = source.len();
-                for (i, text) in filled.iter().enumerate() {
-                    let tr = sr1 + 1 + i;
-                    if !self.data.is_cell_editable(tr, c) {
-                        continue; // skip locked target cells (issue #24)
-                    }
-                    self.data.set_cell_text(tr, c, text);
-                    // Fill replaces the target's format with the source cell's.
-                    self.data.get_cell_or_new(tr, c).style = styles[i % slen];
+        // Delegate the per-cell text lookup to the pure
+        // `fill_area` helper so the tiling math is unit-testable
+        // on the host target. We then apply the values + styles
+        // here because set_cell_text mutates DataProxy, which the
+        // pure helper can't borrow mutably.
+        let grid = crate::core::data_proxy::fill_area(&self.data, sr0, sc0, sr1, sc1, tr1, tc1);
+        let src_h = sr1 - sr0 + 1;
+        let src_w = sc1 - sc0 + 1;
+        for (dr, row) in grid.iter().enumerate() {
+            let tr = sr0 + dr;
+            for (dc, text) in row.iter().enumerate() {
+                let tc = sc0 + dc;
+                if tr <= sr1 && tc <= sc1 {
+                    continue;
                 }
-            }
-        } else {
-            let n = right as usize;
-            for r in sr0..=sr1 {
-                let source: Vec<String> =
-                    (sc0..=sc1).map(|c| self.data.get_cell_text(r, c)).collect();
-                let styles: Vec<Option<usize>> = (sc0..=sc1)
-                    .map(|c| self.data.get_cell(r, c).and_then(|cell| cell.style))
-                    .collect();
-                let filled = crate::core::data_proxy::fill_line(&source, n, false);
-                let slen = source.len();
-                for (i, text) in filled.iter().enumerate() {
-                    let tc = sc1 + 1 + i;
-                    if !self.data.is_cell_editable(r, tc) {
-                        continue; // skip locked target cells (issue #24)
-                    }
-                    self.data.set_cell_text(r, tc, text);
-                    // Fill replaces the target's format with the source cell's.
-                    self.data.get_cell_or_new(r, tc).style = styles[i % slen];
+                if !self.data.is_cell_editable(tr, tc) {
+                    continue;
                 }
+                let src_r = sr0 + (dr % src_h);
+                let src_c = sc0 + (dc % src_w);
+                let style = self.data.get_cell(src_r, src_c).and_then(|c| c.style);
+                self.data.set_cell_text(tr, tc, text);
+                self.data.get_cell_or_new(tr, tc).style = style;
             }
         }
     }

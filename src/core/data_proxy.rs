@@ -4100,6 +4100,50 @@ fn restore_placeholders(text: &str, placeholders: &[(String, String)]) -> String
     out
 }
 
+/// Read the source rectangle `(sr0..=sr1, sc0..=sc1)` from `data` and
+/// build a `Vec<Vec<String>>` of size `(tr1 - sr0 + 1) × (tc1 - sc0 + 1)`
+/// where each cell `(tr, tc)` outside the source gets its source twin's
+/// text via 2-D modular offset: `src_r = sr0 + (tr - sr0) % src_h`,
+/// `src_c = sc0 + (tc - sc0) % src_w`. The pure function exists so the
+/// renderer can host-test the fill logic without spinning up a
+/// HtmlCanvasElement. Tiles the source rectangle across the
+/// destination like a wallpaper — the same offset pattern that
+/// makes a 2×2 source cover a diagonal drag naturally.
+pub fn fill_area(
+    data: &DataProxy,
+    sr0: usize,
+    sc0: usize,
+    sr1: usize,
+    sc1: usize,
+    tr1: usize,
+    tc1: usize,
+) -> Vec<Vec<String>> {
+    let rows = tr1 - sr0 + 1;
+    let cols = tc1 - sc0 + 1;
+    let src_h = sr1 - sr0 + 1;
+    let src_w = sc1 - sc0 + 1;
+    let mut grid = Vec::with_capacity(rows);
+    for tr in 0..rows {
+        let mut row = Vec::with_capacity(cols);
+        for tc in 0..cols {
+            let abs_r = sr0 + tr;
+            let abs_c = sc0 + tc;
+            // Skip cells already inside the source — the destination
+            // grid includes the source area but the caller only
+            // copies the newly-included cells.
+            if abs_r <= sr1 && abs_c <= sc1 {
+                row.push(data.get_cell_text(abs_r, abs_c));
+                continue;
+            }
+            let src_r = sr0 + (tr % src_h);
+            let src_c = sc0 + (tc % src_w);
+            row.push(data.get_cell_text(src_r, src_c));
+        }
+        grid.push(row);
+    }
+    grid
+}
+
 /// Compute the filled text for one line of a fill-handle drag. `source` is the
 /// source cells' text in fill order; `n` target cells follow them.
 ///
@@ -7355,6 +7399,91 @@ mod tests {
     #[test]
     fn fill_line_single_number_copies() {
         assert_eq!(fill_line(&["5".into()], 3, true), vec!["5", "5", "5"]);
+    }
+
+    #[test]
+    fn fill_area_pure_down_fill() {
+        // Source A1:B2, drag down to A5:B2 — every column fills
+        // with its own values, no diagonal artifact. The 2-D
+        // modular offset reproduces the classic "fill down"
+        // behavior: rows cycle (0, 1, 0, 1, ...).
+        let mut d = DataProxy::new("t");
+        for r in 0..2 {
+            for c in 0..2 {
+                d.set_cell_text(r, c, &format!("{}{}", (b'A' + c as u8) as char, r + 1));
+            }
+        }
+        let grid = fill_area(&d, 0, 0, 1, 1, 4, 1);
+        // Row 0 + 1 are the source (returned as-is by fill_area);
+        // the caller skips them when writing. The tiling cycle
+        // is 0,1,0,1,... so:
+        //   grid[0] = source[0]   = [A1, B1]
+        //   grid[1] = source[1]   = [A2, B2]
+        //   grid[2] = source[0]   = [A1, B1]
+        //   grid[3] = source[1]   = [A2, B2]
+        //   grid[4] = source[0]   = [A1, B1]
+        assert_eq!(grid[0], vec!["A1", "B1"]);
+        assert_eq!(grid[1], vec!["A2", "B2"]);
+        assert_eq!(grid[2], vec!["A1", "B1"]);
+        assert_eq!(grid[3], vec!["A2", "B2"]);
+        assert_eq!(grid[4], vec!["A1", "B1"]);
+    }
+
+    #[test]
+    fn fill_area_diagonal_drag_fills_both_axes() {
+        // The bug: dragging the fill handle diagonally used to
+        // fill only one axis. Now every newly-included cell
+        // gets its source twin via 2-D modular offset, so a
+        // 2x2 source tile pattern covers the full destination.
+        let mut d = DataProxy::new("t");
+        // Source A1:B2:
+        //   A1 B1
+        //   A2 B2
+        for r in 0..2 {
+            for c in 0..2 {
+                d.set_cell_text(r, c, &format!("{}{}", (b'A' + c as u8) as char, r + 1));
+            }
+        }
+        // Drag to D4 — destination is A1:D4 (4x4). Rows 0-1 and
+        // cols 0-1 are the source; new cells come from the
+        // 2x2 tile (source modulo 2 in each axis):
+        //   dr=0: src_r=0 → A-row; dc=0,1,2,3 → A,B,A,B
+        //   dr=1: src_r=1 → B-row; dc=0,1,2,3 → A,B,A,B
+        //   dr=2: src_r=0 → A-row; dc=0,1,2,3 → A,B,A,B
+        //   dr=3: src_r=1 → B-row; dc=0,1,2,3 → A,B,A,B
+        let grid = fill_area(&d, 0, 0, 1, 1, 3, 3);
+        assert_eq!(grid[0], vec!["A1", "B1", "A1", "B1"]);
+        assert_eq!(grid[1], vec!["A2", "B2", "A2", "B2"]);
+        assert_eq!(grid[2], vec!["A1", "B1", "A1", "B1"]);
+        assert_eq!(grid[3], vec!["A2", "B2", "A2", "B2"]);
+    }
+
+    #[test]
+    fn fill_area_single_cell_source_tiles_whole_destination() {
+        // A 1x1 source tiles every target cell with the same value.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "X");
+        // Destination (0,0)→(2,2) is rows 0..=2 × cols 0..=2, a 3x3 grid.
+        let grid = fill_area(&d, 0, 0, 0, 0, 2, 2);
+        assert_eq!(
+            grid,
+            vec![
+                vec!["X", "X", "X"],
+                vec!["X", "X", "X"],
+                vec!["X", "X", "X"],
+            ]
+        );
+    }
+
+    #[test]
+    fn fill_area_cancelled_drag_returns_empty_grid() {
+        // No destination beyond the source means nothing to fill —
+        // the grid still covers the source area but the caller
+        // skips it when writing.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "X");
+        let grid = fill_area(&d, 0, 0, 0, 0, 0, 0);
+        assert_eq!(grid, vec![vec!["X"]]);
     }
 
     #[test]
