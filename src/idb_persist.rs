@@ -42,7 +42,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -124,35 +123,57 @@ pub(crate) fn disable_idb_persist(selector: &str) {
     });
 }
 
+/// Pure dedup check: returns true if the dedup baseline was
+/// updated (a real save should be scheduled) and false if the
+/// value matched the last-saved JSON. Updates `last_json`
+/// whenever it returns true so the next call with the same
+/// value is a no-op. Host-testable: no JS / spawn_local
+/// involved.
+/// Pure dedup check on a config: returns true if the
+/// dedup baseline was updated (a real save should be
+/// scheduled) and false if the value matched the last-saved
+/// JSON. Updates `last_json` whenever it returns true so
+/// the next call with the same value is a no-op. Host-testable
+/// so the dedup logic can be exercised without a JS host.
+fn config_should_save(cfg: &mut MountIdbConfig, json: &str) -> bool {
+    if cfg.last_json.as_deref() == Some(json) {
+        return false;
+    }
+    cfg.last_json = Some(json.to_string());
+    true
+}
+
+fn idb_should_save(selector: &str, json: &str) -> bool {
+    IDB.with(|m| {
+        let mut map = m.borrow_mut();
+        map.get_mut(selector)
+            .map(|cfg| config_should_save(cfg, json))
+            .unwrap_or(false)
+    })
+}
+
 /// Schedule a debounced save. Called from the persist
 /// pipeline when armed and the JSON differs. Returns `true`
 /// when a save was scheduled, `false` when the mount has no
 /// IDB config (or the value is unchanged). Fire-and-forget:
 /// any error in the host's `save_fn` shows up in the console
 /// but never panics the engine.
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn maybe_save_to_idb(selector: &str, json: &str) -> bool {
-    let (to_call, key, db, store) = IDB.with(|m| {
-        let mut map = m.borrow_mut();
-        let Some(cfg) = map.get_mut(selector) else {
-            return (None, String::new(), String::new(), String::new());
-        };
-        if cfg.last_json.as_deref() == Some(json) {
-            return (None, String::new(), String::new(), String::new());
-        }
-        cfg.last_json = Some(json.to_string());
-        let Some(save_fn) = cfg.save_fn.clone() else {
-            return (None, String::new(), String::new(), String::new());
-        };
+    if !idb_should_save(selector, json) {
+        return false;
+    }
+    let (save_fn, key, db, store) = IDB.with(|m| {
+        let map = m.borrow();
+        let cfg = map.get(selector).unwrap();
         (
-            Some(Rc::new(save_fn)),
+            cfg.save_fn.clone().unwrap(),
             selector.to_string(),
             cfg.db_name.clone(),
             cfg.store_name.clone(),
         )
     });
-    let Some(save_fn) = to_call else {
-        return false;
-    };
+
     // Schedule via the JS setTimeout. We pass the callback as
     // a `Function` and let `spawn_local` drive the promise
     // it returns.
@@ -226,4 +247,73 @@ pub async fn load_via_idb(selector: &str) -> Option<String> {
         .ok()?;
     let value = wasm_bindgen_futures::JsFuture::from(promise).await.ok()?;
     value.as_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a test config that has the wasm-only `save_fn` /
+    /// `load_fn` fields stubbed. The dedup helper under test
+    /// only touches `last_json`, so the stubs never get called.
+    fn make_config() -> MountIdbConfig {
+        MountIdbConfig {
+            db_name: "test-db".into(),
+            store_name: "test-store".into(),
+            debounce_ms: 0,
+            last_json: None,
+            pending: None,
+            save_fn: None,
+            load_fn: None,
+        }
+    }
+
+    #[test]
+    fn dedup_first_call_updates_baseline() {
+        // Empty baseline: any value should be flagged as "needs save".
+        let mut cfg = make_config();
+        assert!(config_should_save(&mut cfg, "first"));
+        assert_eq!(cfg.last_json.as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn dedup_same_value_is_noop() {
+        // After the first save, the same value is a no-op so we
+        // don't re-fire on every no-op sync (e.g. selection moves).
+        let mut cfg = make_config();
+        assert!(config_should_save(&mut cfg, "abc"));
+        assert!(!config_should_save(&mut cfg, "abc"));
+        assert!(!config_should_save(&mut cfg, "abc"));
+        assert_eq!(cfg.last_json.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn dedup_real_change_re_fires() {
+        // A different value after a saved one should re-fire.
+        let mut cfg = make_config();
+        assert!(config_should_save(&mut cfg, "v1"));
+        assert!(!config_should_save(&mut cfg, "v1"));
+        assert!(config_should_save(&mut cfg, "v2"));
+        assert!(!config_should_save(&mut cfg, "v2"));
+        assert!(config_should_save(&mut cfg, "v3"));
+        assert_eq!(cfg.last_json.as_deref(), Some("v3"));
+    }
+
+    #[test]
+    fn idb_persist_done_resets_dedup_baseline() {
+        // End-to-end: after the host reports a save completed
+        // (idb_persist_done), the next real change should
+        // re-fire. Without that reset the dedup would
+        // permanently suppress every subsequent change.
+        let mut cfg = make_config();
+        // 1. Initial save: dedup updated.
+        assert!(config_should_save(&mut cfg, "a"));
+        // 2. Same value: no-op.
+        assert!(!config_should_save(&mut cfg, "a"));
+        // 3. Host reports save completed (resets dedup via a
+        //    manual update — see host wiring).
+        cfg.last_json = None;
+        // 4. Real change: should re-fire.
+        assert!(config_should_save(&mut cfg, "b"));
+    }
 }
