@@ -118,9 +118,9 @@ pub fn idb_persist_done(selector: &str, json: &str) {
 }
 
 /// Disable IDB persistence for a mount (the host calls this
-/// on teardown).
-#[wasm_bindgen]
-pub fn disable_idb_persist(selector: &str) {
+/// on teardown). Internal helper — the `#[wasm_bindgen]`
+/// wrapper lives in `lib.rs` so we get one JS export, not two.
+pub(crate) fn disable_idb_persist(selector: &str) {
     IDB.with(|m| {
         m.borrow_mut().remove(selector);
     });
