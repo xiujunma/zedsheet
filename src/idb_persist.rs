@@ -44,7 +44,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
 
 /// Per-mount IDB config the host registers.
@@ -80,9 +79,9 @@ thread_local! {
 /// IDB writer. `save_fn` / `load_fn` are the host's IDB
 /// callbacks; both are passed the `selector`, the db + store
 /// names, and a `key` (the mount selector). They return
-/// Promises.
-#[wasm_bindgen]
-pub fn enable_idb_persist(
+/// Promises. Internal helper — the `#[wasm_bindgen]` wrapper
+/// lives in `lib.rs` so we get one JS export, not two.
+pub(crate) fn enable_idb_persist(
     selector: &str,
     db_name: &str,
     store_name: &str,
@@ -108,8 +107,7 @@ pub fn enable_idb_persist(
 /// Host tells us the most recent save completed. Lets the
 /// debounce loop reset `last_json` so the next real change
 /// fires a save instead of being skipped as a no-op.
-#[wasm_bindgen]
-pub fn idb_persist_done(selector: &str, json: &str) {
+pub(crate) fn idb_persist_done(selector: &str, json: &str) {
     IDB.with(|m| {
         if let Some(cfg) = m.borrow_mut().get_mut(selector) {
             cfg.last_json = Some(json.to_string());
