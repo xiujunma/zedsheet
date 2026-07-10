@@ -98,7 +98,7 @@ without an issue until someone asks.
 | # | Severity | Feature | Notes |
 |---|----------|---------|-------|
 | | P3 | Multi-user live editing (CRDT / OT) | Out of scope. |
-| | P3 | Comment threads with author / resolve / reopen | P2 under data model. |
+| | ~~**P3**~~ ✅ | Comment threads with author / resolve / reopen | Shipped 2026-07-04 (issue #22 follow-on) at `core::cell::Comment { author, text, timestamp_ms, parent_id, resolved }` (see the §2 row, the source of truth). The §7 P3 row stays for cross-reference only — the data model and the collaboration axes both point at the same feature. |
 | | P3 | Presence indicators (live cursors) | Out of scope. |
 | | P3 | Version history / named snapshots | Not a critical need. |
 | | P3 | "Share link" / read-only view URL | Requires a backend. |
