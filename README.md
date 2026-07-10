@@ -69,6 +69,81 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
   toast and revert the cell. Rules are saved per cell and round-trip
   through the workbook JSON.
 - Formula references auto-adjust when rows/columns are inserted or deleted
+- **Borders** (right-click → Borders): full / outer / inner / per-side, plus
+  **diagonal up/down** and **double-line** styles. The diagonal lines run
+  corner-to-corner; double draws two parallel hairlines straddling the
+  edge. All border entries round-trip through the workbook JSON
+  with backward-compat for pre-1.4 workbooks.
+- **Charts** (right-click → Insert chart…): bar, line, pie, doughnut,
+  area, scatter, bubble, radar; **secondary axis / combo charts**
+  (bars on the left axis + line overlay on the right); **trendlines**
+  (linear, exponential, polynomial) drawn per series; **Y-axis number
+  format** via a small Excel-like DSL (`0.00`, `#,##0`, `$0.00`, `0%`).
+  Every chart round-trips through the OOXML export path
+- **Sparklines** (right-click → Insert Sparkline…): inline mini-charts
+  drawn inside a single cell — line, column, or win-loss. Backed by
+  `DataProxy.sparklines` and rendered by `chart_render::draw_sparklines`
+- **Images** (right-click → Insert Image…): URL-anchored images blitted
+  at the cell; a `Paste` button reads a URL from the system clipboard
+  via `navigator.clipboard.readText()`
+- **Drawing-layer shapes** (right-click → Insert Shape…): rectangles,
+  lines, and text boxes anchored to a cell. Rendered above the body,
+  scroll with the underlying cells, persist through `get_data` /
+  `set_data`
+- **Cell notes** (right-click → Insert / edit note): a small red triangle
+  in the top-right corner; hover to read. **Comment threads** add
+  multi-author replies with `parent_id` + `resolved` flag (issue #22
+  follow-on). The legacy single-author `note` field stays for
+  backward compat
+- **Per-cell format lock** (Phase 4.2 follow-on): the `editable` flag
+  blocks value edits; the new `format_locked` flag blocks formatting
+  independently. A cell can allow formatting but not value changes
+  (or vice versa). Both share the per-sheet read-only override
+- **Manual page breaks** (right-click → Insert row/column page break):
+  a blue dashed line marks where the printed page splits; `Print all
+  sheets` walks the whole registry, each sheet starts on a new page
+  with a `page-break-before` separator
+- **Conditional formatting** (right-click → Conditional formatting…):
+  cell-value rules (greater than, between, top-N, above/below
+  average, duplicate, unique), 2-/3-color scales, **data bars** and
+  **icon sets** (traffic lights, arrows). A data bar AND an icon rule
+  on the same cell stack — bars first, icons on top. Rules are
+  reordered via ↑/↓ buttons in the dialog
+- **Recent files** (host-side, Phase 5.4): `push_recent_file(sel, name,
+  json, timestamp)` + `get_recent_files(sel)` JS APIs back the host's
+  recent-workbooks dropdown. Up to 10 entries, name-based dedup,
+  localStorage-backed (`zedsheet::recent::<selector>`)
+- **IndexedDB auto-save** (Phase 5.7): `enable_idb_persist(sel, db,
+  store, debounceMs, saveFn, loadFn)` lets the host wire a debounced
+  IDB writer in parallel with localStorage. The engine owns the
+  dedup baseline; the host's `idb_persist_done` resets it so the next
+  real change re-fires
+- **Workbook-wide named ranges** (Phase 5.5): names defined on any
+  sheet are visible from every other sheet's `get_named_range` lookup.
+  Per-sheet names still shadow workbook names with the same key
+- **Custom keyboard shortcuts** (Phase 5.6):
+  `set_custom_shortcut(sel, combo, cb)` JS API. Combo is normalised
+  (modifier order fixed: Ctrl, Alt, Shift; key case-insensitive).
+  Registered combos short-circuit the built-in bindings
+- **Sheet protection** (right-click → Protect Sheet…): `set_protection`
+  blocks every write to a sheet. Optional djb2 password hash stored
+  in the workbook JSON. Wrong password surfaces an inline error
+- **PivotTables** (right-click → Insert PivotTable…): source range,
+  row/col/value fields, **multi-value fields**, **date grouping**
+  (year / quarter / month / day), **page filters**, all 5 aggregations
+  (Sum / Count / Avg / Min / Max). Slicers (visual filters bound to
+  a pivot's field) can be dragged to resize / move
+- **Find & replace** (Ctrl/Cmd-F): plain text + regex; scope is the
+  active sheet by default, with a workbook-wide toggle. The result
+  list jumps you straight to the next match
+- **Outline groups + SUBTOTAL** (right-click → Group rows / cols):
+  collapsible + nested groups; SUBTOTAL(9, …) formulas are inserted
+  at the group boundary with a `SUBTOTAL`-aware filter view
+- **AutoFilter** (right-click → Filter / drop-down in header): per-column
+  text contains / equals / greater than / …; multi-value select
+  popover; sort-by-column lives in the same menu
+- **Sort dialog** (right-click → Sort…): up to 3 sort levels, has-header
+  toggle, stable multi-key sort
 
 **Interaction**
 - Click to select, drag to range-select (works in every direction), keyboard
@@ -76,7 +151,9 @@ formula bar, sheet tabs, menus) is plain DOM, all driven from Rust via
 - In-cell editor (double-click or Enter); commit on Enter/Tab, cancel on Esc
 - **Fill handle**: drag the selection's bottom-right handle to copy values &
   formats, extend a numeric series (1, 2 → 3, 4…), or fill formulas with
-  relative references adjusted
+  relative references adjusted. A diagonal drag (down + right at once)
+  tiles the source rectangle across the destination — every newly-
+  included cell gets its source twin via a 2-D modular offset
 - Row/column resize by dragging header borders; draggable scrollbar thumbs
 - Clipboard: copy / cut / paste, plus `Ctrl/Cmd + C/X/V`, `Ctrl/Cmd + B/I/U`,
   and `Delete` to clear
@@ -282,22 +359,23 @@ cd pkg && npm publish
 
 ## Status & known limitations
 
-The interactive surface is broad: data validation, conditional formatting,
-charts, tables, named ranges, cross-sheet references, dynamic arrays &
-spill, structured references, PivotTables (with multi-value fields, date
-grouping, page filters, and slicers), AutoFilter, find & replace,
-subtotals, outlines, format painter, paste special, and more. `cargo test`
-covers the formula evaluator, the renderer's pivot install, and the
-pivot engine (slicers, date grouping, multi-value, page filters, all 5
-aggregations). `cargo build --target wasm32-unknown-unknown` ships.
+585 unit tests on the host target cover the formula evaluator,
+the renderer's pivot / fill / paste paths, the pivot engine (slicers,
+date grouping, multi-value, page filters, all 5 aggregations), the
+border / image / chart edge cases, and the IDB dedup /
+recent-files / comment-thread flows. Strict clippy is clean
+(`cargo clippy --target wasm32-unknown-unknown --all-targets
+-- -D warnings`). `cargo build --target wasm32-unknown-unknown` ships.
 
 Not yet done:
 
-- `#REF!` propagation: deleting a row/column that a formula referenced
-  leaves the formula reading empty cells instead of turning it into
-  `#REF!`
-- Absolute references (`$A$1`) in the formula parser
-- Locale / i18n (number formatting follows the host locale)
+- **Multi-user live editing** (CRDT / OT): out of scope — zedsheet is a
+  personal single-user wasm spreadsheet
+- **Presence indicators** (live cursors): out of scope — single-user
+- **Version history** (named snapshots): no critical need for a personal
+  workbook; the undo stack is the closest thing
+- **'Share link' / read-only view URL**: requires a backend
+
 
 ## Credits
 
