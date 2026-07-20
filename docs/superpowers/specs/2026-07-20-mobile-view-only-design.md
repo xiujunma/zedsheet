@@ -70,21 +70,27 @@ The split is **UI surface only**. No engine changes:
 
 **Modified:**
 
-- `src/zedsheet/zedsheet.rs` (`ZedSheet::new`) — accept a
-  `MountOptions { viewOnly: bool, .. }` flag.
-- `src/zedsheet/events.rs` — add `pointerdown` long-press detection on
-  the canvas; suppress `contextmenu` event in preview mode.
+- `src/component/options.rs` — `Options.mode` gains a third variant
+  `Mode::ViewOnly` (alongside the existing `Normal` / `Edit`).
+  Using the existing `mode` enum keeps the source of truth for
+  "what mode is the sheet in" in one place; a separate `viewOnly:
+  bool` field would risk contradictory states (`mode: Edit` +
+  `viewOnly: true`).
+- `src/zedsheet/zedsheet.rs` (`ZedSheet::new`) — branch on the
+  new `Mode::ViewOnly` variant.
+- `src/zedsheet/events.rs` — add `pointerdown` long-press detection
+  on the canvas; suppress `contextmenu` event in view-only mode.
 - `src/index.css` — add the responsive CSS rules.
 
 **New JS API:**
 
 ```ts
-mount(selector, { viewOnly: true }, data)
+mount(selector, { mode: "viewOnly" }, data)
 ```
 
-`viewOnly: false` (the default) preserves the existing desktop
-behavior. `viewOnly: true` activates read-only + the responsive
-layout.
+Default `mode: "normal"` (preserves the existing desktop behavior).
+`mode: "viewOnly"` activates read-only + the responsive layout.
+`mode: "edit"` (the legacy default) is unchanged.
 
 ## §2 — Layout breakpoints + CSS
 
