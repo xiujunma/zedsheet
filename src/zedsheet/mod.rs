@@ -760,6 +760,14 @@ impl ZedSheet {
         if let Some(canvas_node) = canvas_el.el.as_ref() {
             responsive::wasm::wire_long_press(canvas_node);
         }
+        // Phase 7: pinch-zoom (gesturechange on iOS) + desktop Ctrl-wheel
+        // both route to `renderer.set_zoom` so mobile and desktop share a
+        // single scale model. Wheel handler clamps to [0.1, 4.0]; the
+        // gesture handler passes the platform-supplied scale directly.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas_node) = canvas_el.el.as_ref() {
+            responsive::wasm::wire_pinch_zoom(canvas_node, renderer.clone());
+        }
         if let Some(menu_node) = cmenu_el.el.clone() {
             wire_context_menu(
                 &mut canvas_el,

@@ -139,6 +139,8 @@ pub mod wasm {
     use wasm_bindgen_futures::{spawn_local, JsFuture};
     use web_sys::PointerEvent;
 
+    use crate::zedsheet::SharedRenderer;
+
     const LONG_PRESS_MS: i32 = 500;
     const LONG_PRESS_SLOP_PX: f64 = 10.0;
     type LongPressState = Rc<RefCell<Option<(f64, f64, i32, i32)>>>;
@@ -263,6 +265,50 @@ pub mod wasm {
         let _ = canvas_el
             .add_event_listener_with_callback("pointercancel", up_cb.as_ref().unchecked_ref());
         up_cb.forget();
+    }
+
+    /// Wire pinch-zoom → `renderer.set_zoom`. Both the
+    /// `gesturechange` event (WebKit / iOS Safari) and the
+    /// `wheel + ctrlKey` event (desktop) route through the
+    /// same zoom handler so the desktop Ctrl-wheel zoom and
+    /// the mobile pinch zoom share a single scale model.
+    pub fn wire_pinch_zoom(canvas_el: &web_sys::Element, renderer: SharedRenderer) {
+        let canvas_el_gesture = canvas_el.clone();
+        let renderer_gesture = renderer.clone();
+        let gesture_cb = Closure::<dyn FnMut(JsValue)>::new(move |ev: JsValue| {
+            if let Ok(gesture) = ev.dyn_into::<web_sys::Event>() {
+                let scale = js_sys::Reflect::get(&gesture, &JsValue::from_str("scale"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0);
+                if scale > 0.0 {
+                    let mut r = renderer_gesture.borrow_mut();
+                    r.set_zoom(scale);
+                    r.render();
+                }
+            }
+        });
+        let _ = canvas_el_gesture
+            .add_event_listener_with_callback("gesturechange", gesture_cb.as_ref().unchecked_ref());
+        gesture_cb.forget();
+
+        let canvas_el_wheel = canvas_el.clone();
+        let renderer_wheel = renderer.clone();
+        let wheel_cb =
+            Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |ev: web_sys::WheelEvent| {
+                if !ev.ctrl_key() {
+                    return;
+                }
+                let current = renderer_wheel.borrow().zoom();
+                let scale = if ev.delta_y() < 0.0 { 1.1 } else { 1.0 / 1.1 };
+                let next = (current * scale).clamp(0.1, 4.0);
+                let mut r = renderer_wheel.borrow_mut();
+                r.set_zoom(next);
+                r.render();
+            });
+        let _ = canvas_el_wheel
+            .add_event_listener_with_callback("wheel", wheel_cb.as_ref().unchecked_ref());
+        wheel_cb.forget();
     }
 }
 
