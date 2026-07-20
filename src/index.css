@@ -1035,3 +1035,102 @@ form fieldset select {
   left: -54px;
   top: -54px;
 }
+
+/* =====================================================================
+ * Mobile / touch / view-only (Phase 7)
+ * =====================================================================
+ * Breakpoint table (mirrors breakpoint_class in zedsheet/responsive.rs):
+ *   >= 1024 px  desktop
+ *    768-1023   tablet   (toolbar icon-only)
+ *    480- 767   phone-l  (toolbar scrollable, formula hidden)
+ *     <  480    phone    (toolbar further collapsed)
+ * ================================================================== */
+
+/* Tablet: drop the toolbar labels, keep the icons. */
+@media (max-width: 1023px) {
+  .zedsheet-toolbar-btn .zedsheet-icon-img + span { display: none; }
+}
+
+/* Phone-large: scrollable toolbar, formula bar hidden, smaller
+ * row/col headers, tap-target padding for every button. */
+@media (max-width: 767px) {
+  .zedsheet-toolbar-btn {
+    /* Material Design minimum 44 x 44 tap target. */
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px;
+  }
+  .zedsheet-toolbar-btns {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .zedsheet-formula-bar { display: none; }
+  .zedsheet-row-header,
+  .zedsheet-col-header { width: 32px; height: 32px; }
+  .zedsheet-table { touch-action: pan-x pan-y pinch-zoom; }
+}
+
+/* Phone: collapse toolbar further — only essential actions
+ * (Print, AutoFilter, Sheet picker). Hide sheet tab labels
+ * (keep the colored tab dots). */
+@media (max-width: 479px) {
+  .zedsheet-toolbar-btn[data-action="undo"],
+  .zedsheet-toolbar-btn[data-action="redo"],
+  .zedsheet-toolbar-btn[data-action="font-bold"],
+  .zedsheet-toolbar-btn[data-action="font-italic"],
+  .zedsheet-toolbar-btn[data-action="underline"],
+  .zedsheet-toolbar-btn[data-action="strike"],
+  .zedsheet-toolbar-btn[data-action="borders"],
+  .zedsheet-toolbar-btn[data-action="halign"],
+  .zedsheet-toolbar-btn[data-action="valign"],
+  .zedsheet-toolbar-btn[data-action="rotate-0"],
+  .zedsheet-toolbar-btn[data-action="rotate-45"],
+  .zedsheet-toolbar-btn[data-action="rotate-90"],
+  .zedsheet-toolbar-btn[data-action="rotate--45"] { display: none; }
+  .zedsheet-row-header,
+  .zedsheet-col-header { width: 28px; height: 28px; }
+  .zedsheet-sheet-tab-label { display: none; }
+}
+
+/* View-only mode (Phase 7): the host sets [data-readonly="true"]
+ * on the root container. Every editing affordance is hidden. */
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="undo"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="redo"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="font-bold"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="font-italic"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="underline"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="strike"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="color"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="bgcolor"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="merge"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="borders"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="halign"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="valign"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="textwrap"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="rotate-0"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="rotate-45"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="rotate-90"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="rotate--45"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="shrink-toggle"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="indent-inc"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="indent-dec"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="freeze"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="autofilter"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="formula"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="paintformat"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="clearformat"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="print"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="borders"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="format-table"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="sparkline"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="shape"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="sort-range"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="format-as-rich"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="format-as-plain"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="group-rows"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="group-cols"],
+.zedsheet[data-readonly="true"] .zedsheet-toolbar-btn[data-action="subtotal"],
+.zedsheet[data-readonly="true"] .zedsheet-btn[role="button"]:not([data-action="print"]) { display: none !important; }
+.zedsheet[data-readonly="true"] .zedsheet-formula-bar { display: none !important; }
+.zedsheet[data-readonly="true"] .zedsheet-fill-handle { display: none !important; }
