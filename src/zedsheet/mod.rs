@@ -451,6 +451,16 @@ impl ZedSheet {
         data.workbook_named_ranges = std::rc::Rc::clone(&workbook_names);
         let active: ActiveSheet = Rc::new(RefCell::new(0));
 
+        // Phase 7: view-only mode flips every sheet to read-only at
+        // mount time. The rest of the UI gating (editor, paste, fill,
+        // context menu) is handled by downstream checks against
+        // `data.is_read_only()` + the `view_only_blocks` decision fn.
+        if matches!(options.mode, crate::component::options::Mode::ViewOnly) {
+            for d in sheets.borrow_mut().iter_mut() {
+                d.set_read_only(true);
+            }
+        }
+
         let mut renderer = TableRenderer::new(canvas, width, height, data);
         renderer.set_selector(0, 0, 0, 0);
         renderer.render();

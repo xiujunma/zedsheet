@@ -2,6 +2,11 @@
 pub enum Mode {
     Normal,
     Edit,
+    /// Read-only mount for casual look-up on mobile. Disables
+    /// the cell editor, the formula bar, copy/cut/paste, and
+    /// the fill handle. Toolbar collapses to read-only actions
+    /// (Print, Zoom, Sheet tabs). Phase 7 (mobile view-only).
+    ViewOnly,
 }
 
 #[derive(Debug, Clone)]
