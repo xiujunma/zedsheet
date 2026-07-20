@@ -461,10 +461,22 @@ impl ZedSheet {
         // mount time. The rest of the UI gating (editor, paste, fill,
         // context menu) is handled by downstream checks against
         // `data.is_read_only()` + the `view_only_blocks` decision fn.
+        // The CSS attribute on the root hides every editing affordance
+        // (toolbar buttons, formula bar, fill handle) without touching
+        // JS state.
         if matches!(options.mode, crate::component::options::Mode::ViewOnly) {
             for d in sheets.borrow_mut().iter_mut() {
                 d.set_read_only(true);
             }
+            // The renderer's own `DataProxy` is a separate copy from
+            // the registry entry above — flip it too so every code
+            // path that reads `r.data.is_read_only()` (clipboard,
+            // events, modal previews) sees the flag.
+            data.set_read_only(true);
+            let _ = root
+                .el
+                .as_ref()
+                .map(|e| e.set_attribute("data-readonly", "true"));
         }
 
         let mut renderer = TableRenderer::new(canvas, width, height, data);
