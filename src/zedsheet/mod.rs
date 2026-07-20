@@ -753,6 +753,13 @@ impl ZedSheet {
             drag.clone(),
             selector,
         );
+        // Phase 7: long-press gesture (mobile only — desktop right-clicks
+        // already trigger contextmenu natively). Read-only sheets suppress
+        // the resulting editing actions via `data.is_read_only()`.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas_node) = canvas_el.el.as_ref() {
+            responsive::wasm::wire_long_press(canvas_node);
+        }
         if let Some(menu_node) = cmenu_el.el.clone() {
             wire_context_menu(
                 &mut canvas_el,

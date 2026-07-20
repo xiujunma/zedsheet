@@ -49,6 +49,8 @@ features = [
   "console",
   "Event",
   "MouseEvent",
+  "MouseEventInit",
+  "PointerEvent",
   "KeyboardEvent",
   "WheelEvent",
   "DomRect",

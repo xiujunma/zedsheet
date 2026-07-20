@@ -45,21 +45,37 @@ pub fn toolbar_button_subset(width: u32) -> &'static [&'static str] {
     // `src/zedsheet/context_menu.rs` / `src/zedsheet/toolbar.rs`.
     // Keep this list in sync if new toolbar actions are added.
     const DESKTOP: &[&str] = &[
-        "undo", "redo", "print", "font-bold", "font-italic",
-        "underline", "strike", "color", "bgcolor", "merge",
-        "borders", "halign", "valign", "textwrap", "freeze",
-        "autofilter", "formula",
+        "undo",
+        "redo",
+        "print",
+        "font-bold",
+        "font-italic",
+        "underline",
+        "strike",
+        "color",
+        "bgcolor",
+        "merge",
+        "borders",
+        "halign",
+        "valign",
+        "textwrap",
+        "freeze",
+        "autofilter",
+        "formula",
     ];
     const TABLET: &[&str] = &[
-        "undo", "redo", "print", "font-bold", "font-italic",
-        "underline", "freeze", "autofilter", "formula",
+        "undo",
+        "redo",
+        "print",
+        "font-bold",
+        "font-italic",
+        "underline",
+        "freeze",
+        "autofilter",
+        "formula",
     ];
-    const PHONE_LARGE: &[&str] = &[
-        "undo", "redo", "print", "freeze", "autofilter", "formula",
-    ];
-    const PHONE: &[&str] = &[
-        "print", "autofilter", "formula",
-    ];
+    const PHONE_LARGE: &[&str] = &["undo", "redo", "print", "freeze", "autofilter", "formula"];
+    const PHONE: &[&str] = &["print", "autofilter", "formula"];
     match breakpoint_class(width) {
         Breakpoint::Desktop => DESKTOP,
         Breakpoint::Tablet => TABLET,
@@ -113,6 +129,143 @@ pub fn view_only_blocks(action: &str) -> bool {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::{spawn_local, JsFuture};
+    use web_sys::PointerEvent;
+
+    const LONG_PRESS_MS: i32 = 500;
+    const LONG_PRESS_SLOP_PX: f64 = 10.0;
+    type LongPressState = Rc<RefCell<Option<(f64, f64, i32, i32)>>>;
+
+    fn timeout_promise(timeout_ms: i32) -> js_sys::Promise {
+        js_sys::Promise::new(&mut |resolve, reject| {
+            let resolve_on_timeout = resolve.clone();
+            let callback = Closure::once_into_js(move || {
+                let _ = resolve_on_timeout.call0(&JsValue::UNDEFINED);
+            });
+            let scheduled = web_sys::window().is_some_and(|window| {
+                window
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(
+                        callback.unchecked_ref(),
+                        timeout_ms,
+                    )
+                    .is_ok()
+            });
+            if !scheduled {
+                let reason = JsValue::from_str("failed to schedule long-press timeout");
+                let _ = reject.call1(&JsValue::UNDEFINED, &reason);
+            }
+        })
+    }
+
+    fn dispatch_context_menu(canvas_el: &web_sys::Element, client_x: f64, client_y: f64) {
+        // Browsers derive offsetX/offsetY from these viewport coordinates and
+        // the dispatch target, which keeps the existing canvas hit-test working.
+        let init = web_sys::MouseEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_client_x(client_x as i32);
+        init.set_client_y(client_y as i32);
+        init.set_button(2);
+        if let Ok(event) = web_sys::MouseEvent::new_with_mouse_event_init_dict("contextmenu", &init)
+        {
+            let _ = canvas_el.dispatch_event(&event);
+        }
+    }
+
+    /// Wire a long-press → contextmenu gesture on `canvas_el`.
+    /// Touch has no right-click; we synthesise a `contextmenu`
+    /// event after 500 ms of no-movement so the existing
+    /// right-click handler runs unchanged.
+    pub fn wire_long_press(canvas_el: &web_sys::Element) {
+        let down_state: LongPressState = Rc::new(RefCell::new(None));
+        let press_sequence = Rc::new(Cell::new(0_i32));
+
+        let canvas_for_down = canvas_el.clone();
+        let state_for_down = Rc::clone(&down_state);
+        let sequence_for_down = Rc::clone(&press_sequence);
+        let down_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let token = sequence_for_down.get().wrapping_add(1);
+            sequence_for_down.set(token);
+            let pending = (
+                event.client_x() as f64,
+                event.client_y() as f64,
+                event.pointer_id(),
+                token,
+            );
+            *state_for_down.borrow_mut() = Some(pending);
+
+            let timer_state = Rc::clone(&state_for_down);
+            let canvas_for_timer = canvas_for_down.clone();
+            spawn_local(async move {
+                if JsFuture::from(timeout_promise(LONG_PRESS_MS))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let should_fire = {
+                    let mut state = timer_state.borrow_mut();
+                    if state.as_ref().is_some_and(|current| *current == pending) {
+                        state.take();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if should_fire {
+                    dispatch_context_menu(&canvas_for_timer, pending.0, pending.1);
+                }
+            });
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointerdown", down_cb.as_ref().unchecked_ref());
+        down_cb.forget();
+
+        // Moving more than 10 px means this is a drag, not a long-press.
+        let move_state = Rc::clone(&down_state);
+        let move_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let pending = *move_state.borrow();
+            if let Some((x0, y0, pointer_id, _)) = pending {
+                if pointer_id != event.pointer_id() {
+                    return;
+                }
+                let dx = (event.client_x() as f64 - x0).abs();
+                let dy = (event.client_y() as f64 - y0).abs();
+                if dx > LONG_PRESS_SLOP_PX || dy > LONG_PRESS_SLOP_PX {
+                    *move_state.borrow_mut() = None;
+                }
+            }
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointermove", move_cb.as_ref().unchecked_ref());
+        move_cb.forget();
+
+        // Releasing the initiating pointer cancels the pending long-press.
+        let up_state = Rc::clone(&down_state);
+        let up_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let is_active_pointer = up_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|pending| pending.2 == event.pointer_id());
+            if is_active_pointer {
+                *up_state.borrow_mut() = None;
+            }
+        });
+        let _ =
+            canvas_el.add_event_listener_with_callback("pointerup", up_cb.as_ref().unchecked_ref());
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointercancel", up_cb.as_ref().unchecked_ref());
+        up_cb.forget();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,7 +277,7 @@ mod tests {
         assert_eq!(breakpoint_class(1440), Breakpoint::Desktop);
         assert_eq!(breakpoint_class(1024), Breakpoint::Desktop); // boundary
         assert_eq!(breakpoint_class(1023), Breakpoint::Tablet);
-        assert_eq!(breakpoint_class(768), Breakpoint::Tablet);  // boundary
+        assert_eq!(breakpoint_class(768), Breakpoint::Tablet); // boundary
         assert_eq!(breakpoint_class(767), Breakpoint::PhoneLarge);
         assert_eq!(breakpoint_class(480), Breakpoint::PhoneLarge); // boundary
         assert_eq!(breakpoint_class(479), Breakpoint::Phone);
@@ -159,20 +312,38 @@ mod tests {
         assert!(phone.contains(&"formula"));
     }
 
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn long_press_wiring_has_required_signature() {
+        let _: fn(&web_sys::Element) = super::wasm::wire_long_press;
+    }
+
     #[test]
     fn view_only_blocks_editing_actions_only() {
         // Blocked: every action that mutates data.
         for a in [
-            "edit", "copy", "cut", "paste",
-            "insert-row", "delete-col",
-            "font-bold", "color", "merge",
-            "condfmt", "chart", "image", "shape",
+            "edit",
+            "copy",
+            "cut",
+            "paste",
+            "insert-row",
+            "delete-col",
+            "font-bold",
+            "color",
+            "merge",
+            "condfmt",
+            "chart",
+            "image",
+            "shape",
         ] {
             assert!(view_only_blocks(a), "{a} should be blocked in view-only");
         }
         // Not blocked: navigation + read-only actions.
         for a in ["print", "autofilter", "formula"] {
-            assert!(!view_only_blocks(a), "{a} should remain enabled in view-only");
+            assert!(
+                !view_only_blocks(a),
+                "{a} should remain enabled in view-only"
+            );
         }
         // Unknown action: not blocked (default = allow).
         assert!(!view_only_blocks("does-not-exist"));
