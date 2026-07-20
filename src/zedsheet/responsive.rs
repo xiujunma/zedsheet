@@ -310,6 +310,84 @@ pub mod wasm {
             .add_event_listener_with_callback("wheel", wheel_cb.as_ref().unchecked_ref());
         wheel_cb.forget();
     }
+
+    /// Tap-to-reveal popover. In view-only mode, tapping a
+    /// cell shows a small overlay above it with the cell's
+    /// display value (or the underlying formula expression for
+    /// formula cells). Hides on the next tap or after 5 s.
+    pub fn wire_tap_reveal(
+        canvas_el: &web_sys::Element,
+        renderer: crate::zedsheet::SharedRenderer,
+    ) {
+        // Build the popover element once.
+        let doc = web_sys::window().and_then(|w| w.document());
+        let popover = doc.as_ref().and_then(|d| d.create_element("div").ok());
+        let Some(popover) = popover else {
+            return;
+        };
+        let _ = popover.set_attribute("class", "zs-tap-reveal");
+        let style = popover.unchecked_ref::<web_sys::HtmlElement>().style();
+        let _ = style.set_property("position", "fixed");
+        let _ = style.set_property("z-index", "900");
+        let _ = style.set_property("background", "#fffbe6");
+        let _ = style.set_property("border", "1px solid #d9c97a");
+        let _ = style.set_property("padding", "6px 8px");
+        let _ = style.set_property("font", "12px Arial, sans-serif");
+        let _ = style.set_property("display", "none");
+        let _ = style.set_property("pointer-events", "none");
+        let _ = style.set_property("max-width", "280px");
+        let _ = style.set_property("white-space", "pre-wrap");
+        let _ = doc.and_then(|d| d.body()).map(|b| {
+            let _ = b.append_child(&popover);
+        });
+
+        let popover_for_show = popover.clone();
+        let renderer_for_show = renderer.clone();
+        let canvas_el_for_show = canvas_el.clone();
+        let show_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |ev: PointerEvent| {
+            let (x, y) = (ev.offset_x() as f64, ev.offset_y() as f64);
+            let hit = renderer_for_show.borrow().cell_at(x, y);
+            let Some((_r, _c)) = hit else {
+                return;
+            };
+            let text = renderer_for_show.borrow().data.cell_display_value(_r, _c);
+            popover_for_show.set_text_content(Some(&text));
+            let s = popover_for_show
+                .unchecked_ref::<web_sys::HtmlElement>()
+                .style();
+            let _ = s.set_property("display", "block");
+            let _ = s.set_property("left", &format!("{}px", ev.client_x() + 8));
+            let _ = s.set_property("top", &format!("{}px", ev.client_y() + 8));
+            let popover_for_hide = popover_for_show.clone();
+            let hide_cb = Closure::<dyn FnMut()>::new(move || {
+                let _ = popover_for_hide
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+            });
+            let _ = web_sys::window().map(|w| {
+                w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    hide_cb.as_ref().unchecked_ref(),
+                    5000,
+                )
+            });
+            hide_cb.forget();
+            // Also hide on the next pointerup anywhere.
+            let popover_for_hide2 = popover_for_show.clone();
+            let next_up = Closure::<dyn FnMut(PointerEvent)>::new(move |_ev: PointerEvent| {
+                let _ = popover_for_hide2
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+            });
+            let _ = canvas_el_for_show
+                .add_event_listener_with_callback("pointerup", next_up.as_ref().unchecked_ref());
+            next_up.forget();
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointerup", show_cb.as_ref().unchecked_ref());
+        show_cb.forget();
+    }
 }
 
 #[cfg(test)]

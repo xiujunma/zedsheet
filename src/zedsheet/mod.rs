@@ -780,6 +780,17 @@ impl ZedSheet {
         if let Some(canvas_node) = canvas_el.el.as_ref() {
             responsive::wasm::wire_pinch_zoom(canvas_node, renderer.clone());
         }
+        // Phase 7: tap-to-reveal popover. The formula bar is hidden
+        // under view-only (no editor to commit), so this is the mobile
+        // equivalent: tapping a cell surfaces its display value (or
+        // its underlying formula expression) in a small overlay that
+        // dismisses on the next tap or after 5 s.
+        #[cfg(target_arch = "wasm32")]
+        if matches!(options.mode, crate::component::options::Mode::ViewOnly) {
+            if let Some(canvas_node) = canvas_el.el.as_ref() {
+                responsive::wasm::wire_tap_reveal(canvas_node, renderer.clone());
+            }
+        }
         if let Some(menu_node) = cmenu_el.el.clone() {
             wire_context_menu(
                 &mut canvas_el,
