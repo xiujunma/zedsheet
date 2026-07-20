@@ -35,6 +35,7 @@ mod image_modal;
 mod pivot_modal;
 mod print;
 mod protect_sheet_modal;
+mod responsive;
 mod shape_modal;
 mod slicer_modal;
 mod sort_dialog;
@@ -57,6 +58,11 @@ pub(crate) use image_modal::*;
 pub(crate) use pivot_modal::*;
 pub(crate) use print::*;
 pub(crate) use protect_sheet_modal::*;
+// Phase 7 mobile view-only (issue #20): consumed by downstream tasks 3-7
+// (events.rs, toolbar, render) — the crate-wide `dead_code` allow doesn't
+// silence `unused_imports`, so we annotate this re-export explicitly.
+#[allow(unused_imports)]
+pub(crate) use responsive::*;
 pub(crate) use shape_modal::*;
 pub(crate) use slicer_modal::*;
 pub(crate) use sort_dialog::*;
