@@ -119,6 +119,14 @@ the next feature that touches the same area.
 
 ---
 
+## 9. Mobile / multi-platform
+
+| # | Severity | Feature | Notes |
+|---|----------|---------|-------|
+| | ~~**P3**~~ ✅ | Mobile view-only (read-only on phones + tablets) | Fixed 2026-07-20 (Phase 7): `Options.mode = Mode::ViewOnly` sets every sheet to read-only and adds `[data-readonly="true"]` to the root container. CSS @media rules at 1024 / 768 / 480 collapse the toolbar, hide the formula bar, shrink row/column headers, and pad every button to a 44 px tap target. Long-press synthesises `contextmenu` after 500 ms; pinch-zoom and Ctrl-wheel route to `renderer.set_zoom`. Tap-to-reveal popover replaces the formula bar in view-only mode. Four new host tests cover `breakpoint_class`, `should_show_formula_bar`, `toolbar_button_subset`, and `view_only_blocks`. Editing on mobile is a separate backlog entry. |
+
+---
+
 ## How to add an entry
 
 - Be specific. "Sort" is not a backlog item; "Sort dialog with multi-level keys, has-header option, case sensitivity" is.
