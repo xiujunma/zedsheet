@@ -337,17 +337,21 @@ pub mod wasm {
             let _ = b.append_child(&popover);
         });
 
-        // The hide-listener and hide-timeout from the previous tap
-        // survive across calls so we can cancel them (instead of
-        // stacking one new listener and one new 5 s timer per tap,
-        // which is what bit the original implementation).
+        // The hide-listener, deferred-install callback, and hide-timeout from
+        // the previous tap survive across calls so we can cancel them (instead
+        // of stacking one new listener and one 5 s timer per tap, which is what
+        // bit the original implementation).
         struct HideHandles {
             listener_cb: Option<Closure<dyn FnMut(PointerEvent)>>,
+            listener_install_cb: Option<Closure<dyn FnMut()>>,
+            listener_install_id: Option<i32>,
             timeout_cb: Option<Closure<dyn FnMut()>>,
             timeout_id: Option<i32>,
         }
         let hide_handles: Rc<RefCell<HideHandles>> = Rc::new(RefCell::new(HideHandles {
             listener_cb: None,
+            listener_install_cb: None,
+            listener_install_id: None,
             timeout_cb: None,
             timeout_id: None,
         }));
@@ -360,6 +364,12 @@ pub mod wasm {
             let document_for_cancel = document_el.clone();
             move || {
                 let mut handles = hide_handles.borrow_mut();
+                if let Some(id) = handles.listener_install_id.take() {
+                    if let Some(w) = web_sys::window() {
+                        w.clear_timeout_with_handle(id);
+                    }
+                }
+                handles.listener_install_cb.take();
                 if let Some(cb) = handles.listener_cb.take() {
                     let _ = document_for_cancel.remove_event_listener_with_callback(
                         "pointerup",
@@ -387,6 +397,10 @@ pub mod wasm {
             let (x, y) = (ev.offset_x() as f64, ev.offset_y() as f64);
             let hit = renderer_for_show.borrow().cell_at(x, y);
             let Some((r, c)) = hit else {
+                let _ = popover_for_show
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
                 return;
             };
             let text = renderer_for_show.borrow().data.cell_display_value(r, c);
@@ -405,29 +419,59 @@ pub mod wasm {
             let popover_for_up = popover_for_show.clone();
             let hide_handles_for_up = hide_handles_for_show.clone();
             let document_for_up = document_el.clone();
-            let hide_up_cb =
-                Closure::<dyn FnMut(PointerEvent)>::new(move |_ev: PointerEvent| {
-                    let _ = popover_for_up
-                        .unchecked_ref::<web_sys::HtmlElement>()
-                        .style()
-                        .set_property("display", "none");
-                    let mut handles = hide_handles_for_up.borrow_mut();
-                    if let Some(cb) = handles.listener_cb.take() {
-                        let _ = document_for_up.remove_event_listener_with_callback(
+            let hide_up_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |_ev: PointerEvent| {
+                let _ = popover_for_up
+                    .unchecked_ref::<web_sys::HtmlElement>()
+                    .style()
+                    .set_property("display", "none");
+                let mut handles = hide_handles_for_up.borrow_mut();
+                handles.listener_install_cb.take();
+                if let Some(cb) = handles.listener_cb.take() {
+                    let _ = document_for_up.remove_event_listener_with_callback(
+                        "pointerup",
+                        cb.as_ref().unchecked_ref(),
+                    );
+                }
+                if let Some(id) = handles.timeout_id.take() {
+                    if let Some(w) = web_sys::window() {
+                        w.clear_timeout_with_handle(id);
+                    }
+                }
+                handles.timeout_cb.take();
+            });
+            hide_handles_for_show.borrow_mut().listener_cb = Some(hide_up_cb);
+
+            // The show callback runs on the canvas's pointerup. Defer installing
+            // the document listener until the next event tick so this same
+            // pointerup cannot immediately dismiss the newly shown popover.
+            if let Some(window) = web_sys::window() {
+                let document_for_install = document_el.clone();
+                let hide_handles_for_install = hide_handles_for_show.clone();
+                let install_cb = Closure::<dyn FnMut()>::new(move || {
+                    let mut handles = hide_handles_for_install.borrow_mut();
+                    handles.listener_install_id = None;
+                    if let Some(cb) = handles.listener_cb.as_ref() {
+                        let _ = document_for_install.add_event_listener_with_callback(
                             "pointerup",
                             cb.as_ref().unchecked_ref(),
                         );
                     }
-                    if let Some(id) = handles.timeout_id.take() {
-                        if let Some(w) = web_sys::window() {
-                            w.clear_timeout_with_handle(id);
-                        }
-                    }
-                    handles.timeout_cb.take();
                 });
-            let _ = document_el
-                .add_event_listener_with_callback("pointerup", hide_up_cb.as_ref().unchecked_ref());
-            hide_handles_for_show.borrow_mut().listener_cb = Some(hide_up_cb);
+                if let Ok(id) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    install_cb.as_ref().unchecked_ref(),
+                    0,
+                ) {
+                    let mut handles = hide_handles_for_show.borrow_mut();
+                    handles.listener_install_id = Some(id);
+                    handles.listener_install_cb = Some(install_cb);
+                } else {
+                    hide_handles_for_show.borrow_mut().listener_cb.take();
+                    let _ = popover_for_show
+                        .unchecked_ref::<web_sys::HtmlElement>()
+                        .style()
+                        .set_property("display", "none");
+                }
+            }
 
             // 5 s auto-hide timer. Same hide-and-cleanup body, but
             // `FnMut()` (no event arg). The closure is stored in
@@ -442,6 +486,7 @@ pub mod wasm {
                     .style()
                     .set_property("display", "none");
                 let mut handles = hide_handles_for_t.borrow_mut();
+                handles.listener_install_cb.take();
                 if let Some(cb) = handles.listener_cb.take() {
                     let _ = document_for_t.remove_event_listener_with_callback(
                         "pointerup",
