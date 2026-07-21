@@ -267,12 +267,32 @@ pub mod wasm {
         up_cb.forget();
     }
 
-    /// Wire pinch-zoom → `renderer.set_zoom`. Both the
-    /// `gesturechange` event (WebKit / iOS Safari) and the
-    /// `wheel + ctrlKey` event (desktop) route through the
-    /// same zoom handler so the desktop Ctrl-wheel zoom and
-    /// the mobile pinch zoom share a single scale model.
+    /// Wire pinch-zoom → `renderer.set_zoom`. Only the
+    /// `gesturechange` event (WebKit / iOS Safari) routes through
+    /// here. The desktop Ctrl-wheel zoom is handled by the
+    /// main `wire_events` wheel listener in `events.rs` — adding
+    /// a second one here would double-apply the zoom (a single
+    /// Ctrl-wheel-up from 100% would become 110%, then 121%).
+    /// `gesturestart` is wired too so the relative scale baseline
+    /// is fresh on each pinch gesture.
     pub fn wire_pinch_zoom(canvas_el: &web_sys::Element, renderer: SharedRenderer) {
+        // `gesturestart` is needed on iOS to keep the platform's
+        // default pinch-text-zoom behaviour from kicking in once
+        // the user pinches the canvas. We don't act on it (the
+        // next `gesturechange` reads `event.scale` directly), but
+        // having a listener attached tells Safari our element
+        // intends to consume the gesture.
+        let canvas_el_gesture_start = canvas_el.clone();
+        let start_cb = Closure::<dyn FnMut(JsValue)>::new(move |_ev: JsValue| {
+            // No-op: the relative scale on `gesturechange` is
+            // what `set_zoom` consumes.
+        });
+        let _ = canvas_el_gesture_start.add_event_listener_with_callback(
+            "gesturestart",
+            start_cb.as_ref().unchecked_ref(),
+        );
+        start_cb.forget();
+
         let canvas_el_gesture = canvas_el.clone();
         let renderer_gesture = renderer.clone();
         let gesture_cb = Closure::<dyn FnMut(JsValue)>::new(move |ev: JsValue| {
@@ -291,24 +311,6 @@ pub mod wasm {
         let _ = canvas_el_gesture
             .add_event_listener_with_callback("gesturechange", gesture_cb.as_ref().unchecked_ref());
         gesture_cb.forget();
-
-        let canvas_el_wheel = canvas_el.clone();
-        let renderer_wheel = renderer.clone();
-        let wheel_cb =
-            Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |ev: web_sys::WheelEvent| {
-                if !ev.ctrl_key() {
-                    return;
-                }
-                let current = renderer_wheel.borrow().zoom();
-                let scale = if ev.delta_y() < 0.0 { 1.1 } else { 1.0 / 1.1 };
-                let next = (current * scale).clamp(0.1, 4.0);
-                let mut r = renderer_wheel.borrow_mut();
-                r.set_zoom(next);
-                r.render();
-            });
-        let _ = canvas_el_wheel
-            .add_event_listener_with_callback("wheel", wheel_cb.as_ref().unchecked_ref());
-        wheel_cb.forget();
     }
 
     /// Tap-to-reveal popover. In view-only mode, tapping a
