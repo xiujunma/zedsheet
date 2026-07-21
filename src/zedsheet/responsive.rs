@@ -441,10 +441,8 @@ pub mod wasm {
             // No-op: the relative scale on `gesturechange` is
             // what `set_zoom` consumes.
         });
-        let _ = canvas_el_gesture_start.add_event_listener_with_callback(
-            "gesturestart",
-            start_cb.as_ref().unchecked_ref(),
-        );
+        let _ = canvas_el_gesture_start
+            .add_event_listener_with_callback("gesturestart", start_cb.as_ref().unchecked_ref());
         start_cb.forget();
 
         let canvas_el_gesture = canvas_el.clone();
