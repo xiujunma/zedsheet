@@ -780,6 +780,13 @@ impl ZedSheet {
         if let Some(canvas_node) = canvas_el.el.as_ref() {
             responsive::wasm::wire_pinch_zoom(canvas_node, renderer.clone());
         }
+        // Phase 7: touch pan → `renderer.scroll_by`. The canvas body
+        // doesn't scroll natively (no overflow), so a one-finger drag
+        // has to drive `scroll_rows` / `scroll_cols` itself.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas_node) = canvas_el.el.as_ref() {
+            responsive::wasm::wire_touch_pan(canvas_node, renderer.clone());
+        }
         // Phase 7: tap-to-reveal popover. The formula bar is hidden
         // under view-only (no editor to commit), so this is the mobile
         // equivalent: tapping a cell surfaces its display value (or

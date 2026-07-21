@@ -267,6 +267,160 @@ pub mod wasm {
         up_cb.forget();
     }
 
+    /// Wire a single-pointer touch pan → `renderer.scroll_by`.
+    /// On desktop, the canvas uses custom scrollbars driven by
+    /// `scroll_rows` / `scroll_cols` and mouse-wheel handlers —
+    /// DOM-native scroll is disabled (the spreadsheet body has
+    /// no `overflow`). On mobile the wrapper has
+    /// `touch-action: pan-x pan-y pinch-zoom`, which means the
+    /// browser *will* try to pan-scroll the page, but it can't
+    /// scroll the spreadsheet body because the body has no
+    /// overflow and the canvas itself doesn't scroll. This
+    /// handler fills the gap: when a single finger drags more
+    /// than `ACTIVATION_SLOP_PX` from `pointerdown`, the
+    /// accumulated delta is converted to whole-cell scrolls
+    /// (using the current row/col height as the step size) and
+    /// applied via `scroll_by`, which both updates
+    /// `scroll_rows` / `scroll_cols` and re-renders.
+    ///
+    /// Coexists with `wire_long_press`: the long-press timer
+    /// cancels itself when the same pointer moves more than
+    /// `LONG_PRESS_SLOP_PX` (10 px), and this handler only
+    /// activates past the same threshold. So a touch-and-hold
+    /// opens the context menu, a drag-instead pans the grid.
+    pub fn wire_touch_pan(canvas_el: &web_sys::Element, renderer: SharedRenderer) {
+        const ACTIVATION_SLOP_PX: f64 = 10.0;
+        type PanState = Rc<RefCell<Option<PanSession>>>;
+        struct PanSession {
+            pointer_id: i32,
+            start_x: f64,
+            start_y: f64,
+            last_x: f64,
+            last_y: f64,
+            // Pixel accumulator. When |accum_x| exceeds the
+            // current column width, we scroll one column and
+            // subtract the width; same for `accum_y` vs row height.
+            accum_x: f64,
+            accum_y: f64,
+            active: bool,
+        }
+
+        let pan_state: PanState = Rc::new(RefCell::new(None));
+
+        // pointerdown: seed a session in "potential" mode. It only
+        // becomes active once the pointer moves more than the slop,
+        // so a tap that turns into a long-press still wins.
+        let down_state = Rc::clone(&pan_state);
+        let down_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let x = event.client_x() as f64;
+            let y = event.client_y() as f64;
+            *down_state.borrow_mut() = Some(PanSession {
+                pointer_id: event.pointer_id(),
+                start_x: x,
+                start_y: y,
+                last_x: x,
+                last_y: y,
+                accum_x: 0.0,
+                accum_y: 0.0,
+                active: false,
+            });
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointerdown", down_cb.as_ref().unchecked_ref());
+        down_cb.forget();
+
+        // pointermove: if the pointer moved past the slop while
+        // down, activate the pan and convert accumulated pixel
+        // delta into whole-cell scroll steps.
+        let move_state = Rc::clone(&pan_state);
+        let renderer_for_move = renderer.clone();
+        let move_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let mut session = match move_state.borrow_mut().take() {
+                Some(s) if s.pointer_id == event.pointer_id() => s,
+                other => {
+                    // Different pointer, or no session — restore
+                    // and bail. The other pointer's session (if any)
+                    // resumes next move.
+                    if other.is_some() {
+                        *move_state.borrow_mut() = other;
+                    }
+                    return;
+                }
+            };
+            let x = event.client_x() as f64;
+            let y = event.client_y() as f64;
+            let dx = x - session.last_x;
+            let dy = y - session.last_y;
+            session.last_x = x;
+            session.last_y = y;
+
+            if !session.active {
+                let total_dx = (x - session.start_x).abs();
+                let total_dy = (y - session.start_y).abs();
+                if total_dx > ACTIVATION_SLOP_PX || total_dy > ACTIVATION_SLOP_PX {
+                    session.active = true;
+                    // Reset accumulators at activation so the
+                    // threshold-crossing movement isn't double-counted
+                    // as a scroll step.
+                    session.accum_x = 0.0;
+                    session.accum_y = 0.0;
+                }
+            }
+
+            if session.active {
+                session.accum_x += dx;
+                session.accum_y += dy;
+                let (col_w, row_h) = {
+                    let r = renderer_for_move.borrow();
+                    // Use the current scroll-position row/col width
+                    // as the step size; fall back to 24 px (the
+                    // common unzoomed default) if the renderer
+                    // reports a non-positive value.
+                    let w = r.col_width_at(r.scroll_cols).max(1.0);
+                    let h = r.row_height_at(r.scroll_rows).max(1.0);
+                    (w, h)
+                };
+                let mut d_rows: i32 = 0;
+                let mut d_cols: i32 = 0;
+                if session.accum_y.abs() >= row_h {
+                    d_rows = -(session.accum_y / row_h) as i32;
+                    session.accum_y -= d_rows as f64 * row_h;
+                }
+                if session.accum_x.abs() >= col_w {
+                    d_cols = -(session.accum_x / col_w) as i32;
+                    session.accum_x -= d_cols as f64 * col_w;
+                }
+                if d_rows != 0 || d_cols != 0 {
+                    let mut r = renderer_for_move.borrow_mut();
+                    r.scroll_by(d_rows, d_cols);
+                    r.render();
+                }
+            }
+
+            *move_state.borrow_mut() = Some(session);
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointermove", move_cb.as_ref().unchecked_ref());
+        move_cb.forget();
+
+        // pointerup / pointercancel: clear the session.
+        let up_state = Rc::clone(&pan_state);
+        let up_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let should_clear = up_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|s| s.pointer_id == event.pointer_id());
+            if should_clear {
+                *up_state.borrow_mut() = None;
+            }
+        });
+        let _ =
+            canvas_el.add_event_listener_with_callback("pointerup", up_cb.as_ref().unchecked_ref());
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointercancel", up_cb.as_ref().unchecked_ref());
+        up_cb.forget();
+    }
+
     /// Wire pinch-zoom → `renderer.set_zoom`. Only the
     /// `gesturechange` event (WebKit / iOS Safari) routes through
     /// here. The desktop Ctrl-wheel zoom is handled by the
