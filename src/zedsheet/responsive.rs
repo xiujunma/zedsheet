@@ -314,43 +314,82 @@ pub mod wasm {
     /// Tap-to-reveal popover. In view-only mode, tapping a
     /// cell shows a small overlay above it with the cell's
     /// display value (or the underlying formula expression for
-    /// formula cells). Hides on the next tap or after 5 s.
+    /// formula cells). Hides on the next pointerup or after 5 s.
     pub fn wire_tap_reveal(
         canvas_el: &web_sys::Element,
         renderer: crate::zedsheet::SharedRenderer,
     ) {
-        // Build the popover element once.
+        // Build the popover element once. Style mirrors the note
+        // popover in `events.rs` so mobile and desktop look identical.
         let doc = web_sys::window().and_then(|w| w.document());
+        let Some(document_el) = doc.clone() else {
+            return;
+        };
         let popover = doc.as_ref().and_then(|d| d.create_element("div").ok());
         let Some(popover) = popover else {
             return;
         };
-        let _ = popover.set_attribute("class", "zs-tap-reveal");
-        let style = popover.unchecked_ref::<web_sys::HtmlElement>().style();
-        let _ = style.set_property("position", "fixed");
-        let _ = style.set_property("z-index", "900");
-        let _ = style.set_property("background", "#fffbe6");
-        let _ = style.set_property("border", "1px solid #d9c97a");
-        let _ = style.set_property("padding", "6px 8px");
-        let _ = style.set_property("font", "12px Arial, sans-serif");
-        let _ = style.set_property("display", "none");
-        let _ = style.set_property("pointer-events", "none");
-        let _ = style.set_property("max-width", "280px");
-        let _ = style.set_property("white-space", "pre-wrap");
+        let _ = popover.set_attribute(
+            "style",
+            "display:none;position:fixed;z-index:400;max-width:240px;background:#fffbe6;border:1px solid #d9c97a;box-shadow:1px 2px 6px rgba(0,0,0,0.2);padding:6px 8px;font-size:12px;white-space:pre-wrap;pointer-events:none;color:#333;",
+        );
         let _ = doc.and_then(|d| d.body()).map(|b| {
             let _ = b.append_child(&popover);
         });
 
+        // The hide-listener and hide-timeout from the previous tap
+        // survive across calls so we can cancel them (instead of
+        // stacking one new listener and one new 5 s timer per tap,
+        // which is what bit the original implementation).
+        struct HideHandles {
+            listener_cb: Option<Closure<dyn FnMut(PointerEvent)>>,
+            timeout_cb: Option<Closure<dyn FnMut()>>,
+            timeout_id: Option<i32>,
+        }
+        let hide_handles: Rc<RefCell<HideHandles>> = Rc::new(RefCell::new(HideHandles {
+            listener_cb: None,
+            timeout_cb: None,
+            timeout_id: None,
+        }));
+
+        // Removes whatever listener / timer the previous tap left
+        // behind. Shared between show_cb (cancel-before-show) and
+        // the hide callbacks (self-cleanup after firing).
+        let cancel_handles = {
+            let hide_handles = hide_handles.clone();
+            let document_for_cancel = document_el.clone();
+            move || {
+                let mut handles = hide_handles.borrow_mut();
+                if let Some(cb) = handles.listener_cb.take() {
+                    let _ = document_for_cancel.remove_event_listener_with_callback(
+                        "pointerup",
+                        cb.as_ref().unchecked_ref(),
+                    );
+                }
+                if let Some(id) = handles.timeout_id.take() {
+                    if let Some(w) = web_sys::window() {
+                        w.clear_timeout_with_handle(id);
+                    }
+                }
+                handles.timeout_cb.take();
+            }
+        };
+
         let popover_for_show = popover.clone();
         let renderer_for_show = renderer.clone();
-        let canvas_el_for_show = canvas_el.clone();
+        let hide_handles_for_show = hide_handles.clone();
         let show_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |ev: PointerEvent| {
+            // Cancel any leftover hide-handles from the previous tap
+            // before we register new ones. Without this, every tap
+            // would leak one pointerup listener and one 5 s timer.
+            cancel_handles();
+
             let (x, y) = (ev.offset_x() as f64, ev.offset_y() as f64);
             let hit = renderer_for_show.borrow().cell_at(x, y);
-            let Some((_r, _c)) = hit else {
+            let Some((r, c)) = hit else {
                 return;
             };
-            let text = renderer_for_show.borrow().data.cell_display_value(_r, _c);
+            let text = renderer_for_show.borrow().data.cell_display_value(r, c);
             popover_for_show.set_text_content(Some(&text));
             let s = popover_for_show
                 .unchecked_ref::<web_sys::HtmlElement>()
@@ -358,31 +397,73 @@ pub mod wasm {
             let _ = s.set_property("display", "block");
             let _ = s.set_property("left", &format!("{}px", ev.client_x() + 8));
             let _ = s.set_property("top", &format!("{}px", ev.client_y() + 8));
-            let popover_for_hide = popover_for_show.clone();
-            let hide_cb = Closure::<dyn FnMut()>::new(move || {
-                let _ = popover_for_hide
+
+            // Hide on the next pointerup anywhere (registered on
+            // document so a tap on the toolbar / formula bar also
+            // dismisses the popover). Self-removes when fired so the
+            // next tap doesn't have to remove it explicitly.
+            let popover_for_up = popover_for_show.clone();
+            let hide_handles_for_up = hide_handles_for_show.clone();
+            let document_for_up = document_el.clone();
+            let hide_up_cb =
+                Closure::<dyn FnMut(PointerEvent)>::new(move |_ev: PointerEvent| {
+                    let _ = popover_for_up
+                        .unchecked_ref::<web_sys::HtmlElement>()
+                        .style()
+                        .set_property("display", "none");
+                    let mut handles = hide_handles_for_up.borrow_mut();
+                    if let Some(cb) = handles.listener_cb.take() {
+                        let _ = document_for_up.remove_event_listener_with_callback(
+                            "pointerup",
+                            cb.as_ref().unchecked_ref(),
+                        );
+                    }
+                    if let Some(id) = handles.timeout_id.take() {
+                        if let Some(w) = web_sys::window() {
+                            w.clear_timeout_with_handle(id);
+                        }
+                    }
+                    handles.timeout_cb.take();
+                });
+            let _ = document_el
+                .add_event_listener_with_callback("pointerup", hide_up_cb.as_ref().unchecked_ref());
+            hide_handles_for_show.borrow_mut().listener_cb = Some(hide_up_cb);
+
+            // 5 s auto-hide timer. Same hide-and-cleanup body, but
+            // `FnMut()` (no event arg). The closure is stored in
+            // `hide_handles` (not forgotten) so the next tap can drop
+            // it instead of leaking it.
+            let popover_for_t = popover_for_show.clone();
+            let hide_handles_for_t = hide_handles_for_show.clone();
+            let document_for_t = document_el.clone();
+            let hide_t_cb = Closure::<dyn FnMut()>::new(move || {
+                let _ = popover_for_t
                     .unchecked_ref::<web_sys::HtmlElement>()
                     .style()
                     .set_property("display", "none");
+                let mut handles = hide_handles_for_t.borrow_mut();
+                if let Some(cb) = handles.listener_cb.take() {
+                    let _ = document_for_t.remove_event_listener_with_callback(
+                        "pointerup",
+                        cb.as_ref().unchecked_ref(),
+                    );
+                }
+                if let Some(id) = handles.timeout_id.take() {
+                    if let Some(w) = web_sys::window() {
+                        w.clear_timeout_with_handle(id);
+                    }
+                }
+                handles.timeout_cb.take();
             });
-            let _ = web_sys::window().map(|w| {
-                w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                    hide_cb.as_ref().unchecked_ref(),
+            if let Some(window) = web_sys::window() {
+                if let Ok(id) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                    hide_t_cb.as_ref().unchecked_ref(),
                     5000,
-                )
-            });
-            hide_cb.forget();
-            // Also hide on the next pointerup anywhere.
-            let popover_for_hide2 = popover_for_show.clone();
-            let next_up = Closure::<dyn FnMut(PointerEvent)>::new(move |_ev: PointerEvent| {
-                let _ = popover_for_hide2
-                    .unchecked_ref::<web_sys::HtmlElement>()
-                    .style()
-                    .set_property("display", "none");
-            });
-            let _ = canvas_el_for_show
-                .add_event_listener_with_callback("pointerup", next_up.as_ref().unchecked_ref());
-            next_up.forget();
+                ) {
+                    hide_handles_for_show.borrow_mut().timeout_id = Some(id);
+                }
+                hide_handles_for_show.borrow_mut().timeout_cb = Some(hide_t_cb);
+            }
         });
         let _ = canvas_el
             .add_event_listener_with_callback("pointerup", show_cb.as_ref().unchecked_ref());
