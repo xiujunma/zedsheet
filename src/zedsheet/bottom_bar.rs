@@ -249,6 +249,15 @@ pub(crate) fn wire_bottombar(
                 s.push(new_sheet);
                 s.len() - 1
             };
+            // Defense-in-depth: if the gate above is ever relaxed
+            // (e.g. to allow structural adds but not data edits),
+            // the freshly created sheet must still inherit
+            // read-only from the workbook's view-only mode so
+            // switching to it doesn't reveal an editable tab
+            // (Phase 7 follow-on).
+            if view_only {
+                sheets.borrow_mut()[new_idx].set_read_only(true);
+            }
             // Persist current sheet, then load the freshly added (empty) one.
             let current_data = renderer.borrow().data_clone();
             {
