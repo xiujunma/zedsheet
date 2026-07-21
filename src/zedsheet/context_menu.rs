@@ -121,6 +121,7 @@ pub(crate) fn context_menu_html() -> String {
 pub(crate) fn wire_context_menu(
     canvas_el: &mut Element,
     menu_node: web_sys::Element,
+    mode: crate::component::options::Mode,
     renderer: &SharedRenderer,
     sheets: &Sheets,
     active: &ActiveSheet,
@@ -445,16 +446,17 @@ pub(crate) fn wire_context_menu(
                 // Read-only mode blocks every *write* menu action. Copy is
                 // read-only on the data, so it stays available (issue #24).
                 let read_only = r.data.is_read_only();
-                // Phase 7 view-only gating: even if the per-sheet
-                // read-only flag is off, the menu must suppress every
-                // editing action in view-only mode (issue #20). The
-                // attribute selector on the root already hides the
-                // toolbar, but the context menu can still be opened
-                // via right-click / long-press; this short-circuit
-                // closes it before any `r.some_action()` runs.
+                // Phase 7 view-only gating: in `Mode::ViewOnly` the menu
+                // must suppress every editing action even though the
+                // per-sheet `read_only` flag may be off (a sheet can be
+                // toggled editable at runtime via `setSheetReadOnly`).
+                // The check is gated on the mount-time mode so a normal
+                // desktop mount doesn't silently swallow Copy/Cut/Paste.
                 // Navigation actions (sort-range, copy, refresh-pivot)
                 // are not in `view_only_blocks` and remain available.
-                if crate::zedsheet::responsive::view_only_blocks(cmd.as_str()) {
+                if mode == crate::component::options::Mode::ViewOnly
+                    && crate::zedsheet::responsive::view_only_blocks(cmd.as_str())
+                {
                     let _ = menu_for_click
                         .unchecked_ref::<web_sys::HtmlElement>()
                         .style()

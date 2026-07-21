@@ -126,6 +126,7 @@ pub struct ZedSheet {
     get_data: GetDataFn,
     load_data: LoadDataFn,
     active_sheet: ActiveSheetFn,
+    mode: crate::component::options::Mode,
 }
 
 impl ZedSheet {
@@ -802,6 +803,7 @@ impl ZedSheet {
             wire_context_menu(
                 &mut canvas_el,
                 menu_node,
+                options.mode,
                 &renderer,
                 &sheets,
                 &active,
@@ -890,6 +892,7 @@ impl ZedSheet {
             wire_bottombar(
                 menu,
                 add,
+                options.mode,
                 &renderer,
                 &sheets,
                 &active,
@@ -1296,11 +1299,18 @@ impl ZedSheet {
             get_data,
             load_data,
             active_sheet,
+            mode: options.mode,
         }
     }
 
     pub fn renderer(&self) -> SharedRenderer {
         self.renderer.clone()
+    }
+
+    /// The active mode this sheet was mounted with. Used by `lib` to
+    /// re-apply view-only read-only after a `load_data` swap (Phase 7).
+    pub(crate) fn mode(&self) -> crate::component::options::Mode {
+        self.mode
     }
 
     /// Closure that serializes the whole workbook to a JSON array (issue #20).

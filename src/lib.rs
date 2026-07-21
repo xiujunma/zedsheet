@@ -22,19 +22,22 @@ mod persist;
 mod renderer;
 mod zedsheet;
 
-use component::options::Options;
+use component::options::{Mode, Options};
 use core::cell_range::CellRange;
 use core::data_proxy::{DataProxy, SheetsRegistry, Style};
 use zedsheet::{ActiveSheetFn, GetDataFn, LoadDataFn, ZedSheet};
 
 /// Everything `lib` needs to keep about a mounted workbook: the get/load
-/// closures backing the public JS API (issue #20) and the sheet registry used
-/// to toggle per-sheet read-only mode (issue #24).
+/// closures backing the public JS API (issue #20), the sheet registry used
+/// to toggle per-sheet read-only mode (issue #24), and the active Mode so
+/// `load_data` can re-apply view-only read-only after a workbook swap
+/// (Phase 7).
 struct MountHandle {
     get_data: GetDataFn,
     load_data: LoadDataFn,
     active_sheet: ActiveSheetFn,
     sheets: Option<SheetsRegistry>,
+    mode: Mode,
 }
 
 // Every mounted workbook, keyed by mount selector. Keyed (rather than a single
@@ -59,12 +62,13 @@ pub fn start() {
         .is_some()
     {
         // Demo: restore the user's saved edits if present, else seed the sample.
-        finish_mount("#zedsheet", demo_data(), None);
+        finish_mount("#zedsheet", Options::default(), demo_data(), None);
     }
 }
 
-/// Mount a spreadsheet into the element matching `selector`. Optionally seed it
-/// with x-spreadsheet-format JSON; pass `undefined`/empty for a blank sheet.
+/// Mount a spreadsheet into the element matching `selector` in default
+/// (editable) mode. Optionally seed it with x-spreadsheet-format JSON;
+/// pass `undefined`/empty for a blank sheet.
 ///
 /// ```js
 /// import init, { mount } from "zedsheet";
@@ -74,18 +78,93 @@ pub fn start() {
 #[wasm_bindgen]
 pub fn mount(selector: &str, data_json: Option<String>) {
     let explicit = data_json.filter(|j| !j.trim().is_empty());
-    finish_mount(selector, DataProxy::new("sheet1"), explicit);
+    finish_mount(selector, Options::default(), DataProxy::new("sheet1"), explicit);
+}
+
+/// Mount a spreadsheet into `selector` with host-supplied options (Phase 7).
+/// `options_js` is a JS object whose recognised keys are:
+///
+///   - `mode`: `"normal"` | `"edit"` | `"view-only"` (default: `"edit"`)
+///   - `show_grid`, `show_toolbar`, `show_bottom_bar`, `show_context_menu`:
+///     booleans (default: all true)
+///
+/// Pass `data_json` as `null` / `undefined` / empty for a blank sheet; the
+/// same restore-from-`localStorage` path as `mount` runs after seeding.
+///
+/// ```js
+/// mount_with_options("#my-grid",
+///     { mode: "view-only", show_toolbar: true, show_bottom_bar: true },
+///     JSON.stringify(data));
+/// ```
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn mount_with_options(
+    selector: &str,
+    options_js: JsValue,
+    data_json: Option<String>,
+) {
+    let options = parse_options(&options_js);
+    let explicit = data_json.filter(|j| !j.trim().is_empty());
+    finish_mount(selector, options, DataProxy::new("sheet1"), explicit);
+}
+
+/// Parse the host's `options_js` object into a typed `Options`. Unknown
+/// fields and any kind of error fall back to the default (Phase 7: we'd
+/// rather mount editable than refuse a malformed config).
+fn parse_options(options_js: &JsValue) -> Options {
+    let mut options = Options::default();
+    if !options_js.is_object() {
+        return options;
+    }
+    options.mode = js_sys::Reflect::get(options_js, &JsValue::from_str("mode"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .and_then(|s| match s.to_ascii_lowercase().as_str() {
+            "normal" => Some(Mode::Normal),
+            "edit" => Some(Mode::Edit),
+            "view-only" | "viewonly" | "view_only" => Some(Mode::ViewOnly),
+            _ => None,
+        })
+        .unwrap_or(options.mode);
+    options.show_grid = js_sys::Reflect::get(options_js, &JsValue::from_str("show_grid"))
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(options.show_grid);
+    options.show_toolbar = js_sys::Reflect::get(options_js, &JsValue::from_str("show_toolbar"))
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(options.show_toolbar);
+    options.show_bottom_bar = js_sys::Reflect::get(
+        options_js,
+        &JsValue::from_str("show_bottom_bar"),
+    )
+    .ok()
+    .and_then(|v| v.as_bool())
+    .unwrap_or(options.show_bottom_bar);
+    options.show_context_menu = js_sys::Reflect::get(
+        options_js,
+        &JsValue::from_str("show_context_menu"),
+    )
+    .ok()
+    .and_then(|v| v.as_bool())
+    .unwrap_or(options.show_context_menu);
+    options
 }
 
 /// Mount `initial` into `selector`, then restore the workbook from host-provided
 /// `explicit` JSON, or failing that a previous `localStorage` snapshot — all
 /// before arming persistence, so the initial render can't overwrite saved data
 /// before it has been read back (issue #20).
-fn finish_mount(selector: &str, initial: DataProxy, explicit: Option<String>) {
+fn finish_mount(
+    selector: &str,
+    options: Options,
+    initial: DataProxy,
+    explicit: Option<String>,
+) {
     // Capture any restore payload BEFORE building: the initial render's sync
     // runs while persistence is still disarmed.
     let restore = explicit.or_else(|| persist::load_saved(selector));
-    mount_into(selector, initial);
+    mount_into(selector, options, initial);
     if let Some(json) = &restore {
         MOUNTS.with(|m| {
             if let Some(h) = m.borrow().get(selector) {
@@ -100,15 +179,19 @@ fn finish_mount(selector: &str, initial: DataProxy, explicit: Option<String>) {
     persist::arm(selector);
 }
 
-fn mount_into(selector: &str, data: DataProxy) {
-    let sheet = ZedSheet::new(selector, Options::default(), data);
+fn mount_into(selector: &str, options: Options, data: DataProxy) {
+    let sheet = ZedSheet::new(selector, options, data);
     // Stash the get/load closures and the sheet registry (for read-only, issue
     // #24) so JS callers can drive the workbook after `ZedSheet` is forgotten.
+    // The Mode is captured so `load_data` can re-apply view-only read-only
+    // after a workbook swap (Phase 7).
+    let mode = sheet.mode();
     let handle = MountHandle {
         get_data: sheet.get_data_fn(),
         load_data: sheet.load_data_fn(),
         active_sheet: sheet.active_sheet_fn(),
         sheets: sheet.sheets_registry(),
+        mode,
     };
     MOUNTS.with(|m| {
         m.borrow_mut().insert(selector.to_string(), handle);
@@ -174,6 +257,17 @@ pub fn load_data(selector: &str, json: &str) {
     MOUNTS.with(|m| {
         if let Some(h) = m.borrow().get(selector) {
             (h.load_data)(json);
+            // Phase 7: re-apply view-only read-only after a workbook swap.
+            // The deserialised sheets all default to editable, so without
+            // this every `load_data` would silently flip the workbook back
+            // to editable regardless of how it was mounted.
+            if h.mode == Mode::ViewOnly {
+                if let Some(sheets) = &h.sheets {
+                    for d in sheets.borrow_mut().iter_mut() {
+                        d.set_read_only(true);
+                    }
+                }
+            }
         }
     });
 }

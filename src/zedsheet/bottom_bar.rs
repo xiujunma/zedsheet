@@ -56,10 +56,16 @@ pub(crate) fn switch_sheet(
 /// pending edit FIRST: `commit_edit` writes through the renderer's current
 /// data, so an unreconciled commit after the swap would land the value on
 /// the wrong sheet.
+///
+/// `mode` gates the structural actions in view-only: Add / Rename / Delete
+/// are inert when the workbook is mounted in `Mode::ViewOnly`. Without the
+/// gate, a view-only user could "upgrade" the workbook to editable by
+/// adding a fresh (non-read-only) sheet (Phase 7).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn wire_bottombar(
     menu_el: Element,
     mut add_el: Element,
+    mode: crate::component::options::Mode,
     renderer: &SharedRenderer,
     sheets: &Sheets,
     active: &ActiveSheet,
@@ -68,6 +74,7 @@ pub(crate) fn wire_bottombar(
     editing: &EditingCell,
     sync: &SyncFn,
 ) {
+    let view_only = mode == crate::component::options::Mode::ViewOnly;
     let menu_node = menu_el.el.clone().unwrap();
 
     // Initial render of the tab strip.
@@ -111,7 +118,8 @@ pub(crate) fn wire_bottombar(
         });
     }
 
-    // Double-click a tab: rename via prompt.
+    // Double-click a tab: rename via prompt. View-only: no-op so a
+    // user can't rename sheets to disguise the workbook as their own.
     {
         let renderer = renderer.clone();
         let sheets = sheets.clone();
@@ -119,6 +127,9 @@ pub(crate) fn wire_bottombar(
         let menu_for = menu_node.clone();
         let mut menu_dbl: Element = menu_node.clone().into();
         menu_dbl.add_event_listener("dblclick", move |event: web_sys::Event| {
+            if view_only {
+                return;
+            }
             let Some(idx) = tab_index_from_event(&event) else {
                 return;
             };
@@ -147,6 +158,7 @@ pub(crate) fn wire_bottombar(
     }
 
     // Right-click a tab: delete (when more than one sheet remains).
+    // View-only: no-op — keep the structural chrome read-only too.
     {
         let renderer = renderer.clone();
         let sheets = sheets.clone();
@@ -159,6 +171,9 @@ pub(crate) fn wire_bottombar(
         let mut menu_ctx: Element = menu_node.clone().into();
         menu_ctx.add_event_listener("contextmenu", move |event: web_sys::Event| {
             event.prevent_default();
+            if view_only {
+                return;
+            }
             let Some(idx) = tab_index_from_event(&event) else {
                 return;
             };
@@ -202,7 +217,11 @@ pub(crate) fn wire_bottombar(
         });
     }
 
-    // Add button: append a new sheet and switch to it.
+    // Add button: append a new sheet and switch to it. View-only:
+    // no-op at the action level — adding a fresh (default-editable)
+    // sheet in a view-only workbook would let the user effectively
+    // escape the mode. (Even though `data.is_read_only()` would block
+    // edits, the structural action itself shouldn't be available.)
     {
         let renderer = renderer.clone();
         let sheets = sheets.clone();
@@ -213,6 +232,9 @@ pub(crate) fn wire_bottombar(
         let editor_error = editor_error.clone();
         let editing = editing.clone();
         add_el.add_event_listener("click", move |_event: web_sys::Event| {
+            if view_only {
+                return;
+            }
             // Settle a pending edit before any data swap (see wire_bottombar).
             if !reconcile_editor(&renderer, &textarea, editor_error.as_ref(), &editing) {
                 return;
