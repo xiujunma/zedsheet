@@ -161,17 +161,12 @@ pub(crate) fn wire_image_modal(
             return;
         }
         // Sanity-check the anchor via the same alphabetic parser the
-        // engine uses for cell references; reject things like
-        // \`ABC123Z\` rather than failing silently in the renderer.
+        // engine uses for cell references; reject anything that doesn't
+        // decode to a real cell rather than failing silently in the renderer.
         use crate::renderer::alphabets::exp2xy;
-        if exp2xy(&anchor).0 == 0 && exp2xy(&anchor).1 == 0 && !anchor.eq_ignore_ascii_case("A1") {
-            // exp2xy("A1") returns (0, 0), so the "A1" exception is
-            // the only way the check above is non-falsifiable. Any
-            // other input that returns (0, 0) is treated as
-            // suspicious; the alphabetic parser is permissive and
-            // will happily decode \`1\` to (0, 0), so we err on
-            // the side of accepting it. A stricter regex check
-            // belongs in a follow-up.
+        if exp2xy(&anchor).is_none() {
+            show_image_error(&modal_for_apply, "Anchor must be a valid cell (e.g. A1).");
+            return;
         }
         {
             // Snapshot before mutating (undo, issue #62).

@@ -53,13 +53,22 @@ impl CellRange {
         self.sri <= ri && ri <= self.eri && self.sci <= ci && ci <= self.eci
     }
 
+    /// Strictly-inside test by reference string. `exp2xy` yields
+    /// `(col, row)`; a malformed reference is not inside anything.
     pub fn includes_cell_ref(&self, cell_ref: &str) -> bool {
-        let (ri, ci) = exp2xy(cell_ref);
+        let Some((ci, ri)) = exp2xy(cell_ref) else {
+            return false;
+        };
         self.sri < ri && self.eri > ri && self.sci < ci && self.eci > ci
     }
 
     pub fn size(&self) -> (usize, usize) {
-        (self.eri - self.sri + 1, self.eci - self.sci + 1)
+        // Saturating: a reversed range (eri < sri) yields 1, not a
+        // usize-underflow wrap (release builds have no overflow checks).
+        (
+            self.eri.saturating_sub(self.sri) + 1,
+            self.eci.saturating_sub(self.sci) + 1,
+        )
     }
 
     pub fn each(&self, f: impl Fn(usize, usize)) {
@@ -142,6 +151,26 @@ mod tests {
         assert!(CellRange::new(1, 2, 1, 3).multiple());
         assert!(CellRange::new(1, 1, 2, 1).multiple());
         assert!(!CellRange::new(1, 1, 1, 1).multiple());
+    }
+
+    #[test]
+    fn size_saturates_on_reversed_range() {
+        // A reversed range (constructed directly, bypassing from_str's
+        // normalization) must not underflow to ~usize::MAX — release builds
+        // have no overflow checks, so this used to wrap and feed loops.
+        assert_eq!(CellRange::new(2, 2, 0, 0).size(), (1, 1));
+        assert_eq!(CellRange::new(0, 0, 2, 3).size(), (3, 4));
+    }
+
+    #[test]
+    fn includes_cell_ref_uses_col_row_order() {
+        // exp2xy returns (col, row); the binding was once swapped, so
+        // "B5" (col 1, row 4) missed a rows-0..10/cols-0..2 range.
+        let cr = CellRange::new(0, 0, 10, 2);
+        assert!(cr.includes_cell_ref("B5"));
+        assert!(!cr.includes_cell_ref("B20")); // row outside
+        assert!(!cr.includes_cell_ref("Z5")); // col outside
+        assert!(!cr.includes_cell_ref("garbage")); // malformed → false
     }
 
     #[test]

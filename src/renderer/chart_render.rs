@@ -20,7 +20,10 @@ const PALETTE: [&str; 8] = [
 /// Draw every chart whose anchor cell is inside the current viewport.
 pub fn draw_charts(canvas: &Canvas, renderer: &TableRenderer) {
     for chart in &renderer.data.charts {
-        let (ac, ar) = exp2xy(&chart.anchor);
+        // A malformed anchor from host JSON skips this chart entirely.
+        let Some((ac, ar)) = exp2xy(&chart.anchor) else {
+            continue;
+        };
         // Anchors scrolled off the top/left can't be positioned; they reappear
         // when scrolled back into view.
         if ar < renderer.body_start_row() || ac < renderer.body_start_col() {
@@ -429,8 +432,11 @@ fn draw_axes_chart(
 pub fn draw_sparklines(canvas: &Canvas, renderer: &TableRenderer) {
     for sparkline in &renderer.data.sparklines {
         let (ac, ar) = match crate::renderer::alphabets::exp2xy(&sparkline.anchor) {
-            (c, r) if r < renderer.body_start_row() || c < renderer.body_start_col() => continue,
-            (c, r) => (c, r),
+            Some((c, r)) if r < renderer.body_start_row() || c < renderer.body_start_col() => {
+                continue
+            }
+            Some((c, r)) => (c, r),
+            None => continue, // malformed anchor from host JSON
         };
         let rect = renderer.cell_screen_rect(ar, ac);
         if rect.x >= renderer.width || rect.y >= renderer.height {
@@ -549,8 +555,11 @@ fn draw_one_sparkline(
 pub fn draw_images(canvas: &Canvas, renderer: &TableRenderer) {
     for image in &renderer.data.images {
         let (ac, ar) = match crate::renderer::alphabets::exp2xy(&image.anchor) {
-            (c, r) if r < renderer.body_start_row() || c < renderer.body_start_col() => continue,
-            (c, r) => (c, r),
+            Some((c, r)) if r < renderer.body_start_row() || c < renderer.body_start_col() => {
+                continue
+            }
+            Some((c, r)) => (c, r),
+            None => continue, // malformed anchor from host JSON
         };
         let rect = renderer.cell_screen_rect(ar, ac);
         if rect.x >= renderer.width || rect.y >= renderer.height {
@@ -1050,8 +1059,11 @@ fn format_axis(v: f64, format: Option<&str>) -> String {
 pub fn draw_shapes(canvas: &Canvas, renderer: &TableRenderer) {
     for shape in &renderer.data.shapes {
         let (ac, ar) = match crate::renderer::alphabets::exp2xy(&shape.anchor) {
-            (c, r) if r < renderer.body_start_row() || c < renderer.body_start_col() => continue,
-            (c, r) => (c, r),
+            Some((c, r)) if r < renderer.body_start_row() || c < renderer.body_start_col() => {
+                continue
+            }
+            Some((c, r)) => (c, r),
+            None => continue, // malformed anchor from host JSON
         };
         let rect = renderer.cell_screen_rect(ar, ac);
         if rect.x >= renderer.width || rect.y >= renderer.height {

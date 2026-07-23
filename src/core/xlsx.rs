@@ -249,7 +249,9 @@ fn write_chart(ws: &mut Worksheet, sheet_name: &str, chart: &ZedChart) {
             }
         }
     }
-    let (col, row) = exp2xy(&chart.anchor);
+    // A malformed stored anchor exports the chart at the sheet origin
+    // rather than aborting the export.
+    let (col, row) = exp2xy(&chart.anchor).unwrap_or((0, 0));
     let _ = ws.insert_chart(row as u32, col as u16, &xlsx_chart);
     // Keep `parts` and `trendline` borrowed until after `insert_chart`
     // returns; the chart references those strings.

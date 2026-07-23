@@ -19,18 +19,31 @@ pub fn string_at(index: usize) -> String {
 }
 
 /// A1 letters → column index (bijective base-26): "A"→0, "Z"→25, "AA"→26.
+///
+/// Saturating: a column string of ≥14 ASCII letters passes the shape
+/// validators but overflows isize arithmetic — saturate instead of
+/// panicking under overflow-checks (the index is nonsense either way;
+/// it just misses every real cell).
 pub fn index_at(str: &str) -> usize {
     let n = ALPHABETS.len() as isize;
     let mut index: isize = 0;
     for c in str.chars() {
         if let Some(pos) = ALPHABETS.find(c.to_ascii_uppercase()) {
-            index = index * n + (pos as isize + 1);
+            index = index.saturating_mul(n).saturating_add(pos as isize + 1);
         }
     }
     (index - 1).max(0) as usize
 }
 
-pub fn exp2xy(expr: &str) -> (usize, usize) {
+/// Parse an A1-style cell reference into `(col, row)`, both 0-based.
+///
+/// Returns `None` for anything without a valid 1-based row: no digits
+/// (`"A"`, `""`), row 0 (`"A0"`), or a row number that overflows `usize`
+/// (`"A99999999999999999999"` — 20 digits passes every shape validator, so
+/// callers must not assume shape-validated input is safe). Callers reach
+/// this with host-supplied JSON and user-typed formulas, so it must never
+/// panic (a panic aborts the whole WASM module).
+pub fn exp2xy(expr: &str) -> Option<(usize, usize)> {
     let mut x_vec: Vec<char> = Vec::new();
     let mut y_vec: Vec<char> = Vec::new();
 
@@ -44,8 +57,11 @@ pub fn exp2xy(expr: &str) -> (usize, usize) {
     }
 
     let x = index_at(&String::from_iter(x_vec));
-    let y = String::from_iter(y_vec).parse::<usize>().unwrap();
-    (x, y - 1)
+    let y = String::from_iter(y_vec).parse::<usize>().ok()?;
+    if y == 0 {
+        return None;
+    }
+    Some((x, y - 1))
 }
 
 pub fn xy2expr(x: usize, y: usize) -> String {
@@ -53,8 +69,10 @@ pub fn xy2expr(x: usize, y: usize) -> String {
 }
 
 pub fn expr2expr(expr: &str, xn: usize, yn: usize) -> String {
-    let (x, y) = exp2xy(expr);
-    xy2expr(x + xn, y + yn)
+    match exp2xy(expr) {
+        Some((x, y)) => xy2expr(x + xn, y + yn),
+        None => expr.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -88,7 +106,26 @@ mod tests {
 
     #[test]
     fn expr2xy_a1() {
-        assert_eq!(exp2xy("A1"), (0, 0));
+        assert_eq!(exp2xy("A1"), Some((0, 0)));
+    }
+
+    #[test]
+    fn exp2xy_rejects_missing_row() {
+        assert_eq!(exp2xy("A"), None);
+        assert_eq!(exp2xy(""), None);
+        assert_eq!(exp2xy("ZZZ"), None);
+    }
+
+    #[test]
+    fn exp2xy_rejects_row_zero() {
+        assert_eq!(exp2xy("A0"), None);
+    }
+
+    #[test]
+    fn exp2xy_rejects_row_overflow() {
+        // 20 digits passes `looks_like_cell_ref` shape validation but
+        // overflows usize — previously a panic.
+        assert_eq!(exp2xy("A99999999999999999999"), None);
     }
 
     #[test]

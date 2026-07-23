@@ -767,8 +767,9 @@ impl TableRenderer {
     }
 
     pub fn freeze(&mut self, reference: &str) -> &Self {
-        let (x, y) = exp2xy(reference);
-        self.freeze = (y, x);
+        if let Some((x, y)) = exp2xy(reference) {
+            self.freeze = (y, x);
+        }
         self
     }
 

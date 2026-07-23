@@ -1159,7 +1159,6 @@ impl DataProxy {
         vis: &mut Visited,
     ) -> Result<Value, EvalErr> {
         let tok = t.get(*pos).ok_or(EvalErr::Value)?.clone();
-        eprintln!("DBG parse_factor tok={:?}", tok);
         match tok {
             Token::Number(n) => {
                 *pos += 1;
@@ -1287,14 +1286,17 @@ impl DataProxy {
                 {
                     let b = b.clone();
                     *pos += 3;
-                    let (c0, r0) = exp2xy(&r);
-                    let (c1, r1) = exp2xy(&b);
+                    let (Some((c0, r0)), Some((c1, r1))) = (exp2xy(&r), exp2xy(&b)) else {
+                        return Err(EvalErr::Ref);
+                    };
                     let arg =
                         self.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)?;
                     return Ok(Value::Array(arg.grid()));
                 }
                 *pos += 1;
-                let (c, row) = exp2xy(&r);
+                let Some((c, row)) = exp2xy(&r) else {
+                    return Err(EvalErr::Ref);
+                };
                 self.resolve_value(row, c, vis)
             }
             Token::SheetRange { sheet, from, to } => {
@@ -1303,15 +1305,18 @@ impl DataProxy {
                 let Some(target) = self.find_sheet(&sheet) else {
                     return Err(EvalErr::Ref);
                 };
-                let (c0, r0) = exp2xy(&from);
-                let (c1, r1) = exp2xy(&to);
+                let (Some((c0, r0)), Some((c1, r1))) = (exp2xy(&from), exp2xy(&to)) else {
+                    return Err(EvalErr::Ref);
+                };
                 let arg =
                     target.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)?;
                 Ok(Value::Array(arg.grid()))
             }
             Token::SheetCellRef { sheet, ref_ } => {
                 *pos += 1;
-                let (c, row) = exp2xy(&ref_);
+                let Some((c, row)) = exp2xy(&ref_) else {
+                    return Err(EvalErr::Ref);
+                };
                 // Cross-sheet ref: resolve on the named sheet. An unknown
                 // sheet is a #REF! error (issue #4).
                 if let Some(target) = self.find_sheet(&sheet) {
@@ -1324,7 +1329,6 @@ impl DataProxy {
                 }
             }
             Token::Name(n) => {
-                eprintln!("DBG name arm n={:?}, pos={}, t.len={}", n, *pos, t.len());
                 *pos += 1;
                 // Phase 3.2: a LET binding takes precedence over a
                 // sheet-scoped named range, but only while its frame
@@ -1457,11 +1461,12 @@ impl DataProxy {
                 *pos += 1;
                 match self.find_sheet(&sheet) {
                     // Thread the same sheet-keyed visited set through (issue #4).
-                    Some(target) => {
-                        let (c0, r0) = exp2xy(&from);
-                        let (c1, r1) = exp2xy(&to);
-                        target.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)
-                    }
+                    Some(target) => match (exp2xy(&from), exp2xy(&to)) {
+                        (Some((c0, r0)), Some((c1, r1))) => {
+                            target.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)
+                        }
+                        _ => Err(EvalErr::Ref),
+                    },
                     None => Err(EvalErr::Ref),
                 }
             // Range: CellRef ':' CellRef
@@ -1475,10 +1480,13 @@ impl DataProxy {
                 t.get(*pos + 1),
                 t.get(*pos + 2),
             ) {
-                let (c0, r0) = exp2xy(a);
-                let (c1, r1) = exp2xy(b);
                 *pos += 3;
-                self.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)
+                match (exp2xy(a), exp2xy(b)) {
+                    (Some((c0, r0)), Some((c1, r1))) => {
+                        self.resolve_grid(r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1), vis)
+                    }
+                    _ => Err(EvalErr::Ref),
+                }
             } else if let Some(Token::Name(n)) = t.get(*pos).cloned() {
                 // A bare named range as an argument expands to its grid; a name
                 // inside a larger expression (e.g. `Rev*2`) falls through to the
@@ -1679,12 +1687,12 @@ impl DataProxy {
     fn span_ref(&self, t: &[Token], span: (usize, usize)) -> Option<(usize, usize, usize, usize)> {
         match &t[span.0..span.1] {
             [Token::CellRef(a)] => {
-                let (c, r) = exp2xy(a);
+                let (c, r) = exp2xy(a)?;
                 Some((r, c, r, c))
             }
             [Token::CellRef(a), Token::Colon, Token::CellRef(b)] => {
-                let (c0, r0) = exp2xy(a);
-                let (c1, r1) = exp2xy(b);
+                let (c0, r0) = exp2xy(a)?;
+                let (c1, r1) = exp2xy(b)?;
                 Some((r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1)))
             }
             [Token::Name(n)] => self.resolve_name(n),
@@ -1805,14 +1813,9 @@ impl DataProxy {
         for (p, v) in params.iter().zip(args) {
             frame.insert(p.clone(), v);
         }
-        eprintln!(
-            "DBG call_lambda: params={:?}, body_tokens={:?}",
-            params, body_tokens
-        );
         self.let_bindings.borrow_mut().push(frame);
         let mut p = 0usize;
         let result = self.parse_cmp(body_tokens, &mut p, vis);
-        eprintln!("DBG call_lambda result={:?}", result);
         self.let_bindings.borrow_mut().pop();
         result
     }
@@ -1945,12 +1948,6 @@ impl DataProxy {
         let Value::Array(rows) = array else {
             return Err(EvalErr::Value);
         };
-        eprintln!(
-            "DBG by_dim: rows.len={}, rows[0].len={}, params={:?}",
-            rows.len(),
-            rows.first().map(|r| r.len()).unwrap_or(0),
-            params
-        );
         if by_column {
             if rows.is_empty() {
                 return Ok(Value::Array(Vec::new()));
@@ -2454,7 +2451,7 @@ impl DataProxy {
     /// the name is undefined.
     fn resolve_name(&self, name: &str) -> Option<(usize, usize, usize, usize)> {
         let expr = self.named_ranges.get(&name.to_uppercase())?;
-        Some(parse_range_expr(expr))
+        parse_range_expr(expr)
     }
 
     // --- Excel-style tables & structured references (issue #34) ---
@@ -3659,8 +3656,10 @@ impl DataProxy {
             self.name = name.to_string();
         }
         if let Some(freeze) = data.get("freeze").and_then(|v| v.as_str()) {
-            let (x, y) = crate::renderer::alphabets::exp2xy(freeze);
-            self.freeze = (y, x);
+            // A malformed freeze ref in host JSON is ignored, not fatal.
+            if let Some((x, y)) = crate::renderer::alphabets::exp2xy(freeze) {
+                self.freeze = (y, x);
+            }
         }
         if let Some(styles) = data
             .get("styles")
@@ -4190,16 +4189,17 @@ pub fn fill_line(source: &[String], n: usize, axis_is_row: bool) -> Vec<String> 
 /// Format a formula result for display: drop the fractional part for integers,
 /// otherwise trim trailing zeros.
 /// Parse a range expression like `"B2:B3"` or `"B2"` into inclusive cell bounds
-/// `(r0, c0, r1, c1)`.
-fn parse_range_expr(expr: &str) -> (usize, usize, usize, usize) {
+/// `(r0, c0, r1, c1)`. `None` when either side isn't a usable reference (a
+/// garbage `namedRanges` value from host JSON degrades to #NAME?, not a panic).
+fn parse_range_expr(expr: &str) -> Option<(usize, usize, usize, usize)> {
     let expr = expr.trim();
     if let Some((a, b)) = expr.split_once(':') {
-        let (c0, r0) = exp2xy(a.trim());
-        let (c1, r1) = exp2xy(b.trim());
-        (r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1))
+        let (c0, r0) = exp2xy(a.trim())?;
+        let (c1, r1) = exp2xy(b.trim())?;
+        Some((r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1)))
     } else {
-        let (c, r) = exp2xy(expr);
-        (r, c, r, c)
+        let (c, r) = exp2xy(expr)?;
+        Some((r, c, r, c))
     }
 }
 
@@ -4244,15 +4244,15 @@ fn parse_a1_ref(s: &str) -> Option<(usize, usize, usize, usize)> {
             if !valid(a) || !valid(b) {
                 return None;
             }
-            let (c0, r0) = exp2xy(a.trim());
-            let (c1, r1) = exp2xy(b.trim());
+            let (c0, r0) = exp2xy(a.trim())?;
+            let (c1, r1) = exp2xy(b.trim())?;
             Some((r0.min(r1), c0.min(c1), r0.max(r1), c0.max(c1)))
         }
         None => {
             if !valid(s) {
                 return None;
             }
-            let (c, r) = exp2xy(s);
+            let (c, r) = exp2xy(s)?;
             Some((r, c, r, c))
         }
     }
@@ -6312,6 +6312,68 @@ mod tests {
                 "{label}: freeze_is_active mismatch after roundtrip"
             );
         }
+    }
+
+    // --- Malformed cell references must not panic ---
+    //
+    // `exp2xy` used to `.parse::<usize>().unwrap()` the row digits and
+    // subtract 1 unchecked, so `"A"` (no digits), `"A0"` (underflow), and
+    // 20-digit rows (usize overflow) all aborted the WASM module. Every one
+    // of these paths is reachable from host-supplied JSON or user-typed
+    // formulas; all must now degrade to an error value or a no-op.
+
+    #[test]
+    fn set_data_with_malformed_freeze_is_ignored() {
+        let mut d = DataProxy::new("t");
+        d.set_data(serde_json::json!({"freeze": "A"}));
+        assert_eq!(d.freeze, (0, 0));
+        d.set_data(serde_json::json!({"freeze": "A99999999999999999999"}));
+        assert_eq!(d.freeze, (0, 0));
+        d.set_data(serde_json::json!({"freeze": "A0"}));
+        assert_eq!(d.freeze, (0, 0));
+        // A well-formed freeze still applies.
+        d.set_data(serde_json::json!({"freeze": "B3"}));
+        assert_eq!(d.freeze, (2, 1));
+    }
+
+    #[test]
+    fn formula_with_row_overflow_ref_yields_ref_error() {
+        assert_eq!(eval("=A99999999999999999999 + 1", &[]), "#REF!");
+    }
+
+    #[test]
+    fn formula_with_row_zero_ref_yields_ref_error() {
+        assert_eq!(eval("=A0 + 1", &[]), "#REF!");
+    }
+
+    #[test]
+    fn formula_range_with_malformed_side_yields_ref_error() {
+        assert_eq!(eval("=SUM(A1:A99999999999999999999)", &[]), "#REF!");
+    }
+
+    #[test]
+    fn indirect_of_overflow_ref_yields_ref_error() {
+        assert_eq!(eval("=INDIRECT(\"A99999999999999999999\")", &[]), "#REF!");
+    }
+
+    #[test]
+    fn named_range_with_garbage_target_is_name_error() {
+        let mut d = DataProxy::new("t");
+        d.named_ranges
+            .insert("X".to_string(), "garbage".to_string());
+        d.set_cell_text(0, 0, "=X");
+        assert_eq!(d.cell_display_value(0, 0), "#NAME?");
+    }
+
+    #[test]
+    fn set_data_with_reversed_sel_range_normalizes() {
+        // Host JSON with "C3:A1" (valid in Excel, means A1:C3) used to load
+        // reversed, underflowing `CellRange::size()` to ~usize::MAX.
+        let mut d = DataProxy::new("t");
+        d.set_data(serde_json::json!({"sel": {"ri": 0, "ci": 0, "range": "C3:A1"}}));
+        let r = &d.selector.range;
+        assert_eq!((r.sri, r.sci, r.eri, r.eci), (0, 0, 2, 2));
+        assert_eq!(r.size(), (3, 3));
     }
 
     // --- Style interning must respect the border field ---

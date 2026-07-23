@@ -150,8 +150,10 @@ pub(crate) fn wire_sort_dialog(modal: web_sys::Element, renderer: &SharedRendere
                     .map(|s| s.value());
                 if let (Some(col), Some(order)) = (col, order) {
                     if !col.is_empty() && crate::formula::parser::looks_like_cell_ref(&col) {
-                        let (ci, _) = crate::renderer::alphabets::exp2xy(&col);
-                        sorts.push(Sort::new(ci, &order));
+                        // Shape-valid but usize-overflowing rows decode to None.
+                        if let Some((ci, _)) = crate::renderer::alphabets::exp2xy(&col) {
+                            sorts.push(Sort::new(ci, &order));
+                        }
                     }
                 }
             }

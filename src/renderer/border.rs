@@ -11,7 +11,10 @@ pub fn border_ranges(
 ) -> Vec<(Range, Rect, BorderType)> {
     let border_ref = border.reference.clone();
     let border_type = border.border_type;
-    let border_range = Range::with(&border_ref);
+    // A malformed border reference (host JSON) draws nothing.
+    let Some(border_range) = Range::with(&border_ref) else {
+        return Vec::new();
+    };
     let intersect_merges = area_merges
         .iter()
         .filter(|r| r.intersects(&border_range))

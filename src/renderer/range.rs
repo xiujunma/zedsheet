@@ -29,11 +29,11 @@ impl Range {
     }
 
     fn get_rows(&self) -> usize {
-        self.end_row - self.start_row
+        self.end_row.saturating_sub(self.start_row)
     }
 
     fn get_cols(&self) -> usize {
-        self.end_col - self.start_col
+        self.end_col.saturating_sub(self.start_col)
     }
 
     fn get_multiple(&self) -> bool {
@@ -269,14 +269,25 @@ impl Range {
         }
     }
 
-    pub fn with(reference: &str) -> Self {
+    /// Parse `"A1"` / `"A1:B3"` into a Range. `None` for anything that isn't
+    /// a usable reference — border refs and merges come from host JSON, and
+    /// a bad one must skip drawing, not abort the WASM module.
+    pub fn with(reference: &str) -> Option<Self> {
         let refs = reference.split(":").collect::<Vec<&str>>();
-        let (col, row) = exp2xy(refs.first().unwrap());
+        let (col, row) = exp2xy(refs.first()?)?;
         if refs.len() == 1 {
-            return Range::new(row, col, row, col);
+            return Some(Range::new(row, col, row, col));
         }
-        let (col1, row1) = exp2xy(refs.get(1).unwrap());
-        Range::new(row, col, row1, col1)
+        let (col1, row1) = exp2xy(refs.get(1)?)?;
+        // Normalize like Excel ("C3:A1" ≡ "A1:C3") and like
+        // `CellRange::from_str` — a reversed range underflows
+        // `get_rows`/`get_cols` downstream.
+        Some(Range::new(
+            row.min(row1),
+            col.min(col1),
+            row.max(row1),
+            col.max(col1),
+        ))
     }
 }
 
@@ -292,7 +303,9 @@ impl PartialEq for Range {
 pub fn each_range(refs: Vec<&str>, mut cb: impl FnMut(Range)) {
     if !refs.is_empty() {
         for r in refs {
-            cb(Range::with(r));
+            if let Some(range) = Range::with(r) {
+                cb(range);
+            }
         }
     }
 }
@@ -300,11 +313,50 @@ pub fn each_range(refs: Vec<&str>, mut cb: impl FnMut(Range)) {
 pub fn find_ranges(refs: Vec<&str>, filter: impl Fn(Range) -> bool) -> Option<Range> {
     if !refs.is_empty() {
         for r in refs {
-            let range = Range::with(r);
+            let Some(range) = Range::with(r) else {
+                continue;
+            };
             if filter(range) {
                 return Some(range);
             }
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_parses_single_cell_and_range() {
+        let r = Range::with("B2").unwrap();
+        assert_eq!(
+            (r.start_row, r.start_col, r.end_row, r.end_col),
+            (1, 1, 1, 1)
+        );
+        let r = Range::with("A1:C3").unwrap();
+        assert_eq!(
+            (r.start_row, r.start_col, r.end_row, r.end_col),
+            (0, 0, 2, 2)
+        );
+    }
+
+    #[test]
+    fn with_rejects_malformed_refs() {
+        assert!(Range::with("").is_none());
+        assert!(Range::with("A").is_none());
+        assert!(Range::with("A1:").is_none());
+        assert!(Range::with("garbage").is_none());
+        assert!(Range::with("A99999999999999999999").is_none());
+    }
+
+    #[test]
+    fn with_normalizes_reversed_ranges() {
+        let r = Range::with("C3:A1").unwrap();
+        assert_eq!(
+            (r.start_row, r.start_col, r.end_row, r.end_col),
+            (0, 0, 2, 2)
+        );
+    }
 }

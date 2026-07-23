@@ -140,24 +140,37 @@ impl CellRange {
         // `data_proxy` / `alphabets`). The previous local `parse_cell_ref`
         // returned 1-indexed columns which made `from_str("A1")` produce
         // `(1, 0)` instead of `(0, 0)` and broke every `includes` call.
-        // Validate each part is a real cell ref BEFORE calling exp2xy, which
-        // `.unwrap()`s on its `parse::<usize>()` and would otherwise panic (and
-        // abort the WASM module) on malformed input like `"A"`, `":"` or `""`.
+        // Validate each part is a real cell ref BEFORE calling exp2xy so
+        // malformed input like `"A"`, `":"` or `""` is a clean `Err`
+        // (exp2xy additionally returns None for row-0/overflow inputs
+        // that pass shape validation).
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() == 2 {
             let (a, b) = (parts[0].trim(), parts[1].trim());
             if !looks_like_cell_ref(a) || !looks_like_cell_ref(b) {
                 return Err("z".parse::<u8>().unwrap_err());
             }
-            let (sci, sri) = exp2xy(a);
-            let (eci, eri) = exp2xy(b);
-            Ok(CellRange::new(sri, sci, eri, eci))
+            // Shape validation lets 20-digit rows through; exp2xy rejects
+            // the usize overflow.
+            let (Some((sci, sri)), Some((eci, eri))) = (exp2xy(a), exp2xy(b)) else {
+                return Err("z".parse::<u8>().unwrap_err());
+            };
+            // Normalize: "C3:A1" means A1:C3, as in Excel. Loading it
+            // reversed underflows `size()` downstream (usize wrap).
+            Ok(CellRange::new(
+                sri.min(eri),
+                sci.min(eci),
+                sri.max(eri),
+                sci.max(eci),
+            ))
         } else if parts.len() == 1 {
             let a = parts[0].trim();
             if !looks_like_cell_ref(a) {
                 return Err("z".parse::<u8>().unwrap_err());
             }
-            let (ci, ri) = exp2xy(a);
+            let Some((ci, ri)) = exp2xy(a) else {
+                return Err("z".parse::<u8>().unwrap_err());
+            };
             Ok(CellRange::new(ri, ci, ri, ci))
         } else {
             Err("z".parse::<u8>().unwrap_err())
@@ -186,5 +199,27 @@ mod tests {
         assert!(CellRange::from_str(":").is_err(), "empty parts");
         assert!(CellRange::from_str("A1:").is_err(), "empty end");
         assert!(CellRange::from_str(":B2").is_err(), "empty start");
+    }
+
+    #[test]
+    fn from_str_rejects_row_overflow_and_zero() {
+        // Passes `looks_like_cell_ref` shape validation (letters then digits)
+        // but overflows usize / underflows row 0 — previously a panic.
+        assert!(CellRange::from_str("A99999999999999999999").is_err());
+        assert!(CellRange::from_str("A1:B99999999999999999999").is_err());
+        assert!(CellRange::from_str("A0").is_err());
+    }
+
+    #[test]
+    fn from_str_normalizes_reversed_ranges() {
+        // Excel treats "C3:A1" as "A1:C3". A reversed range used to load
+        // as-is, and `size()` then underflowed (usize wrap) downstream.
+        let r = CellRange::from_str("C3:A1").unwrap();
+        assert_eq!((r.sri, r.sci, r.eri, r.eci), (0, 0, 2, 2));
+        let r = CellRange::from_str("B2:A2").unwrap();
+        assert_eq!((r.sri, r.sci, r.eri, r.eci), (1, 0, 1, 1));
+        // Already-ordered ranges are untouched.
+        let r = CellRange::from_str("A1:C3").unwrap();
+        assert_eq!((r.sri, r.sci, r.eri, r.eci), (0, 0, 2, 2));
     }
 }

@@ -124,7 +124,8 @@ pub(crate) fn parse_ref(s: &str) -> Option<(usize, usize)> {
         }
     }
     if has_letter && has_digit {
-        Some(exp2xy(s))
+        // Shape is valid, but a 20-digit row still overflows usize.
+        exp2xy(s)
     } else {
         None
     }
