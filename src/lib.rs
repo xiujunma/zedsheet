@@ -62,7 +62,7 @@ pub fn start() {
         .is_some()
     {
         // Demo: restore the user's saved edits if present, else seed the sample.
-        finish_mount("#zedsheet", Options::default(), demo_data(), None);
+        let _ = finish_mount("#zedsheet", Options::default(), demo_data(), None);
     }
 }
 
@@ -70,20 +70,23 @@ pub fn start() {
 /// (editable) mode. Optionally seed it with x-spreadsheet-format JSON;
 /// pass `undefined`/empty for a blank sheet.
 ///
+/// Throws a catchable JS error when no element matches `selector`
+/// (previously this aborted the whole WASM instance).
+///
 /// ```js
 /// import init, { mount } from "zedsheet";
 /// await init();
 /// mount("#my-grid", JSON.stringify(data)); // data optional
 /// ```
 #[wasm_bindgen]
-pub fn mount(selector: &str, data_json: Option<String>) {
+pub fn mount(selector: &str, data_json: Option<String>) -> Result<(), JsValue> {
     let explicit = data_json.filter(|j| !j.trim().is_empty());
     finish_mount(
         selector,
         Options::default(),
         DataProxy::new("sheet1"),
         explicit,
-    );
+    )
 }
 
 /// Mount a spreadsheet into `selector` with host-supplied options (Phase 7).
@@ -96,6 +99,8 @@ pub fn mount(selector: &str, data_json: Option<String>) {
 /// Pass `data_json` as `null` / `undefined` / empty for a blank sheet; the
 /// same restore-from-`localStorage` path as `mount` runs after seeding.
 ///
+/// Throws a catchable JS error when no element matches `selector`.
+///
 /// ```js
 /// mount_with_options("#my-grid",
 ///     { mode: "view-only", show_toolbar: true, show_bottom_bar: true },
@@ -103,10 +108,14 @@ pub fn mount(selector: &str, data_json: Option<String>) {
 /// ```
 #[wasm_bindgen]
 #[allow(non_snake_case)]
-pub fn mount_with_options(selector: &str, options_js: JsValue, data_json: Option<String>) {
+pub fn mount_with_options(
+    selector: &str,
+    options_js: JsValue,
+    data_json: Option<String>,
+) -> Result<(), JsValue> {
     let options = parse_options(&options_js);
     let explicit = data_json.filter(|j| !j.trim().is_empty());
-    finish_mount(selector, options, DataProxy::new("sheet1"), explicit);
+    finish_mount(selector, options, DataProxy::new("sheet1"), explicit)
 }
 
 /// Parse the host's `options_js` object into a typed `Options`. Unknown
@@ -152,23 +161,39 @@ fn parse_options(options_js: &JsValue) -> Options {
 /// `explicit` JSON, or failing that a previous `localStorage` snapshot — all
 /// before arming persistence, so the initial render can't overwrite saved data
 /// before it has been read back (issue #20).
-fn finish_mount(selector: &str, options: Options, initial: DataProxy, explicit: Option<String>) {
+///
+/// Fails with a JS error when `selector` matches nothing, instead of
+/// panicking inside `ZedSheet::new` and aborting the WASM instance.
+fn finish_mount(
+    selector: &str,
+    options: Options,
+    initial: DataProxy,
+    explicit: Option<String>,
+) -> Result<(), JsValue> {
+    if document().query_selector(selector).ok().flatten().is_none() {
+        return Err(JsValue::from_str(&format!(
+            "zedsheet: no element matches selector \"{selector}\""
+        )));
+    }
     // Capture any restore payload BEFORE building: the initial render's sync
     // runs while persistence is still disarmed.
     let restore = explicit.or_else(|| persist::load_saved(selector));
     mount_into(selector, options, initial);
     if let Some(json) = &restore {
-        MOUNTS.with(|m| {
-            if let Some(h) = m.borrow().get(selector) {
-                (h.load_data)(json);
-            }
-        });
+        // Clone the closure out before invoking (host re-entrancy: the
+        // load_data → on_change chain may call back into this API).
+        let load = MOUNTS.with(|m| m.borrow().get(selector).map(|h| h.load_data.clone()));
+        if let Some(load) = load {
+            load(json);
+        }
     }
     // Baseline = whatever is now displayed; arm so future edits persist.
-    if let Some(current) = MOUNTS.with(|m| m.borrow().get(selector).map(|h| (h.get_data)())) {
-        persist::seed_baseline(selector, &current);
+    let current = MOUNTS.with(|m| m.borrow().get(selector).map(|h| h.get_data.clone()));
+    if let Some(get) = current {
+        persist::seed_baseline(selector, &get());
     }
     persist::arm(selector);
+    Ok(())
 }
 
 fn mount_into(selector: &str, options: Options, data: DataProxy) {
@@ -238,7 +263,9 @@ pub fn isSheetReadOnly(name: &str) -> bool {
 /// ```
 #[wasm_bindgen]
 pub fn get_data(selector: &str) -> Option<String> {
-    MOUNTS.with(|m| m.borrow().get(selector).map(|h| (h.get_data)()))
+    // Clone the closure out before invoking (host re-entrancy safety).
+    let get = MOUNTS.with(|m| m.borrow().get(selector).map(|h| h.get_data.clone()));
+    get.map(|g| g())
 }
 
 /// Replace the mounted workbook's contents from `json` — either a single sheet
@@ -246,22 +273,30 @@ pub fn get_data(selector: &str) -> Option<String> {
 /// No-op for an unmounted selector (issue #20).
 #[wasm_bindgen]
 pub fn load_data(selector: &str, json: &str) {
-    MOUNTS.with(|m| {
-        if let Some(h) = m.borrow().get(selector) {
-            (h.load_data)(json);
-            // Phase 7: re-apply view-only read-only after a workbook swap.
-            // The deserialised sheets all default to editable, so without
-            // this every `load_data` would silently flip the workbook back
-            // to editable regardless of how it was mounted.
-            if h.mode == Mode::ViewOnly {
-                if let Some(sheets) = &h.sheets {
-                    for d in sheets.borrow_mut().iter_mut() {
-                        d.set_read_only(true);
-                    }
-                }
+    // Clone the handles out and release the map borrow BEFORE invoking:
+    // load_data → sync → on_change runs host JS, which may re-enter this
+    // API (e.g. mount() from a React effect). Holding the borrow across
+    // the call turned that into a BorrowMutError abort.
+    let entry = MOUNTS.with(|m| {
+        m.borrow()
+            .get(selector)
+            .map(|h| (h.load_data.clone(), h.mode, h.sheets.clone()))
+    });
+    let Some((load, mode, sheets)) = entry else {
+        return;
+    };
+    load(json);
+    // Phase 7: re-apply view-only read-only after a workbook swap.
+    // The deserialised sheets all default to editable, so without
+    // this every `load_data` would silently flip the workbook back
+    // to editable regardless of how it was mounted.
+    if mode == Mode::ViewOnly {
+        if let Some(sheets) = sheets {
+            for d in sheets.borrow_mut().iter_mut() {
+                d.set_read_only(true);
             }
         }
-    });
+    }
 }
 
 /// Register a callback invoked with the workbook JSON whenever the data changes
@@ -514,6 +549,7 @@ fn demo_data() -> DataProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::rc::Rc;
 
     /// `mount_with_options` is `#[wasm_bindgen]` so it can't be
     /// exercised under `cargo test` directly, and `JsValue` panics
@@ -533,6 +569,43 @@ mod tests {
         assert!(options.show_toolbar);
         assert!(options.show_bottom_bar);
         assert!(options.show_context_menu);
+    }
+
+    /// Build a MountHandle with dummy closures (host-testable — every field
+    /// is an Rc closure or plain data, no DOM needed).
+    fn dummy_handle(load_data: LoadDataFn) -> MountHandle {
+        MountHandle {
+            get_data: Rc::new(|| "{}".to_string()),
+            load_data,
+            active_sheet: Rc::new(|| DataProxy::new("t")),
+            sheets: None,
+            mode: Mode::Edit,
+        }
+    }
+
+    #[test]
+    fn load_data_survives_host_reentrant_mounts_mutation() {
+        // The host's on_change fires synchronously inside load_data, and a
+        // host may call back into this API from it (e.g. mount() from a
+        // React effect) — which needs MOUNTS.borrow_mut(). load_data used
+        // to hold MOUNTS.borrow() across the closure invocation, so the
+        // re-entrant borrow_mut panicked (BorrowMutError → WASM abort).
+        let reentrant: LoadDataFn = Rc::new(|_| {
+            MOUNTS.with(|m| {
+                m.borrow_mut()
+                    .insert("#reentrant".to_string(), dummy_handle(Rc::new(|_| {})));
+            });
+        });
+        MOUNTS.with(|m| {
+            m.borrow_mut()
+                .insert("#t".to_string(), dummy_handle(reentrant))
+        });
+        load_data("#t", "{}"); // must not panic
+        MOUNTS.with(|m| {
+            let mut m = m.borrow_mut();
+            m.remove("#t");
+            m.remove("#reentrant");
+        });
     }
 
     #[test]
