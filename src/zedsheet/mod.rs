@@ -773,6 +773,23 @@ impl ZedSheet {
         if let Some(canvas_node) = canvas_el.el.as_ref() {
             responsive::wasm::wire_long_press(canvas_node);
         }
+        // Phase 8: double-tap → synthetic dblclick opens the cell editor.
+        // Touch has no dblclick; synthesising one reuses the desktop edit
+        // path unchanged. Skipped in view-only, where the editor is
+        // suppressed anyway and the tap-reveal popover owns the gesture.
+        #[cfg(target_arch = "wasm32")]
+        if !matches!(options.mode, crate::component::options::Mode::ViewOnly) {
+            if let Some(canvas_node) = canvas_el.el.as_ref() {
+                responsive::wasm::wire_double_tap(canvas_node);
+            }
+        }
+        // Phase 8: keep the edited cell above the virtual keyboard. The
+        // keyboard shrinks visualViewport without reflowing the layout
+        // viewport, so the grid has to scroll itself.
+        #[cfg(target_arch = "wasm32")]
+        if !matches!(options.mode, crate::component::options::Mode::ViewOnly) {
+            responsive::wasm::wire_keyboard_viewport(&textarea, renderer.clone(), editing.clone());
+        }
         // Phase 7: pinch-zoom (gesturechange on iOS) + desktop Ctrl-wheel
         // both route to `renderer.set_zoom` so mobile and desktop share a
         // single scale model. Wheel handler clamps to [0.1, 4.0]; the

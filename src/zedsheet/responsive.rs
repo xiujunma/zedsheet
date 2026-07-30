@@ -31,8 +31,69 @@ pub fn breakpoint_class(width: u32) -> Breakpoint {
 /// at < 768 px (saving vertical space on phones + tablets), and
 /// always hidden in view-only mode (the cell editor is suppressed,
 /// so the bar would be dead UI).
-pub fn should_show_formula_bar(width: u32, view_only: bool) -> bool {
-    !view_only && width >= 768
+///
+/// Phase 8: on phones the bar doubles as the text-input surface,
+/// so an in-flight edit un-hides it below the breakpoint. View-only
+/// still wins — the editor can't open there, so the bar stays dead UI.
+pub fn should_show_formula_bar(width: u32, view_only: bool, editing: bool) -> bool {
+    !view_only && (width >= 768 || editing)
+}
+
+/// How long after the first tap a second tap still counts (ms).
+pub const DOUBLE_TAP_MS: f64 = 300.0;
+/// How far the second tap may land from the first (CSS px).
+/// Generous enough for a fingertip, tight enough that two taps on
+/// neighbouring cells stay separate.
+pub const DOUBLE_TAP_SLOP_PX: f64 = 24.0;
+
+/// True when a tap at `(x, y)` at `now_ms` completes a double-tap
+/// against `prev` — the previous tap's `(ms, x, y)`, or `None` when
+/// there wasn't one. Both thresholds are inclusive so a borderline
+/// tap doesn't feel random.
+///
+/// Phase 8: touch has no `dblclick`, so the caller synthesises one
+/// when this returns true and the existing desktop edit path runs
+/// unchanged.
+pub fn is_double_tap(prev: Option<(f64, f64, f64)>, now_ms: f64, x: f64, y: f64) -> bool {
+    let Some((prev_ms, prev_x, prev_y)) = prev else {
+        return false;
+    };
+    now_ms - prev_ms <= DOUBLE_TAP_MS
+        && (x - prev_x).abs() <= DOUBLE_TAP_SLOP_PX
+        && (y - prev_y).abs() <= DOUBLE_TAP_SLOP_PX
+}
+
+/// How far to scroll the grid so the cell spanning `cell_top ..
+/// cell_bottom` sits inside the band still visible above the virtual
+/// keyboard (`visible_top .. visible_bottom`). All values are CSS px
+/// in the same coordinate space. A positive result scrolls down
+/// (content moves up); negative scrolls up; `0.0` means leave it be.
+///
+/// Phase 8: the virtual keyboard shrinks `window.visualViewport`, so
+/// without this the edited cell can end up underneath it.
+pub fn keyboard_scroll_delta(
+    cell_top: f64,
+    cell_bottom: f64,
+    visible_top: f64,
+    visible_bottom: f64,
+) -> f64 {
+    // A zero-height or inverted band means the keyboard covers
+    // everything — any scroll would just be noise.
+    if visible_bottom <= visible_top {
+        return 0.0;
+    }
+    if cell_bottom > visible_bottom {
+        let overflow = cell_bottom - visible_bottom;
+        // Never scroll so far that the cell's top leaves the band. A
+        // cell taller than the band can't fit, so aligning its top is
+        // the best available outcome (and 0 when it already spans).
+        let headroom = (cell_top - visible_top).max(0.0);
+        overflow.min(headroom)
+    } else if cell_top < visible_top {
+        cell_top - visible_top
+    } else {
+        0.0
+    }
 }
 
 /// The toolbar buttons visible at the given width. Desktop shows
@@ -129,6 +190,26 @@ pub fn view_only_blocks(action: &str) -> bool {
     )
 }
 
+/// Mirror the in-cell editor's open/closed state onto the mount root as
+/// `data-editing` (Phase 8), so the phone stylesheet can reveal the
+/// formula bar only while an edit is in flight — see the companion rule
+/// in `src/index.css`'s `@media (max-width: 767px)` block.
+///
+/// Walks up from the editor textarea with `closest()` rather than
+/// threading the root element through every editing call site. Lives
+/// outside the `wasm` module because `formula_bar.rs` compiles on the
+/// host target too; the DOM calls are simply never made there.
+pub fn set_editing_attr(textarea: &web_sys::HtmlTextAreaElement, editing: bool) {
+    let Ok(Some(root)) = textarea.closest(&format!(".{}", crate::config::CSS_PREFIX)) else {
+        return;
+    };
+    if editing {
+        let _ = root.set_attribute("data-editing", "true");
+    } else {
+        let _ = root.remove_attribute("data-editing");
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub mod wasm {
     use std::cell::{Cell, RefCell};
@@ -179,6 +260,118 @@ pub mod wasm {
         {
             let _ = canvas_el.dispatch_event(&event);
         }
+    }
+
+    fn dispatch_double_click(canvas_el: &web_sys::Element, client_x: f64, client_y: f64) {
+        // Mirrors `dispatch_context_menu`: browsers derive offsetX/offsetY
+        // from these viewport coordinates, so the existing canvas hit-test
+        // in the `dblclick` handler keeps working unchanged.
+        let init = web_sys::MouseEventInit::new();
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        init.set_client_x(client_x as i32);
+        init.set_client_y(client_y as i32);
+        init.set_button(0);
+        init.set_detail(2);
+        if let Ok(event) = web_sys::MouseEvent::new_with_mouse_event_init_dict("dblclick", &init) {
+            let _ = canvas_el.dispatch_event(&event);
+        }
+    }
+
+    /// Wire double-tap → synthetic `dblclick` on `canvas_el` (Phase 8).
+    ///
+    /// Touch has no `dblclick`, so two quick taps in the same spot
+    /// synthesise one and the existing desktop edit path
+    /// (`events.rs`, "dblclick: … otherwise edit cell") runs unchanged.
+    ///
+    /// Coexists with the Phase 7 gestures by construction: `wire_long_press`
+    /// needs the pointer held past 500 ms without lifting, and
+    /// `wire_touch_pan` needs 10 px of travel. A double-tap lifts twice,
+    /// quickly, without moving — so it satisfies neither.
+    pub fn wire_double_tap(canvas_el: &web_sys::Element) {
+        let last_tap: Rc<RefCell<Option<(f64, f64, f64)>>> = Rc::new(RefCell::new(None));
+        let canvas_for_up = canvas_el.clone();
+        let up_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            // Touch only — a mouse already delivers a real `dblclick`,
+            // and synthesising a second one would double-fire the editor.
+            if event.pointer_type() != "touch" {
+                return;
+            }
+            let x = event.client_x() as f64;
+            let y = event.client_y() as f64;
+            let now = event.time_stamp();
+            let prev = *last_tap.borrow();
+            if super::is_double_tap(prev, now, x, y) {
+                // Consume the pair so a third tap starts a fresh one
+                // rather than chaining into another dblclick.
+                *last_tap.borrow_mut() = None;
+                dispatch_double_click(&canvas_for_up, x, y);
+            } else {
+                *last_tap.borrow_mut() = Some((now, x, y));
+            }
+        });
+        let _ =
+            canvas_el.add_event_listener_with_callback("pointerup", up_cb.as_ref().unchecked_ref());
+        up_cb.forget();
+    }
+
+    /// Keep the edited cell above the virtual keyboard (Phase 8).
+    ///
+    /// The keyboard shrinks `window.visualViewport` without reflowing the
+    /// layout viewport, so the grid doesn't move and the edited cell can
+    /// end up underneath it. On each `resize` the editor overlay is
+    /// measured against the band that's still visible; if it's occluded
+    /// the grid scrolls by whole rows to bring it back, and the overlay is
+    /// re-placed (it's positioned once at `start_edit`, so a scroll would
+    /// otherwise leave it floating over the wrong cell).
+    ///
+    /// Feature-detected: without `visualViewport` editing still works, the
+    /// cell just may sit under the keyboard.
+    pub fn wire_keyboard_viewport(
+        textarea: &web_sys::HtmlTextAreaElement,
+        renderer: SharedRenderer,
+        editing: crate::zedsheet::EditingCell,
+    ) {
+        let Some(viewport) = web_sys::window().and_then(|w| w.visual_viewport()) else {
+            return;
+        };
+        let textarea = textarea.clone();
+        let viewport_for_cb = viewport.clone();
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            let Some((ri, ci)) = *editing.borrow() else {
+                return; // not editing — the keyboard isn't ours to chase
+            };
+            let rect = textarea.get_bounding_client_rect();
+            let visible_top = viewport_for_cb.offset_top();
+            let visible_bottom = visible_top + viewport_for_cb.height();
+            let delta = super::keyboard_scroll_delta(
+                rect.top(),
+                rect.bottom(),
+                visible_top,
+                visible_bottom,
+            );
+            if delta == 0.0 {
+                return;
+            }
+            {
+                let mut r = renderer.borrow_mut();
+                // `scroll_by` moves whole rows, so round away from zero:
+                // landing a fraction short would leave the cell clipped.
+                let row_h = r.row_height_at(r.scroll_rows).max(1.0);
+                let steps = if delta > 0.0 {
+                    (delta / row_h).ceil() as i32
+                } else {
+                    (delta / row_h).floor() as i32
+                };
+                if steps == 0 {
+                    return;
+                }
+                r.scroll_by(steps, 0);
+            }
+            crate::zedsheet::position_editor(&renderer, &textarea, ri, ci);
+        });
+        let _ = viewport.add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
+        cb.forget();
     }
 
     /// Wire a long-press → contextmenu gesture on `canvas_el`.
@@ -690,13 +883,117 @@ mod tests {
 
     #[test]
     fn formula_bar_hidden_on_phones_and_in_view_only() {
-        assert!(should_show_formula_bar(1440, false));
-        assert!(should_show_formula_bar(768, false));
-        assert!(!should_show_formula_bar(767, false));
-        assert!(!should_show_formula_bar(360, false));
+        assert!(should_show_formula_bar(1440, false, false));
+        assert!(should_show_formula_bar(768, false, false));
+        assert!(!should_show_formula_bar(767, false, false));
+        assert!(!should_show_formula_bar(360, false, false));
         // View-only always hides the bar, even on desktop.
-        assert!(!should_show_formula_bar(1440, true));
-        assert!(!should_show_formula_bar(768, true));
+        assert!(!should_show_formula_bar(1440, true, false));
+        assert!(!should_show_formula_bar(768, true, false));
+    }
+
+    #[test]
+    fn formula_bar_reveals_on_phones_while_editing() {
+        // Phase 8: the bar is the phone's text-input surface, so an
+        // in-flight edit un-hides it below the 768 px breakpoint.
+        assert!(should_show_formula_bar(360, false, true));
+        assert!(should_show_formula_bar(767, false, true));
+        // Editing never overrides view-only — the editor can't open there.
+        assert!(!should_show_formula_bar(360, true, true));
+        assert!(!should_show_formula_bar(1440, true, true));
+    }
+
+    #[test]
+    fn double_tap_requires_a_recent_nearby_first_tap() {
+        // No first tap recorded — a lone tap is never a double-tap.
+        assert!(!is_double_tap(None, 1_000.0, 10.0, 10.0));
+        // Second tap inside the time window and the slop radius.
+        assert!(is_double_tap(
+            Some((900.0, 10.0, 10.0)),
+            1_000.0,
+            12.0,
+            14.0
+        ));
+        // Same spot but too slow.
+        assert!(!is_double_tap(
+            Some((600.0, 10.0, 10.0)),
+            1_000.0,
+            10.0,
+            10.0
+        ));
+        // Fast enough but too far away — that's two separate taps.
+        assert!(!is_double_tap(
+            Some((900.0, 10.0, 10.0)),
+            1_000.0,
+            60.0,
+            10.0
+        ));
+    }
+
+    #[test]
+    fn double_tap_thresholds_are_inclusive_at_the_boundary() {
+        // Exactly at the window / slop limits still counts, so a
+        // borderline tap doesn't feel random to the user.
+        assert!(is_double_tap(
+            Some((700.0, 10.0, 10.0)),
+            1_000.0,
+            10.0,
+            10.0
+        ));
+        assert!(is_double_tap(
+            Some((900.0, 10.0, 10.0)),
+            1_000.0,
+            34.0,
+            10.0
+        ));
+        // One millisecond / one pixel past the limit does not.
+        assert!(!is_double_tap(
+            Some((699.0, 10.0, 10.0)),
+            1_000.0,
+            10.0,
+            10.0
+        ));
+        assert!(!is_double_tap(
+            Some((900.0, 10.0, 10.0)),
+            1_000.0,
+            34.5,
+            10.0
+        ));
+    }
+
+    #[test]
+    fn keyboard_scroll_delta_pushes_an_occluded_cell_into_view() {
+        // Cell sits 40 px below the keyboard's top edge → scroll down 40.
+        assert_eq!(keyboard_scroll_delta(300.0, 340.0, 0.0, 300.0), 40.0);
+        // Already fully visible → no movement.
+        assert_eq!(keyboard_scroll_delta(100.0, 140.0, 0.0, 300.0), 0.0);
+        // Flush against the bottom edge → still no movement.
+        assert_eq!(keyboard_scroll_delta(260.0, 300.0, 0.0, 300.0), 0.0);
+    }
+
+    #[test]
+    fn keyboard_scroll_delta_pulls_a_cell_above_the_band_back_down() {
+        // Cell is 20 px above the visible band → negative delta scrolls up.
+        assert_eq!(keyboard_scroll_delta(30.0, 70.0, 50.0, 300.0), -20.0);
+    }
+
+    #[test]
+    fn keyboard_scroll_delta_never_scrolls_the_cell_top_out_of_view() {
+        // A cell taller than the remaining band can't fit; aligning its
+        // top is the best available outcome, so the delta is clamped to
+        // the top gap rather than the full bottom overflow.
+        assert_eq!(keyboard_scroll_delta(10.0, 500.0, 0.0, 300.0), 10.0);
+        // Cell spans the entire band — leave it alone rather than
+        // jittering it around.
+        assert_eq!(keyboard_scroll_delta(-20.0, 500.0, 0.0, 300.0), 0.0);
+    }
+
+    #[test]
+    fn keyboard_scroll_delta_is_inert_when_the_band_is_degenerate() {
+        // A zero-height or inverted band means the keyboard covers
+        // everything; scrolling would be noise.
+        assert_eq!(keyboard_scroll_delta(10.0, 50.0, 300.0, 300.0), 0.0);
+        assert_eq!(keyboard_scroll_delta(10.0, 50.0, 300.0, 200.0), 0.0);
     }
 
     #[test]
@@ -720,6 +1017,30 @@ mod tests {
     #[test]
     fn long_press_wiring_has_required_signature() {
         let _: fn(&web_sys::Element) = super::wasm::wire_long_press;
+    }
+
+    // The Phase 8 DOM wiring can't run on the host target (no document),
+    // so — as with the long-press pin above — these guard the entry
+    // points' shapes and leave behaviour to manual browser QA.
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn double_tap_wiring_has_required_signature() {
+        let _: fn(&web_sys::Element) = super::wasm::wire_double_tap;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn keyboard_viewport_wiring_has_required_signature() {
+        let _: fn(
+            &web_sys::HtmlTextAreaElement,
+            crate::zedsheet::SharedRenderer,
+            crate::zedsheet::EditingCell,
+        ) = super::wasm::wire_keyboard_viewport;
+    }
+
+    #[test]
+    fn editing_attr_helper_has_required_signature() {
+        let _: fn(&web_sys::HtmlTextAreaElement, bool) = super::set_editing_attr;
     }
 
     #[test]

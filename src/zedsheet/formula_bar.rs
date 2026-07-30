@@ -555,16 +555,38 @@ pub(crate) fn start_edit(
     if let Some(e) = editor_error {
         let _ = e.style().set_property("display", "none");
     }
-    let (rect, text, zoom) = {
+    let text = {
         let mut r = renderer.borrow_mut();
         r.select_cell(ri, ci);
         r.render();
-        // Size the editor to the whole merged region, not just the anchor cell.
-        (
-            r.merged_screen_rect(ri, ci),
-            r.cell_text_at(ri, ci),
-            r.zoom(),
-        )
+        r.cell_text_at(ri, ci)
+    };
+    position_editor(renderer, textarea, ri, ci);
+    let _ = textarea.style().set_property("display", "block");
+    textarea.set_value(&text);
+    *editing.borrow_mut() = Some((ri, ci));
+    crate::zedsheet::responsive::set_editing_attr(textarea, true);
+    let _ = textarea.focus();
+    textarea.select();
+}
+
+/// Place + size the editor overlay over `(ri, ci)`'s screen rect.
+///
+/// Split out of `start_edit` (Phase 8) because the overlay is positioned
+/// exactly once when the edit opens: anything that scrolls the grid
+/// underneath it leaves it floating over the wrong cell. The
+/// virtual-keyboard handler scrolls the edited cell back into view and
+/// then calls this to keep the editor glued to its cell.
+pub(crate) fn position_editor(
+    renderer: &SharedRenderer,
+    textarea: &HtmlTextAreaElement,
+    ri: usize,
+    ci: usize,
+) {
+    // Size the editor to the whole merged region, not just the anchor cell.
+    let (rect, zoom) = {
+        let r = renderer.borrow();
+        (r.merged_screen_rect(ri, ci), r.zoom())
     };
     let style = textarea.style();
     let _ = style.set_property("left", &format!("{}px", rect.x));
@@ -574,11 +596,6 @@ pub(crate) fn start_edit(
     // The cell rect is zoomed (issue #32); scale the editor font to match the
     // rendered text (base 13px set in init_editor_style).
     let _ = style.set_property("font-size", &format!("{}px", 13.0 * zoom));
-    let _ = style.set_property("display", "block");
-    textarea.set_value(&text);
-    *editing.borrow_mut() = Some((ri, ci));
-    let _ = textarea.focus();
-    textarea.select();
 }
 
 /// Commit the editor's contents to the data model. Returns `Err(msg)` if
@@ -594,6 +611,7 @@ pub(crate) fn commit_edit(
     let cell = editing.borrow_mut().take();
     let Some((ri, ci)) = cell else {
         let _ = textarea.style().set_property("display", "none");
+        crate::zedsheet::responsive::set_editing_attr(textarea, false);
         return Ok(());
     };
     let value = textarea.value();
@@ -621,6 +639,10 @@ pub(crate) fn commit_edit(
         if let Some(e) = editor_error {
             let _ = e.style().set_property("display", "none");
         }
+        // Phase 8: the edit is over, so let the phone stylesheet
+        // re-hide the formula bar. The error branch above deliberately
+        // leaves the flag set — the editor stays open.
+        crate::zedsheet::responsive::set_editing_attr(textarea, false);
     }
     result
 }
@@ -659,4 +681,5 @@ pub(crate) fn cancel_edit(
     if let Some(e) = editor_error {
         let _ = e.style().set_property("display", "none");
     }
+    crate::zedsheet::responsive::set_editing_attr(textarea, false);
 }

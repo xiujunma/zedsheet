@@ -1066,6 +1066,12 @@ form fieldset select {
     overflow-y: hidden;
   }
   .zedsheet-formula-bar { display: none; }
+  /* Phase 8 (mobile editing): the formula bar doubles as the phone's
+   * text-input surface, so an in-flight edit un-hides it. `data-editing`
+   * is mirrored from the editor's open/closed state by
+   * `responsive::set_editing_attr`. View-only still wins — its rule
+   * below is `!important` and the editor can't open there anyway. */
+  .zedsheet[data-editing="true"] .zedsheet-formula-bar { display: block; }
   .zedsheet-row-header,
   .zedsheet-col-header { width: 32px; height: 32px; }
   .zedsheet-table { touch-action: pan-x pan-y pinch-zoom; }

@@ -61,5 +61,6 @@ features = [
   "HtmlInputElement",
   "HtmlIFrameElement",
   "HtmlSelectElement",
-  "Storage"
+  "Storage",
+  "VisualViewport"
 ]
