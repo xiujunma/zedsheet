@@ -4100,14 +4100,26 @@ fn restore_placeholders(text: &str, placeholders: &[(String, String)]) -> String
 }
 
 /// Read the source rectangle `(sr0..=sr1, sc0..=sc1)` from `data` and
-/// build a `Vec<Vec<String>>` of size `(tr1 - sr0 + 1) × (tc1 - sc0 + 1)`
-/// where each cell `(tr, tc)` outside the source gets its source twin's
-/// text via 2-D modular offset: `src_r = sr0 + (tr - sr0) % src_h`,
-/// `src_c = sc0 + (tc - sc0) % src_w`. The pure function exists so the
-/// renderer can host-test the fill logic without spinning up a
-/// HtmlCanvasElement. Tiles the source rectangle across the
-/// destination like a wallpaper — the same offset pattern that
-/// makes a 2×2 source cover a diagonal drag naturally.
+/// build a `Vec<Vec<String>>` of size `(tr1 - sr0 + 1) × (tc1 - sc0 + 1)`.
+/// Cells inside the source are returned verbatim; the caller copies only
+/// the newly-included ones. The pure function exists so the renderer can
+/// host-test the fill logic without spinning up a HtmlCanvasElement.
+///
+/// The strategy depends on the drag's shape:
+///
+/// - **Axis-aligned** (the drag grew on exactly one axis — the common
+///   case) delegates each line to [`fill_line`], so numeric series
+///   continue (`1, 2` → `3, 4`) and relative formula references shift
+///   along the fill axis (`=B1` → `=B2`).
+/// - **Diagonal** (both axes grew) has no single fill axis, so the source
+///   rectangle tiles across the destination like wallpaper via a 2-D
+///   modular offset: `src_r = sr0 + (tr - sr0) % src_h`,
+///   `src_c = sc0 + (tc - sc0) % src_w`. Formulas are still shifted, by
+///   each cell's own 2-D offset from its source twin.
+///
+/// The axis-aligned split restores behaviour lost in commit `8bdd90b`,
+/// which routed every drag through the tiling path and so dropped both
+/// series continuation and reference shifting (issue: fill handle).
 pub fn fill_area(
     data: &DataProxy,
     sr0: usize,
@@ -4121,22 +4133,64 @@ pub fn fill_area(
     let cols = tc1 - sc0 + 1;
     let src_h = sr1 - sr0 + 1;
     let src_w = sc1 - sc0 + 1;
+    let grows_down = tr1 > sr1;
+    let grows_right = tc1 > sc1;
+
+    // Pure-down drag: every column is an independent fill line.
+    if grows_down && !grows_right {
+        let columns: Vec<Vec<String>> = (0..cols)
+            .map(|dc| {
+                let source: Vec<String> = (0..src_h)
+                    .map(|dr| data.get_cell_text(sr0 + dr, sc0 + dc))
+                    .collect();
+                let filled = fill_line(&source, rows - src_h, true);
+                source.into_iter().chain(filled).collect()
+            })
+            .collect();
+        // Transpose column-major → the row-major grid the caller expects.
+        return (0..rows)
+            .map(|dr| columns.iter().map(|col| col[dr].clone()).collect())
+            .collect();
+    }
+
+    // Pure-right drag: every row is an independent fill line.
+    if grows_right && !grows_down {
+        return (0..rows)
+            .map(|dr| {
+                let source: Vec<String> = (0..src_w)
+                    .map(|dc| data.get_cell_text(sr0 + dr, sc0 + dc))
+                    .collect();
+                let filled = fill_line(&source, cols - src_w, false);
+                source.into_iter().chain(filled).collect()
+            })
+            .collect();
+    }
+
+    // Diagonal (or cancelled) drag: tile the source rectangle.
     let mut grid = Vec::with_capacity(rows);
     for tr in 0..rows {
         let mut row = Vec::with_capacity(cols);
         for tc in 0..cols {
             let abs_r = sr0 + tr;
             let abs_c = sc0 + tc;
-            // Skip cells already inside the source — the destination
-            // grid includes the source area but the caller only
-            // copies the newly-included cells.
             if abs_r <= sr1 && abs_c <= sc1 {
                 row.push(data.get_cell_text(abs_r, abs_c));
                 continue;
             }
             let src_r = sr0 + (tr % src_h);
             let src_c = sc0 + (tc % src_w);
-            row.push(data.get_cell_text(src_r, src_c));
+            let text = data.get_cell_text(src_r, src_c);
+            // Shift each tiled formula by its own 2-D offset from its
+            // source twin so references track the destination cell.
+            if text.starts_with('=') {
+                row.push(shift_formula_refs(
+                    &text,
+                    (abs_r - src_r) as isize,
+                    (abs_c - src_c) as isize,
+                ));
+            } else {
+                row.push(text);
+            }
         }
         grid.push(row);
     }
@@ -7546,6 +7600,68 @@ mod tests {
         d.set_cell_text(0, 0, "X");
         let grid = fill_area(&d, 0, 0, 0, 0, 0, 0);
         assert_eq!(grid, vec![vec!["X"]]);
+    }
+
+    #[test]
+    fn fill_area_pure_down_continues_numeric_series() {
+        // Regression (commit 8bdd90b): the 2-D tiling rewrite dropped
+        // numeric-series continuation, so 1,2 dragged down produced
+        // 1,2,1,2 instead of 3,4. An axis-aligned drag must still
+        // continue the series the way `fill_line` always did.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "1");
+        d.set_cell_text(1, 0, "2");
+        let grid = fill_area(&d, 0, 0, 1, 0, 3, 0);
+        assert_eq!(grid, vec![vec!["1"], vec!["2"], vec!["3"], vec!["4"]]);
+    }
+
+    #[test]
+    fn fill_area_pure_right_continues_numeric_series() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "1");
+        d.set_cell_text(0, 1, "2");
+        let grid = fill_area(&d, 0, 0, 0, 1, 0, 3);
+        assert_eq!(grid, vec![vec!["1", "2", "3", "4"]]);
+    }
+
+    #[test]
+    fn fill_area_pure_down_shifts_formula_refs() {
+        // Regression (commit 8bdd90b): `fill_area` copied the raw
+        // formula text verbatim, so =B1 dragged down wrote =B1 into
+        // every cell instead of =B2 / =B3 — silently wrong data.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=B1");
+        let grid = fill_area(&d, 0, 0, 0, 0, 2, 0);
+        assert_eq!(grid, vec![vec!["=B1"], vec!["=B2"], vec!["=B3"]]);
+    }
+
+    #[test]
+    fn fill_area_pure_right_shifts_formula_refs() {
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=A2");
+        let grid = fill_area(&d, 0, 0, 0, 0, 0, 2);
+        assert_eq!(grid, vec![vec!["=A2", "=B2", "=C2"]]);
+    }
+
+    #[test]
+    fn fill_area_pure_down_respects_absolute_refs() {
+        // $A$1 is locked on both axes — filling down must not move it.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=$A$1");
+        let grid = fill_area(&d, 0, 0, 0, 0, 2, 0);
+        assert_eq!(grid, vec![vec!["=$A$1"], vec!["=$A$1"], vec!["=$A$1"]]);
+    }
+
+    #[test]
+    fn fill_area_diagonal_shifts_formula_refs_on_both_axes() {
+        // A diagonal drag has no single fill axis, so the source
+        // rectangle still tiles (8bdd90b) — but each tiled formula
+        // is shifted by its own 2-D offset from its source twin
+        // rather than copied verbatim.
+        let mut d = DataProxy::new("t");
+        d.set_cell_text(0, 0, "=B1");
+        let grid = fill_area(&d, 0, 0, 0, 0, 1, 1);
+        assert_eq!(grid, vec![vec!["=B1", "=C1"], vec!["=B2", "=C2"]]);
     }
 
     #[test]
