@@ -1729,7 +1729,9 @@ impl DataProxy {
             return Err(EvalErr::Value);
         }
         self.let_bindings.borrow_mut().push(HashMap::new());
-        for pair in pairs.chunks_exact(2) {
+        // `is_multiple_of(2)` above makes the remainder empty; `.0` is the
+        // complete 2-chunks (clippy: chunks_exact_to_as_chunks).
+        for pair in pairs.as_chunks::<2>().0 {
             let name_span = pair[0];
             let value_span = pair[1];
             // The name slot must be exactly one Token::Name; empty

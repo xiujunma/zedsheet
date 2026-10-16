@@ -596,7 +596,11 @@ pub(crate) fn wire_events(
             // focused + its content selected inside `start_edit`, so the
             // browser's native key handling then inserts the typed
             // character, replacing the cell content.
-            if is_typing_to_edit_key(&key, ke.ctrl_key(), ke.meta_key(), ke.alt_key()) {
+            // `!ke.is_composing()` is defense-in-depth (§9 P2): the key
+            // filter already rejects "Process"/"Dead" IME keys.
+            if !ke.is_composing()
+                && is_typing_to_edit_key(&key, ke.ctrl_key(), ke.meta_key(), ke.alt_key())
+            {
                 // Don't steal focus from another input-like element (find
                 // & replace textarea, data-validation select, etc.).
                 let focus_steal_ok = document()
@@ -712,6 +716,13 @@ pub(crate) fn wire_events(
         let sync = sync.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
             let ke: KeyboardEvent = event.dyn_into().unwrap();
+            // IME composition (§9 P2): the Enter that confirms a CJK
+            // composition (and the Escape that cancels it) belongs to the
+            // IME. Don't preventDefault/stopPropagation — let the browser
+            // finish the composition in the textarea.
+            if key_is_ime(&ke) {
+                return;
+            }
             match ke.key().as_str() {
                 "Enter" => {
                     ke.prevent_default();
@@ -754,6 +765,31 @@ pub(crate) fn wire_events(
             .add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())
             .unwrap();
         cb.forget();
+
+        // IME composition tracking on the editor textarea (§9 P2). These
+        // feed the shared `COMPOSING` flag that `commit_edit` /
+        // `reconcile_editor` consult, so an interaction (canvas mousedown,
+        // wheel, sheet-tab switch) racing a composition can't commit a
+        // half-formed value. Blur is a safety net for engines that fire
+        // `compositionend` late when the element loses focus.
+        let start_cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| set_composing(true));
+        textarea
+            .add_event_listener_with_callback(
+                "compositionstart",
+                start_cb.as_ref().unchecked_ref(),
+            )
+            .unwrap();
+        start_cb.forget();
+        let end_cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| set_composing(false));
+        textarea
+            .add_event_listener_with_callback("compositionend", end_cb.as_ref().unchecked_ref())
+            .unwrap();
+        end_cb.forget();
+        let blur_cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| set_composing(false));
+        textarea
+            .add_event_listener_with_callback("blur", blur_cb.as_ref().unchecked_ref())
+            .unwrap();
+        blur_cb.forget();
     }
 
     // window mouseup: end drag-select and any header/scrollbar/fill drag.

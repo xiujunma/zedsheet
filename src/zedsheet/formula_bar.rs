@@ -10,6 +10,35 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent};
 
+// IME composition state (§9 P2). While an IME composition is in flight the
+// editor must not commit: the Enter/Escape keys belong to the IME, and
+// interactions that would scroll or swap the sheet are swallowed (same
+// contract as a validation failure, issue #9). Shared through a thread-local
+// because the textarea listeners live in `events.rs` while the commit path
+// lives here — a wasm single-threaded process, so a thread-local is exact.
+thread_local! {
+    static COMPOSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Track IME composition state. Set by the `compositionstart` /
+/// `compositionend` / `blur` listeners on the editor textarea and the
+/// formula input.
+pub(crate) fn set_composing(composing: bool) {
+    COMPOSING.with(|c| c.set(composing));
+}
+
+/// True while an IME composition is in flight.
+pub(crate) fn is_composing() -> bool {
+    COMPOSING.with(|c| c.get())
+}
+
+/// Guard for input keydown handlers: keys reported while composing
+/// (`Enter`, `Escape`, or `"Process"` / keyCode 229) belong to the IME, not
+/// the editor. Pure so it's host-testable.
+pub(crate) fn key_is_ime(ke: &KeyboardEvent) -> bool {
+    ke.is_composing()
+}
+
 pub(crate) fn formula_bar_html() -> String {
     "<input class=\"zs-name-box\" style=\"width:80px;height:100%;box-sizing:border-box;border:none;border-right:1px solid #e0e2e4;padding:0 6px;outline:none;font-size:13px;\" />\
      <span class=\"zs-fb-cancel\" style=\"width:24px;text-align:center;color:#999;cursor:pointer;\">✕</span>\
@@ -163,6 +192,11 @@ fn wire_autocomplete(input: &HtmlInputElement) {
                 return;
             }
             let ke: KeyboardEvent = event.clone().dyn_into().unwrap();
+            // Accepting a suggestion mid-composition would splice the
+            // suggestion into the composing string — let the IME finish first.
+            if key_is_ime(&ke) {
+                return;
+            }
             let value = inp.value();
             let caret = caret_of(&inp);
             let m = autocomplete::prefix_at(&value, caret)
@@ -394,6 +428,9 @@ pub(crate) fn wire_formula_bar(
         let mut el: Element = nb.clone().dyn_into::<web_sys::Element>().unwrap().into();
         el.add_event_listener("keydown", move |event: web_sys::Event| {
             let ke: KeyboardEvent = event.dyn_into().unwrap();
+            if key_is_ime(&ke) {
+                return; // the IME owns this Enter — don't navigate mid-composition
+            }
             if ke.key() != "Enter" {
                 return;
             }
@@ -451,6 +488,11 @@ pub(crate) fn wire_formula_bar(
         let mut el: Element = fi.clone().dyn_into::<web_sys::Element>().unwrap().into();
         el.add_event_listener("keydown", move |event: web_sys::Event| {
             let ke: KeyboardEvent = event.dyn_into().unwrap();
+            // The Enter that confirms a CJK composition must commit the
+            // composition, not the cell.
+            if key_is_ime(&ke) {
+                return;
+            }
             match ke.key().as_str() {
                 "Enter" => {
                     ke.prevent_default();
@@ -469,6 +511,29 @@ pub(crate) fn wire_formula_bar(
                 _ => {}
             }
         });
+
+        // IME composition tracking on the formula input (§9 P2). Blur is a
+        // safety net for engines that fire `compositionend` late (or not at
+        // all) when the element loses focus.
+        let fi_composing = fi.clone();
+        let start_cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| set_composing(true));
+        fi.add_event_listener_with_callback(
+            "compositionstart",
+            start_cb.as_ref().unchecked_ref(),
+        )
+        .unwrap();
+        start_cb.forget();
+        let end_cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| set_composing(false));
+        fi_composing
+            .add_event_listener_with_callback("compositionend", end_cb.as_ref().unchecked_ref())
+            .unwrap();
+        end_cb.forget();
+        let fi_blur = fi.clone();
+        let blur_cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| set_composing(false));
+        fi_blur
+            .add_event_listener_with_callback("blur", blur_cb.as_ref().unchecked_ref())
+            .unwrap();
+        blur_cb.forget();
     }
 
     if let Some(c) = confirm {
@@ -608,6 +673,14 @@ pub(crate) fn commit_edit(
     editor_error: Option<&HtmlElement>,
     editing: &EditingCell,
 ) -> Result<(), String> {
+    // IME composition in flight: the textarea value is still being assembled,
+    // so committing now would store a half-formed string. Leave the editor
+    // open — the keyboard paths are guarded separately, so this only fires
+    // for interaction callers racing a composition (e.g. a click whose
+    // `blur` hasn't run `compositionend` yet).
+    if is_composing() {
+        return Ok(());
+    }
     let cell = editing.borrow_mut().take();
     let Some((ri, ci)) = cell else {
         let _ = textarea.style().set_property("display", "none");
@@ -663,6 +736,11 @@ pub(crate) fn reconcile_editor(
     if editing.borrow().is_none() {
         return true;
     }
+    // Mid-composition, swallow the interaction like a validation failure:
+    // the editor must stay put while the IME assembles the value.
+    if is_composing() {
+        return false;
+    }
     commit_edit(renderer, textarea, editor_error, editing).is_ok()
 }
 
@@ -682,4 +760,20 @@ pub(crate) fn cancel_edit(
         let _ = e.style().set_property("display", "none");
     }
     crate::zedsheet::responsive::set_editing_attr(textarea, false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composing_flag_round_trips() {
+        assert!(!is_composing(), "starts clear");
+        set_composing(true);
+        assert!(is_composing());
+        set_composing(true); // idempotent
+        assert!(is_composing());
+        set_composing(false);
+        assert!(!is_composing());
+    }
 }
