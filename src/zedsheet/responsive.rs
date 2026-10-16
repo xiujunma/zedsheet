@@ -225,6 +225,10 @@ pub mod wasm {
     const LONG_PRESS_MS: i32 = 500;
     const LONG_PRESS_SLOP_PX: f64 = 10.0;
     type LongPressState = Rc<RefCell<Option<(f64, f64, i32, i32)>>>;
+    /// Finger-sized grab radius for the selection's corner grips (§9 P2) —
+    /// the grips themselves render at 6 px like the fill handle, but a touch
+    /// grab box needs to be ~24 px wide.
+    const CORNER_TOUCH_TOL_PX: f64 = 12.0;
 
     fn timeout_promise(timeout_ms: i32) -> js_sys::Promise {
         js_sys::Promise::new(&mut |resolve, reject| {
@@ -378,14 +382,30 @@ pub mod wasm {
     /// Touch has no right-click; we synthesise a `contextmenu`
     /// event after 500 ms of no-movement so the existing
     /// right-click handler runs unchanged.
-    pub fn wire_long_press(canvas_el: &web_sys::Element) {
+    pub fn wire_long_press(canvas_el: &web_sys::Element, renderer: SharedRenderer) {
         let down_state: LongPressState = Rc::new(RefCell::new(None));
         let press_sequence = Rc::new(Cell::new(0_i32));
 
         let canvas_for_down = canvas_el.clone();
         let state_for_down = Rc::clone(&down_state);
         let sequence_for_down = Rc::clone(&press_sequence);
+        let down_renderer = renderer.clone();
         let down_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            // §9 P2 carve-out: holding a selection grip must not pop the
+            // context menu — the grip drag owns the gesture.
+            {
+                let r = down_renderer.borrow();
+                if r.corner_handle_at(
+                    event.offset_x() as f64,
+                    event.offset_y() as f64,
+                    CORNER_TOUCH_TOL_PX,
+                )
+                .is_some()
+                    || r.is_on_fill_handle(event.offset_x() as f64, event.offset_y() as f64)
+                {
+                    return;
+                }
+            }
             let token = sequence_for_down.get().wrapping_add(1);
             sequence_for_down.set(token);
             let pending = (
@@ -504,7 +524,21 @@ pub mod wasm {
         // becomes active once the pointer moves more than the slop,
         // so a tap that turns into a long-press still wins.
         let down_state = Rc::clone(&pan_state);
+        let down_renderer = renderer.clone();
         let down_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            // §9 P2 carve-out: a pointer that lands on a selection grip
+            // (corner or fill) is owned by `wire_corner_drag`, not pan —
+            // otherwise the grip drag would scroll the grid instead of
+            // resizing the range.
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let r = down_renderer.borrow();
+            if r.corner_handle_at(x, y, CORNER_TOUCH_TOL_PX).is_some()
+                || r.is_on_fill_handle(x, y)
+            {
+                return;
+            }
+            drop(r);
             let x = event.client_x() as f64;
             let y = event.client_y() as f64;
             *down_state.borrow_mut() = Some(PanSession {
@@ -609,6 +643,121 @@ pub mod wasm {
         });
         let _ =
             canvas_el.add_event_listener_with_callback("pointerup", up_cb.as_ref().unchecked_ref());
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointercancel", up_cb.as_ref().unchecked_ref());
+        up_cb.forget();
+    }
+
+    /// Wire touch drags of the selection grips (§9 P2): the three corner
+    /// grips resize the range (opposite corner fixed) and the bottom-right
+    /// fill handle fills, the same behaviours the mouse path gets from
+    /// `events.rs`. Touch has no hover + no compat mousemove during a
+    /// drag, so the pointer events drive the whole gesture here.
+    ///
+    /// Coexists with the other gestures: `wire_touch_pan` and
+    /// `wire_long_press` both skip pointerdowns that land on a grip
+    /// (their carve-outs), and this handler only owns pointers that do.
+    /// `prevent_default` on the move stops the browser from panning the
+    /// page or synthesising compat mouse events for the drag — which would
+    /// otherwise collapse the just-resized selection via the tap path.
+    pub fn wire_corner_drag(
+        canvas_el: &web_sys::Element,
+        renderer: SharedRenderer,
+        sync: crate::zedsheet::SyncFn,
+    ) {
+        #[derive(Clone)]
+        struct GripSession {
+            pointer_id: i32,
+            /// Some(i) = corner grip i (0 = TL, 1 = TR, 2 = BL);
+            /// None = the fill handle.
+            corner: Option<usize>,
+        }
+
+        let session: Rc<RefCell<Option<GripSession>>> = Rc::new(RefCell::new(None));
+
+        // pointerdown: claim the gesture when the pointer lands on a grip.
+        let down_state = Rc::clone(&session);
+        let down_renderer = renderer.clone();
+        let down_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            if event.pointer_type() != "touch" {
+                return; // mouse flows through the events.rs mousedown path
+            }
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let r = down_renderer.borrow();
+            if let Some(corner) = r.corner_handle_at(x, y, CORNER_TOUCH_TOL_PX) {
+                *down_state.borrow_mut() = Some(GripSession {
+                    pointer_id: event.pointer_id(),
+                    corner: Some(corner),
+                });
+                event.prevent_default();
+            } else if r.is_on_fill_handle(x, y) {
+                drop(r);
+                down_renderer.borrow_mut().start_fill();
+                *down_state.borrow_mut() = Some(GripSession {
+                    pointer_id: event.pointer_id(),
+                    corner: None,
+                });
+                event.prevent_default();
+            }
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointerdown", down_cb.as_ref().unchecked_ref());
+        down_cb.forget();
+
+        // pointermove: resize / fill-preview live toward the finger.
+        let move_state = Rc::clone(&session);
+        let move_renderer = renderer.clone();
+        let move_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let active = move_state.borrow().clone();
+            let Some(sess) = active else { return };
+            if sess.pointer_id != event.pointer_id() {
+                return;
+            }
+            // Suppress the browser's pan + the compat mousemove/mousedown
+            // that a touch drag would otherwise synthesise.
+            event.prevent_default();
+            let Some((ri, ci)) = move_renderer
+                .borrow()
+                .cell_at(event.offset_x() as f64, event.offset_y() as f64)
+            else {
+                return;
+            };
+            let mut r = move_renderer.borrow_mut();
+            match sess.corner {
+                Some(corner) => r.resize_selection_from_corner(corner, ri, ci),
+                None => r.select_to(ri, ci),
+            }
+            r.render();
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointermove", move_cb.as_ref().unchecked_ref());
+        move_cb.forget();
+
+        // pointerup / pointercancel: finalize. A fill drag applies the fill
+        // (undoable); a corner resize is already committed per-move and the
+        // selection isn't undoable, so it just ends.
+        let up_state = Rc::clone(&session);
+        let up_renderer = renderer.clone();
+        let up_sync = sync.clone();
+        let up_cb = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            let is_active = up_state
+                .borrow()
+                .as_ref()
+                .is_some_and(|sess| sess.pointer_id == event.pointer_id());
+            if !is_active {
+                return;
+            }
+            let sess = up_state.borrow_mut().take().expect("checked active");
+            if sess.corner.is_none() {
+                let mut r = up_renderer.borrow_mut();
+                r.apply_fill();
+                r.render();
+                up_sync();
+            }
+        });
+        let _ = canvas_el
+            .add_event_listener_with_callback("pointerup", up_cb.as_ref().unchecked_ref());
         let _ = canvas_el
             .add_event_listener_with_callback("pointercancel", up_cb.as_ref().unchecked_ref());
         up_cb.forget();
@@ -1016,7 +1165,18 @@ mod tests {
     #[cfg(target_arch = "wasm32")]
     #[test]
     fn long_press_wiring_has_required_signature() {
-        let _: fn(&web_sys::Element) = super::wasm::wire_long_press;
+        let _: fn(&web_sys::Element, crate::zedsheet::SharedRenderer) =
+            super::wasm::wire_long_press;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn corner_drag_wiring_has_required_signature() {
+        let _: fn(
+            &web_sys::Element,
+            crate::zedsheet::SharedRenderer,
+            crate::zedsheet::SyncFn,
+        ) = super::wasm::wire_corner_drag;
     }
 
     // The Phase 8 DOM wiring can't run on the host target (no document),

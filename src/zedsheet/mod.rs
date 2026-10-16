@@ -771,7 +771,7 @@ impl ZedSheet {
         // the resulting editing actions via `data.is_read_only()`.
         #[cfg(target_arch = "wasm32")]
         if let Some(canvas_node) = canvas_el.el.as_ref() {
-            responsive::wasm::wire_long_press(canvas_node);
+            responsive::wasm::wire_long_press(canvas_node, renderer.clone());
         }
         // Phase 8: double-tap → synthetic dblclick opens the cell editor.
         // Touch has no dblclick; synthesising one reuses the desktop edit
@@ -804,6 +804,13 @@ impl ZedSheet {
         #[cfg(target_arch = "wasm32")]
         if let Some(canvas_node) = canvas_el.el.as_ref() {
             responsive::wasm::wire_touch_pan(canvas_node, renderer.clone());
+        }
+        // §9 P2: touch drags of the selection grips — corner grips resize
+        // the range, the fill handle fills. Always wired; the handler only
+        // claims touch pointers that land on a grip.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas_node) = canvas_el.el.as_ref() {
+            responsive::wasm::wire_corner_drag(canvas_node, renderer.clone(), sync.clone());
         }
         // Phase 7: tap-to-reveal popover. The formula bar is hidden
         // under view-only (no editor to commit), so this is the mobile

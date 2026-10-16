@@ -147,6 +147,27 @@ pub(crate) fn wire_events(
                 return;
             }
 
+            // Corner grip → start a resize of the selection from the far side
+            // (§9 P2). Mouse tolerance matches the fill handle's 2 px; touch
+            // uses the finger-sized tolerance in `wire_corner_drag`.
+            if let Some(corner) = renderer.borrow().corner_handle_at(x, y, 2.0) {
+                *drag.borrow_mut() = Some(DragState {
+                    kind: DragKind::CornerResize(corner),
+                    start_x: x,
+                    start_y: y,
+                    start_size: 0f64,
+                    start_panel_x: 0.0,
+                    start_panel_y: 0.0,
+                    start_panel_w: 0.0,
+                    start_panel_h: 0.0,
+                    end_panel_x: 0.0,
+                    end_panel_y: 0.0,
+                    end_panel_w: 0.0,
+                    end_panel_h: 0.0,
+                });
+                return;
+            }
+
             // AutoFilter header glyph (issue #10): clicking the ▼ on a header
             // cell of the active filter range opens the filter menu. Deferred
             // a tick (like the list popover) so the global outside-click
@@ -314,6 +335,13 @@ pub(crate) fn wire_events(
                         // Extend the selection toward the cursor as a fill preview.
                         if let Some((ri, ci)) = r.cell_at(x, y) {
                             r.select_to(ri, ci);
+                            r.render();
+                        }
+                    }
+                    DragKind::CornerResize(corner) => {
+                        // Resize the selection live, opposite corner fixed (§9 P2).
+                        if let Some((ri, ci)) = r.cell_at(x, y) {
+                            r.resize_selection_from_corner(corner, ri, ci);
                             r.render();
                         }
                     }

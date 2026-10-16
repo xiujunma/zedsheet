@@ -44,6 +44,7 @@ pub fn render_selector(
     // last one. Falls back to the single-rect `selector` when there are no
     // Ctrl/Cmd-added ranges.
     renderer.set_fill_handle_rect(None);
+    renderer.set_corner_handle_rects([None; 3]);
 
     let ranges = renderer.selection_ranges();
     if ranges.is_empty() {
@@ -134,6 +135,29 @@ pub fn render_selector(
                 canvas.set_fill_style("#0078d7");
                 canvas.fill_rect(hx, hy, handle_size, handle_size);
                 renderer.set_fill_handle_rect(Some((hx, hy, handle_size, handle_size)));
+
+                // Corner grips (§9 P2): the other three corners, same visual
+                // style as the fill handle. Dragging one resizes the range
+                // with the opposite corner fixed.
+                let grips = [
+                    Some((sel_x, sel_y, handle_size, handle_size)), // TL
+                    Some((
+                        sel_x + sel_width - handle_size,
+                        sel_y,
+                        handle_size,
+                        handle_size,
+                    )), // TR
+                    Some((
+                        sel_x,
+                        sel_y + sel_height - handle_size,
+                        handle_size,
+                        handle_size,
+                    )), // BL
+                ];
+                for grip in grips.iter().flatten() {
+                    canvas.fill_rect(grip.0, grip.1, grip.2, grip.3);
+                }
+                renderer.set_corner_handle_rects(grips);
             }
 
             canvas.restore();

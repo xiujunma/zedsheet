@@ -149,6 +149,10 @@ pub enum DragKind {
     HScroll,
     /// Dragging the selection's bottom-right fill handle.
     Fill,
+    /// Dragging one of the selection's corner grips (§9 P2, touch range
+    /// selection): 0 = top-left, 1 = top-right, 2 = bottom-left. The
+    /// bottom-right corner is the fill handle (`Fill`).
+    CornerResize(usize),
     /// Moving a slicer panel (Phase 1.1, issue #61 follow-on).
     /// Carries the slicer's stable id; the drag-start panel geometry
     /// lives on `DragState.start_panel_*` so mousemove doesn't have to
@@ -466,6 +470,12 @@ pub struct ViewportCell {
     pub height: f64,
 }
 
+/// Screen rect (x,y,w,h) of one selection grip.
+pub(crate) type GripRect = (f64, f64, f64, f64);
+/// The three corner grips' screen rects — 0 = top-left, 1 = top-right,
+/// 2 = bottom-left (§9 P2). `None` for an unrendered grip.
+pub(crate) type CornerGripRects = [Option<GripRect>; 3];
+
 pub struct TableRenderer {
     pub target: HtmlCanvasElement,
     pub data: DataProxy,
@@ -509,6 +519,10 @@ pub struct TableRenderer {
     fill_source: Option<(usize, usize, usize, usize)>,
     /// Screen rect (x,y,w,h) of the fill handle from the last render, for hit-testing.
     last_fill_handle: std::cell::Cell<Option<(f64, f64, f64, f64)>>,
+    /// Screen rects (x,y,w,h) of the three corner grips (§9 P2) from the last
+    /// render — indices 0 = top-left, 1 = top-right, 2 = bottom-left. The
+    /// bottom-right corner is the fill handle.
+    corner_handle_rects: std::cell::Cell<CornerGripRects>,
     /// Undo/redo snapshots of the **workbook** (issue #62). Each entry
     /// captures the full sheets registry + the active index, so any
     /// cross-sheet mutator (pivot, add sheet, etc.) is fully reversible.
@@ -617,6 +631,7 @@ impl TableRenderer {
             format_painter: None,
             fill_source: None,
             last_fill_handle: std::cell::Cell::new(None),
+            corner_handle_rects: std::cell::Cell::new([None; 3]),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         };
@@ -2941,6 +2956,41 @@ impl TableRenderer {
         self.fill_source = Some(self.selection_bounds());
     }
 
+    // --- Corner grips (§9 P2: touch range selection) ---
+
+    /// Record the three corner grips' screen rects during rendering
+    /// (indices 0 = top-left, 1 = top-right, 2 = bottom-left).
+    pub fn set_corner_handle_rects(&self, rects: CornerGripRects) {
+        self.corner_handle_rects.set(rects);
+    }
+
+    /// Which corner grip (0/1/2) contains `(x, y)`, if any. `tol` expands the
+    /// grab box — mouse callers pass the fill-handle-like 2 px, touch callers
+    /// pass a finger-sized ~12 px.
+    pub fn corner_handle_at(&self, x: f64, y: f64, tol: f64) -> Option<usize> {
+        corner_handle_hit(&self.corner_handle_rects.get(), x, y, tol)
+    }
+
+    /// Extend/shrink the selection by dragging the corner grip `corner`
+    /// (0 = TL, 1 = TR, 2 = BL) to `(ri, ci)`. The opposite corner stays
+    /// fixed, so dragging a non-anchor corner grows the range from the
+    /// far side instead of from the mousedown cell (which is what
+    /// `select_to` does).
+    pub fn resize_selection_from_corner(&mut self, corner: usize, ri: usize, ci: usize) {
+        let bounds = self.selection_bounds();
+        let (nr0, nc0, nr1, nc1) = corner_resize_bounds(bounds, corner, ri, ci);
+        // Merge-expansion keeps merged cells inside the range, exactly like
+        // `select_to`.
+        let (r0, c0, r1, c1) =
+            self.data.expand_range_with_merges(nr0, nc0, nr1, nc1);
+        self.selector = SelectorRect {
+            ri: r0,
+            ci: c0,
+            eri: r1,
+            eci: c1,
+        };
+    }
+
     /// Apply the fill from the recorded source into the (drag-extended) selection,
     /// copying values + formats. Every newly-included cell in the destination
     /// gets the value of its source twin via a 2-D modular offset — so a
@@ -3288,12 +3338,39 @@ fn track_at(
     idx.min(total.saturating_sub(1))
 }
 
+/// Which corner grip (index 0 = TL, 1 = TR, 2 = BL) contains `(x, y)`, if any.
+/// Pure so the grab-radius semantics are host-testable (§9 P2).
+pub(crate) fn corner_handle_hit(rects: &[Option<GripRect>], x: f64, y: f64, tol: f64) -> Option<usize> {
+    rects.iter().enumerate().find_map(|(i, r)| {
+        let (hx, hy, hw, hh) = (*r)?;
+        (x >= hx - tol && x <= hx + hw + tol && y >= hy - tol && y <= hy + hh + tol).then_some(i)
+    })
+}
+
+/// New normalized selection bounds after dragging the corner grip `corner`
+/// (0 = TL, 1 = TR, 2 = BL) to `(ri, ci)` with the opposite corner fixed.
+/// Dragging across the fixed corner flips the rectangle, same as `select_to`.
+/// Pure so the geometry is host-testable (§9 P2).
+pub(crate) fn corner_resize_bounds(
+    bounds: (usize, usize, usize, usize),
+    corner: usize,
+    ri: usize,
+    ci: usize,
+) -> (usize, usize, usize, usize) {
+    let (r0, c0, r1, c1) = bounds;
+    let (fr, fc) = match corner {
+        0 => (r1, c1), // TL drag — BR fixed
+        1 => (r1, c0), // TR drag — BL fixed
+        _ => (r0, c1), // BL drag (2) — TR fixed
+    };
+    (fr.min(ri), fc.min(ci), fr.max(ri), fc.max(ci))
+}
+
 /// Leading-edge pixel offset of track `idx` along one axis — the inverse of
 /// [`track_at`], using the same frozen-pane layout so a cell's drawn rect and
 /// its hit-test agree under freeze.
 fn track_offset(
-    idx: usize,
-    header: f64,
+    idx: usize,    header: f64,
     start: usize,
     frozen: usize,
     body_start: usize,
@@ -3343,8 +3420,9 @@ fn replace_ci(haystack: &str, find: &str, replace: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        install_pivot_into_registry, paste_cell_plan, replace_ci, track_at, track_offset,
-        transpose_clipboard, CellWrite, ClipboardData, DataCell, PasteMode,
+        corner_handle_hit, corner_resize_bounds, install_pivot_into_registry, paste_cell_plan,
+        replace_ci, track_at, track_offset, transpose_clipboard, CellWrite, ClipboardData,
+        DataCell, PasteMode,
     };
     use crate::core::data_proxy::{DataProxy, SheetsRegistry};
     use crate::core::pivot::{compute, materialize, read_field_headers, Agg, PivotTable};
@@ -3792,5 +3870,59 @@ mod tests {
         assert_eq!(track_offset(5, HDR, 0, 1, 1, sz), 145.0);
         // the pinned row itself sits right under the header.
         assert_eq!(track_offset(0, HDR, 0, 1, 1, sz), 20.0);
+    }
+
+    // --- Corner-grip geometry (§9 P2) ---
+
+    #[test]
+    fn corner_resize_drags_each_corner_with_opposite_fixed() {
+        let bounds = (2, 2, 5, 5); // C3:F6
+        // TL dragged to (0, 0): BR (5,5) fixed → (0,0,5,5).
+        assert_eq!(corner_resize_bounds(bounds, 0, 0, 0), (0, 0, 5, 5));
+        // TR dragged to (4, 9): BL (5,2) fixed → (4,2,5,9).
+        assert_eq!(corner_resize_bounds(bounds, 1, 4, 9), (4, 2, 5, 9));
+        // BL dragged to (8, 1): TR (2,5) fixed → (2,1,8,5).
+        assert_eq!(corner_resize_bounds(bounds, 2, 8, 1), (2, 1, 8, 5));
+    }
+
+    #[test]
+    fn corner_resize_crosses_the_fixed_corner_and_flips() {
+        let bounds = (2, 2, 5, 5);
+        // TL dragged past BR (2,2) → (7,7): the rect flips, BR becomes TL.
+        assert_eq!(corner_resize_bounds(bounds, 0, 7, 7), (5, 5, 7, 7));
+        // TR dragged above the fixed BL row (5) → rows flip.
+        assert_eq!(corner_resize_bounds(bounds, 1, 6, 0), (5, 0, 6, 2));
+    }
+
+    #[test]
+    fn corner_resize_drag_onto_the_fixed_corner_collapses() {
+        let bounds = (2, 2, 5, 5);
+        // TR dragged exactly onto the fixed BL (5,2) → single-row, single-col.
+        assert_eq!(corner_resize_bounds(bounds, 1, 5, 2), (5, 2, 5, 2));
+    }
+
+    #[test]
+    fn corner_handle_hit_respects_tolerance() {
+        let rects = [
+            Some((100.0, 100.0, 6.0, 6.0)), // TL
+            Some((200.0, 100.0, 6.0, 6.0)), // TR
+            Some((100.0, 200.0, 6.0, 6.0)), // BL
+        ];
+        // Dead centre of each grip.
+        assert_eq!(corner_handle_hit(&rects, 103.0, 103.0, 0.0), Some(0));
+        assert_eq!(corner_handle_hit(&rects, 203.0, 103.0, 0.0), Some(1));
+        assert_eq!(corner_handle_hit(&rects, 103.0, 203.0, 0.0), Some(2));
+        // Outside even a finger-sized box.
+        assert_eq!(corner_handle_hit(&rects, 130.0, 130.0, 12.0), None);
+        // Inside the finger-sized box: 12 px past the grip edge.
+        assert_eq!(corner_handle_hit(&rects, 112.0, 100.0, 12.0), Some(0));
+        // Tolerance boundary is inclusive.
+        assert_eq!(corner_handle_hit(&rects, 106.0, 106.0, 0.0), Some(0));
+    }
+
+    #[test]
+    fn corner_handle_hit_ignores_unrecorded_grips() {
+        let rects = [None, None, None];
+        assert_eq!(corner_handle_hit(&rects, 0.0, 0.0, 100.0), None);
     }
 }
